@@ -1,0 +1,26 @@
+#!/bin/bash
+# tmux keeps this CLI alive when browser clients disconnect.
+export HOME=/root USER=root
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+cd /root || exit 1
+CONVERSATION_FILE=/data/data/com.termux/files/home/.config/server_recovery/agy-conversation-id
+while true; do
+    args=(--dangerously-skip-permissions)
+    if [ -s "$CONVERSATION_FILE" ]; then
+        id=$(cat "$CONVERSATION_FILE")
+        if [[ ! "$id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+            echo 'Invalid saved conversation ID. Correct it using agy-resume ID in Termux.'
+            exit 2
+        fi
+        args+=(--conversation "$id")
+        echo "Resuming the explicitly selected AGY conversation: $id"
+    else
+        echo 'AGY terminal persists across browser disconnects.'
+        echo 'For a specific saved conversation, run agy-resume ID in Termux before starting.'
+    fi
+    /usr/local/bin/agy "${args[@]}"
+    code=$?
+    echo "AGY exited with status $code. Press Enter to start again, or Ctrl+C to exit."
+    # EOF must terminate rather than repeatedly spawning interactive shells.
+    IFS= read -r || exit "$code"
+done

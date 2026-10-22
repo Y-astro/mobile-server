@@ -1,0 +1,21 @@
+{
+  "name": "mobile-server",
+  "version": "1.0.0",
+  "description": "Phone server verification tools",
+  "scripts": {
+    "test": "python3 scripts/browser-fixture.py && node tests/browser.cjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Y-astro/mobile-server.git"
+  },
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Y-astro/mobile-server/issues"
+  },
+  "homepage": "https://github.com/Y-astro/mobile-server#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
+  },
+  "private": true
+}

@@ -1,0 +1,147 @@
+{
+	auto_https disable_redirects
+	servers {
+		enable_full_duplex
+		timeouts {
+			read_body 0s
+			read_body_idle 60s
+			read_header 60s
+			write 0s
+			write_idle 60s
+			idle 120s
+		}
+	}
+}
+
+http://:8000 {
+	encode zstd gzip
+
+	handle /drive/static/assets/index-BqkXVoMb.js {
+		root * /data/data/com.termux/files/home/.config/dashboard/static
+		rewrite * /patched_index.js
+		file_server
+	}
+
+	handle /drive/branding/* {
+		reverse_proxy 127.0.0.1:8081
+	}
+
+	handle /drive* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check
+			copy_headers X-Forwarded-User
+		}
+		reverse_proxy 127.0.0.1:8081 {
+			flush_interval -1
+			transport http {
+				keepalive 90s
+				response_header_timeout 300s
+				read_buffer 32768
+				write_buffer 32768
+			}
+		}
+	}
+
+	handle /terminal* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7681
+	}
+
+	handle /agy* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7682
+	}
+
+	handle /vault* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		uri strip_prefix /vault
+		reverse_proxy 127.0.0.1:8082
+	}
+
+	handle /screenshots/* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		root * /data/data/com.termux/files/home
+		file_server
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8001 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+}
+
+https://100.75.159.53:8443, https://192.168.1.8:8443, https://192.168.1.14:8443, https://localhost:8443 {
+	tls internal
+	encode zstd gzip
+
+	handle /drive/static/assets/index-BqkXVoMb.js {
+		root * /data/data/com.termux/files/home/.config/dashboard/static
+		rewrite * /patched_index.js
+		file_server
+	}
+
+	handle /drive/branding/* {
+		reverse_proxy 127.0.0.1:8081
+	}
+
+	handle /drive* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check
+			copy_headers X-Forwarded-User
+		}
+		reverse_proxy 127.0.0.1:8081 {
+			flush_interval -1
+			transport http {
+				keepalive 90s
+				response_header_timeout 300s
+				read_buffer 32768
+				write_buffer 32768
+			}
+		}
+	}
+
+	handle /terminal* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7681
+	}
+
+	handle /agy* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7682
+	}
+
+	handle /vault* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		uri strip_prefix /vault
+		reverse_proxy 127.0.0.1:8082
+	}
+
+	handle /screenshots/* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		root * /data/data/com.termux/files/home
+		file_server
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8001 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+}

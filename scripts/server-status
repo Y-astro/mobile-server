@@ -1,0 +1,6 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""Report supervisor health without inventing sensor readings."""
+import os
+from pathlib import Path
+import subprocess
+raise SystemExit(subprocess.run(['python3',str(Path.home()/'bin/server_supervisor.py'),'--status']).returncode)

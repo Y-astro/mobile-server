@@ -1,0 +1,29 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""Create or update a dashboard password without placing it in command history."""
+import argparse
+import getpass
+import os
+import re
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path.home()/'.local/lib/mobile-server'))
+from auth import CredentialStore, hash_password, save_users
+
+p = argparse.ArgumentParser(description=__doc__)
+p.add_argument('username')
+p.add_argument('--role', choices=('admin', 'family'), default=None)
+a = p.parse_args()
+if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', a.username):
+    p.error('Use 1–64 letters, digits, dots, underscores or hyphens for username')
+password = getpass.getpass('New password (typing hidden): ')
+if len(password.encode('utf-8')) > 1024:
+    p.error('Password must be at most 1024 bytes')
+if len(password) < 12:
+    p.error('Use at least 12 characters')
+if password != getpass.getpass('Repeat password: '):
+    p.error('Passwords differ')
+store = CredentialStore()
+users = store.users
+users[a.username] = {**users.get(a.username, {}), 'password_hash': hash_password(password), 'role': a.role or users.get(a.username, {}).get('role', 'family')}
+save_users(store.path, users)
+print('Password hash saved. The dashboard picks up the change automatically.')

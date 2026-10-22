@@ -1,0 +1,13 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -eu
+if [[ $# != 1 || ! "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    echo 'Usage: agy-resume EXACT-CONVERSATION-UUID' >&2
+    exit 2
+fi
+dir=/data/data/com.termux/files/home/.config/server_recovery
+mkdir -p "$dir"
+umask 077
+printf '%s\n' "$1" > "$dir/agy-conversation-id.new"
+mv "$dir/agy-conversation-id.new" "$dir/agy-conversation-id"
+echo 'Selected this exact conversation for the next AGY CLI start.'
+echo 'The currently running CLI is unchanged. Missing/failed IDs will not fall back to a new conversation.'

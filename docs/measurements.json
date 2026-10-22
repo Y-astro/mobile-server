@@ -1,0 +1,287 @@
+{
+  "units": "MiB/s; 1MiB=1048576 bytes",
+  "filebrowser": [
+    {
+      "label": "before",
+      "repeat": 0,
+      "direction": "upload",
+      "streams": 1,
+      "MiB": 16,
+      "seconds": 4.687,
+      "MiBs": 3.413,
+      "integrity": "HTTP success"
+    },
+    {
+      "label": "before",
+      "repeat": 0,
+      "direction": "download",
+      "streams": 1,
+      "MiB": 16,
+      "seconds": 4.784,
+      "MiBs": 3.344,
+      "integrity": "sha256 verified"
+    },
+    {
+      "label": "before",
+      "repeat": 0,
+      "direction": "upload",
+      "streams": 2,
+      "MiB": 32,
+      "seconds": 6.359,
+      "MiBs": 5.032,
+      "integrity": "HTTP success"
+    },
+    {
+      "label": "before",
+      "repeat": 0,
+      "direction": "download",
+      "streams": 2,
+      "MiB": 32,
+      "seconds": 8.54,
+      "MiBs": 3.747,
+      "integrity": "sha256 verified"
+    },
+    {
+      "label": "before",
+      "repeat": 0,
+      "direction": "upload",
+      "streams": 6,
+      "MiB": 96,
+      "seconds": 22.572,
+      "MiBs": 4.253,
+      "integrity": "HTTP success"
+    },
+    {
+      "label": "before",
+      "repeat": 0,
+      "direction": "download",
+      "streams": 6,
+      "MiB": 96,
+      "seconds": 28.456,
+      "MiBs": 3.374,
+      "integrity": "sha256 verified"
+    },
+    {
+      "label": "before",
+      "repeat": 1,
+      "direction": "upload",
+      "streams": 1,
+      "MiB": 16,
+      "seconds": 33.917,
+      "MiBs": 0.472,
+      "integrity": "HTTP success"
+    },
+    {
+      "label": "before",
+      "repeat": 1,
+      "direction": "download",
+      "streams": 1,
+      "MiB": 16,
+      "seconds": 5.005,
+      "MiBs": 3.197,
+      "integrity": "sha256 verified"
+    },
+    {
+      "label": "before",
+      "repeat": 1,
+      "direction": "upload",
+      "streams": 2,
+      "MiB": 32,
+      "seconds": 50.024,
+      "MiBs": 0.64,
+      "integrity": "HTTP success"
+    },
+    {
+      "label": "before",
+      "repeat": 1,
+      "direction": "download",
+      "streams": 2,
+      "MiB": 32,
+      "seconds": 9.844,
+      "MiBs": 3.251,
+      "integrity": "sha256 verified"
+    },
+    {
+      "label": "after USB HTTP diagnostic",
+      "repeat": 0,
+      "direction": "upload",
+      "streams": 1,
+      "MiB": 16,
+      "seconds": 0.75,
+      "MiBs": 21.325,
+      "integrity": "HTTP success"
+    },
+    {
+      "label": "after USB HTTP diagnostic",
+      "repeat": 0,
+      "direction": "download",
+      "streams": 1,
+      "MiB": 16,
+      "seconds": 0.403,
+      "MiBs": 39.661,
+      "integrity": "sha256 verified"
+    },
+    {
+      "label": "after USB HTTP diagnostic",
+      "repeat": 0,
+      "direction": "upload",
+      "streams": 2,
+      "MiB": 32,
+      "seconds": 1.039,
+      "MiBs": 30.79,
+      "integrity": "HTTP success"
+    },
+    {
+      "label": "after USB HTTP diagnostic",
+      "repeat": 0,
+      "direction": "download",
+      "streams": 2,
+      "MiB": 32,
+      "seconds": 0.729,
+      "MiBs": 43.892,
+      "integrity": "sha256 verified"
+    },
+    {
+      "label": "after USB HTTP diagnostic",
+      "repeat": 0,
+      "direction": "upload",
+      "streams": 6,
+      "MiB": 96,
+      "seconds": 3.077,
+      "MiBs": 31.199,
+      "integrity": "HTTP success"
+    },
+    {
+      "label": "after USB HTTP diagnostic",
+      "repeat": 0,
+      "direction": "download",
+      "streams": 6,
+      "MiB": 96,
+      "seconds": 2.146,
+      "MiBs": 44.73,
+      "integrity": "sha256 verified"
+    },
+    {
+      "label": "after",
+      "repeat": 0,
+      "direction": "upload",
+      "streams": 1,
+      "MiB": 16,
+      "seconds": 41.849,
+      "MiBs": 0.382,
+      "integrity": "HTTP success"
+    },
+    {
+      "label": "after",
+      "repeat": 0,
+      "direction": "download",
+      "streams": 1,
+      "MiB": 16,
+      "seconds": 7.688,
+      "MiBs": 2.081,
+      "integrity": "sha256 verified"
+    },
+    {
+      "label": "after",
+      "repeat": 0,
+      "direction": "upload",
+      "streams": 2,
+      "MiB": 32,
+      "seconds": 99.032,
+      "MiBs": 0.323,
+      "integrity": "HTTP success"
+    },
+    {
+      "label": "after",
+      "repeat": 0,
+      "direction": "download",
+      "streams": 2,
+      "MiB": 32,
+      "seconds": 13.412,
+      "MiBs": 2.386,
+      "integrity": "sha256 verified"
+    }
+  ],
+  "raw_tcp": [
+    {
+      "path": "Tailscale",
+      "direction": "upload",
+      "streams": 1,
+      "bytes": 67108864,
+      "seconds": 16.474,
+      "MiBs": 3.885
+    },
+    {
+      "path": "Tailscale",
+      "direction": "upload",
+      "streams": 4,
+      "bytes": 67108864,
+      "seconds": 15.76,
+      "MiBs": 4.061
+    },
+    {
+      "path": "Tailscale",
+      "direction": "download",
+      "streams": 1,
+      "bytes": 67108864,
+      "seconds": 28.417,
+      "MiBs": 2.252
+    },
+    {
+      "path": "Tailscale",
+      "direction": "download",
+      "streams": 4,
+      "bytes": 67108864,
+      "seconds": 17.072,
+      "MiBs": 3.749
+    },
+    {
+      "path": "Tailscale",
+      "direction": "upload",
+      "streams": 1,
+      "bytes": 67108864,
+      "seconds": 16.236,
+      "MiBs": 3.942
+    },
+    {
+      "path": "Tailscale",
+      "direction": "upload",
+      "streams": 4,
+      "bytes": 67108864,
+      "seconds": 15.924,
+      "MiBs": 4.019
+    },
+    {
+      "path": "Tailscale",
+      "direction": "download",
+      "streams": 1,
+      "bytes": 67108864,
+      "seconds": 17.958,
+      "MiBs": 3.564
+    },
+    {
+      "path": "Tailscale",
+      "direction": "download",
+      "streams": 4,
+      "bytes": 67108864,
+      "seconds": 17.747,
+      "MiBs": 3.606
+    },
+    {
+      "path": "USB TCP (diagnostic)",
+      "direction": "upload",
+      "streams": 1,
+      "bytes": 67108864,
+      "seconds": 1.939,
+      "MiBs": 32.999
+    },
+    {
+      "path": "USB TCP (diagnostic)",
+      "direction": "download",
+      "streams": 1,
+      "bytes": 67108864,
+      "seconds": 1.616,
+      "MiBs": 39.602
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -e
+python3 "$HOME/bin/server_supervisor.py" --pause
+exec python3 "$HOME/bin/server_supervisor.py" --resume
