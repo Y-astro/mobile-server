@@ -25,4 +25,18 @@ class TelemetryTests(unittest.TestCase):
             result['network']['wifi_speed'] = 999
             self.assertIsNone(sampler.snapshot()['network']['wifi_speed'])
 
+    def test_missing_android_loadavg_does_not_discard_other_readings(self):
+        import telemetry
+        with tempfile.TemporaryDirectory() as home:
+            # Android's Python omits this optional os API entirely.
+            with patch.object(telemetry.os, 'getloadavg', create=True):
+                del telemetry.os.getloadavg
+                with patch('telemetry.bounded_command', side_effect=OSError('Unavailable API')):
+                    sample = Telemetry(home).collect()
+            self.assertEqual(sample['load_avg'], [None]*3)
+            self.assertIsNotNone(sample['sampled_at'])
+            self.assertIsNotNone(sample['storage']['total_gb'])
+            self.assertIsNotNone(sample['ram']['total_mb'])
+            self.assertNotIn('load_avg', sample['sources'])
+
 if __name__ == '__main__': unittest.main()

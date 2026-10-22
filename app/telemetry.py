@@ -1,6 +1,7 @@
 """Sample actual host telemetry once, independently of HTTP request volume."""
 import copy
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -73,8 +74,8 @@ class Telemetry:
                 with self._lock:
                     self._snapshot = sample
             except Exception:
-                # Preserve last sample and its original timestamp on collector error.
-                pass
+                # Preserve the timestamp, but make unexpected failures diagnosable.
+                logging.getLogger(__name__).exception('Telemetry sample failed')
             time.sleep(self.interval)
 
     def collect(self):
@@ -102,7 +103,7 @@ class Telemetry:
         try:
             result['load_avg'] = [round(v, 2) for v in os.getloadavg()]
             sources['load_avg'] = 'getloadavg'
-        except OSError:
+        except (OSError, AttributeError):
             pass
         try:
             fields = [int(v) for v in Path('/proc/stat').read_text().splitlines()[0].split()[1:9]]
