@@ -30,6 +30,8 @@ from auth import CredentialStore, LoginLimiter
 from telemetry import Telemetry
 from limits import Admission, BODY_LIMITS
 from tor_proxy import TorProxy
+from laptop import LaptopClient, LaptopError
+LAPTOP_CLIENT = LaptopClient()
 TOR_PROXY = TorProxy()
 USER_STORE = CredentialStore()
 LOGIN_LIMITER = LoginLimiter()
@@ -42,7 +44,6 @@ def is_admin(username):
 
 DASHBOARD_PORT = 8001
 TAILSCALE_IP = "100.75.159.53"
-LOCAL_IP = "192.168.1.14"
 STATIC_DIR = os.path.expanduser("~/.config/dashboard/static")
 WALLPAPER_PATH = os.path.join(STATIC_DIR, "wallpaper.webp")
 
@@ -1193,7 +1194,7 @@ ADMIN_DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="flex flex-wrap items-center gap-3">
         <div class="px-3 py-1.5 rounded-xl bg-amber-950/40 border border-amber-500/20 text-xs text-amber-200/80 font-medium">
           TS: <span id="header-ts-ip" class="mono font-bold text-amber-300">100.75.159.53</span> &bull;
-          Wi-Fi: <span id="header-local-ip" class="mono font-bold text-amber-300">192.168.1.14</span> &bull;
+          Wi-Fi: <a id="header-local-ip" class="mono font-bold text-amber-300" aria-label="Open the Wi-Fi website">Detecting…</a> &bull;
           Uptime: <span id="header-uptime" class="mono font-bold text-white">...</span>
         </div>
         <button onclick="handleLogout()" class="px-3.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-amber-100 font-bold transition flex items-center gap-1.5">
@@ -1365,6 +1366,19 @@ ADMIN_DASHBOARD_HTML = """<!DOCTYPE html>
         <!-- Live rendered services -->
       </div>
     </section>
+<section class="golden-glass-card p-6 rounded-3xl space-y-4" aria-labelledby="laptop-heading">
+      <div class="flex items-center justify-between gap-4">
+        <div>
+          <h2 id="laptop-heading" class="text-lg font-bold text-white">Laptop terminals</h2>
+          <p class="text-xs text-amber-100/70 mt-1">Open Kitty on your laptop and control the same shell here. Commands and files are on the laptop.</p>
+        </div>
+        <button type="button" id="laptop-new" disabled class="gold-gradient-btn px-5 py-2.5 rounded-xl text-xs font-bold disabled:opacity-40">New terminal</button>
+      </div>
+      <p id="laptop-status" class="text-xs text-amber-200/70" role="status" aria-live="polite">Checking laptop…</p>
+      <div id="laptop-sessions" class="space-y-2 text-sm"></div>
+      <p class="text-xs text-amber-100/60">Laptop must be awake and logged in to open Kitty. Closing the browser keeps commands running; Close ends the terminal.</p>
+    </section>
+    <script src="/static/laptop.js" defer></script>
 <section class="golden-glass-card p-6 sm:p-8 rounded-3xl space-y-6">
       <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div class="space-y-1">
@@ -1444,6 +1458,10 @@ ADMIN_DASHBOARD_HTML = """<!DOCTYPE html>
         setText('telemetry-state', data.stale ? 'STALE / UNAVAILABLE' : 'MEASURED');
         setText('header-ts-ip', data.tailscale_ip);
         setText('header-local-ip', data.local_ip);
+        const lanLink = document.getElementById('header-local-ip');
+        if (typeof data.local_ip === 'string' && /^(?:[0-9]{1,3}[.]){3}[0-9]{1,3}$/.test(data.local_ip)) {
+          lanLink.href = 'http://' + data.local_ip + ':8000/';
+        } else { lanLink.removeAttribute('href'); }
         setText('header-uptime', data.uptime);
         setText('battery-pct', metric(data.battery?.percentage, '%'));
         setText('battery-temp', metric(data.battery?.temperature, '°C'));
@@ -1960,6 +1978,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         self.close_connection = True
 
+    def laptop_response(self, action, ident=None):
+        if not is_admin(self.get_session_user()):
+            self.json_error(403, "Admin access required")
+            return
+        try:
+            data = LAPTOP_CLIENT.status() if action == 'list' else LAPTOP_CLIENT.operation(action, ident)
+        except LaptopError as error:
+            self.json_error(error.status, str(error))
+            return
+        body = json.dumps(data).encode()
+        self.send_response(201 if action == 'create' else 200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_DELETE(self):
+        prefix = '/api/laptop/terminals/'
+        if not self.path.startswith(prefix):
+            self.json_error(404, 'Unknown resource')
+            return
+        if self.headers.get('Transfer-Encoding') or self.headers.get('Content-Length', '0') != '0':
+            self.json_error(400, 'DELETE does not accept a request body')
+            return
+        self.laptop_response('close', self.path[len(prefix):])
+
     def do_POST(self):
         slot = None
         acquired = False
@@ -2043,6 +2088,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(resp_bytes)))
                 self.end_headers()
                 self.wfile.write(resp_bytes)
+
+        elif self.path == '/api/laptop/terminals':
+            self.laptop_response('create')
 
         elif self.path == "/api/logout":
             self.send_response(200)
@@ -2371,6 +2419,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", "/login")
             self.end_headers()
+            return
+
+        if self.path == '/api/laptop/terminals':
+            self.laptop_response('list')
+            return
+        if self.path == '/static/laptop.js':
+            if not is_admin(user):
+                self.json_error(403, 'Admin access required')
+                return
+            try:
+                body = open(os.path.join(STATIC_DIR, 'laptop.js'), 'rb').read()
+            except OSError:
+                self.json_error(503, 'Laptop controls are not installed')
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         if self.path == "/api/stats":

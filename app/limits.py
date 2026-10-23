@@ -5,6 +5,7 @@ import threading
 class Admission:
     def __init__(self):
         self.slots = {
+            '/api/laptop/terminals': threading.BoundedSemaphore(1),
             '/api/agy/scroll': threading.BoundedSemaphore(1),
             '/api/login': threading.BoundedSemaphore(4),
             '/api/clipboard/upload': threading.BoundedSemaphore(2),
@@ -17,6 +18,7 @@ class Admission:
 
 
 BODY_LIMITS = {
+    '/api/laptop/terminals': 1024,
     '/api/agy/scroll': 1024,
     '/api/login': 8*1024,
     '/api/logout': 1024,

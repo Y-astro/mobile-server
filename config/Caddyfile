@@ -42,6 +42,13 @@ http://:8000 {
 		}
 	}
 
+	handle /laptop* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7683
+	}
+
 	handle /terminal* {
 		forward_auth 127.0.0.1:8001 {
 			uri /api/auth-check-admin
@@ -107,6 +114,13 @@ https://100.75.159.53:8443, https://192.168.1.8:8443, https://192.168.1.14:8443,
 				write_buffer 32768
 			}
 		}
+	}
+
+	handle /laptop* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7683
 	}
 
 	handle /terminal* {

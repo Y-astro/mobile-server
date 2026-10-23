@@ -75,3 +75,11 @@ AGY uses one named `agy` tmux session. Browser disconnects detach only that clie
 The dashboard still combines HTML and Python handlers in a large file; tests cover the changed interfaces, but splitting rendering from handlers would make future changes easier. Vendored frontend bundles are version-specific: a FileBrowser update changes asset hashes and requires rebuilding/reapplying the six-file queue patch and retesting SSO/TUS. The status CLI reports supervisor state instead of guessing sensor readings. The install script updates this existing device rather than provisioning every dependency from scratch. No tested software setting can guarantee carrier upload bandwidth or immunity to an actual Android reboot/power loss.
 
 References: [Tailscale connection types](https://tailscale.com/docs/reference/connection-types), [performance troubleshooting](https://tailscale.com/docs/reference/troubleshooting/poor-performance-tailnet), [Tor SOCKS limitations](https://spec.torproject.org/socks-extensions.html), [FileBrowser proxy authentication](https://github.com/filebrowser/filebrowser/blob/master/docs/authentication.md), [OWASP password storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html).
+
+## Wi-Fi website address
+
+The current home Wi-Fi URL is `http://192.168.1.8:8000/`. Devices must be on that home network to use the private LAN address. Enter the `http://` prefix and port `8000` explicitly. A mobile-data/tethered connection alone has no route to that address; use `http://100.75.159.53:8000/` through Tailscale when away.
+
+The admin dashboard's Wi-Fi address is now a clickable link populated from actual phone telemetry. It starts as “Detecting…” rather than displaying an old hardcoded address. If DHCP changes the phone's address, use the newly displayed address; a router DHCP reservation is needed to make a LAN IP permanently fixed. No router reservation was changed by this update.
+
+The Wi-Fi page serves the same admin/family dashboard and laptop-terminal controls as the Tailscale page. A real browser test from a laptop on the home Wi-Fi verified Kitty launch, browser command execution on the laptop, reconnect, terminal close, and family access denial. The phone-to-laptop terminal connection still uses Tailscale SSH; browser access from the LAN does not require a USB connection.

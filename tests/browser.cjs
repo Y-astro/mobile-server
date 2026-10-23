@@ -51,13 +51,15 @@ const assert = require('node:assert/strict');
   const dashboard = await browser.newPage();
   await dashboard.route('**/*',async route=> {
     const url=route.request().url();
-    if(url.endsWith('/api/stats')) await route.fulfill({json:{tailscale_ip:'100.75.159.53',stale:false,battery:{percentage:0,temperature:0},ram:{},storage:{},network:{},load_avg:[null]}});
+    if(url.endsWith('/api/stats')) await route.fulfill({json:{tailscale_ip:'100.75.159.53',local_ip:'192.168.1.8',stale:false,battery:{percentage:0,temperature:0},ram:{},storage:{},network:{},load_avg:[null]}});
     else if(url.endsWith('/api/vpn/status')) await route.fulfill({json:{enabled:true,verified_via_tor:false,stale:false,masked_ip:'203.0.113.99'}});
     else if(url.endsWith('/api/services')) await route.fulfill({json:{services:[],total_active_mem_mb:null,sleeping_count:0}});
     else if(url==='http://mobile.test/') await route.fulfill({body:fs.readFileSync('.work/dashboard-test.html','utf8'),contentType:'text/html'});
     else await route.abort();
   });
   await dashboard.goto('http://mobile.test/');await dashboard.waitForTimeout(200);
+  assert.equal(await dashboard.locator('#header-local-ip').textContent(),'192.168.1.8');
+  assert.equal(await dashboard.locator('#header-local-ip').getAttribute('href'),'http://192.168.1.8:8000/');
   assert.equal(await dashboard.locator('#battery-pct').textContent(),'0%');
   assert.equal(await dashboard.locator('#net-wifi-speed').textContent(),'N/A');
   assert.equal(await dashboard.locator('#cpu-temp').textContent(),'N/A');

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Phone server verification tools",
   "scripts": {
-    "test": "python3 scripts/browser-fixture.py && node tests/browser.cjs"
+    "test": "python3 scripts/browser-fixture.py && node tests/browser.cjs && node tests/laptop-browser.cjs"
   },
   "repository": {
     "type": "git",

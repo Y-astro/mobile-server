@@ -28,12 +28,13 @@ install -m 700 app/dashboard.py "$PREFIX/bin/dashboard.new"
 mv "$PREFIX/bin/dashboard.new" "$PREFIX/bin/dashboard"
 install -m 700 .work/mobile-gateway "$HOME/bin/mobile-gateway.new"
 mv "$HOME/bin/mobile-gateway.new" "$HOME/bin/mobile-gateway"
-for script in server_supervisor.py agy_session.sh battery_guard.sh; do install -m 700 "scripts/$script" "$HOME/bin/$script.new"; mv "$HOME/bin/$script.new" "$HOME/bin/$script"; done
+for script in server_supervisor.py agy_session.sh battery_guard.sh laptop_session.py; do install -m 700 "scripts/$script" "$HOME/bin/$script.new"; mv "$HOME/bin/$script.new" "$HOME/bin/$script"; done
 for command in server-user server-status server-health server-up server-down server-restart agy-resume; do
     install -m 700 "scripts/$command" "$PREFIX/bin/$command"
 done
 install -m 600 web/agy_index.html "$HOME/.config/ttyd/agy_index.html"
 install -m 600 web/filebrowser.js "$HOME/.config/dashboard/static/patched_index.js"
+install -m 600 web/laptop.js "$HOME/.config/dashboard/static/laptop.js"
 install -m 600 web/interactive_player.js "$HOME/.config/dashboard/static/interactive_player.js"
 install -m 600 config/torrc "$HOME/.config/tor/torrc"
 install -m 600 config/Caddyfile "$HOME/.config/caddy/Caddyfile"

@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch, Mock
 from http.client import HTTPConnection
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'app'))
 from auth import hash_password, save_users
@@ -34,6 +35,20 @@ class DashboardTests(unittest.TestCase):
   self.assertEqual(self.request('GET','/api/auth-check','testfamily')[0],200)
   self.assertEqual(self.request('GET','/api/auth-check?override=true','testadmin')[0],200)
   self.assertEqual(self.request('GET','/api/auth-check-admin?foo=1','testfamily')[0],403)
+ def test_laptop_controls_are_admin_only(self):
+  with patch.object(self.mod, 'LAPTOP_CLIENT') as client:
+   for method,path,body in [('GET','/api/laptop/terminals',None),('POST','/api/laptop/terminals',b'{}'),('DELETE','/api/laptop/terminals/'+'a'*32,None)]:
+    self.assertEqual(self.request(method,path,'testfamily',body)[0],403)
+   client.status.assert_not_called();client.operation.assert_not_called()
+ def test_laptop_create_list_close_use_resource_api(self):
+  with patch.object(self.mod, 'LAPTOP_CLIENT') as client:
+   client.status.return_value={'online':True,'sessions':[],'max_sessions':4}
+   client.operation.return_value={'id':'a'*32}
+   self.assertEqual(self.request('GET','/api/laptop/terminals','testadmin')[0],200)
+   self.assertEqual(self.request('POST','/api/laptop/terminals','testadmin',b'{}')[0],201)
+   self.assertEqual(self.request('DELETE','/api/laptop/terminals/'+'a'*32,'testadmin')[0],200)
+   self.assertEqual(client.operation.call_args_list[0].args,('create',None))
+   self.assertEqual(client.operation.call_args_list[1].args,('close','a'*32))
  def test_body_limits_and_malformed_requests(self):
   self.assertEqual(self.request('POST','/api/login',body=b'x'*8193)[0],413)
   self.assertEqual(self.request('POST','/api/login',body=b'[]')[0],400)

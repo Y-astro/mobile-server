@@ -6,6 +6,7 @@ Phone-side recovery and a private Tailscale-accessible dashboard, FileBrowser, p
 - Six parallel browser files with streaming server admission, TUS write locking and body/conversion limits.
 - Measured telemetry with explicit unavailable/stale values.
 - Real verified Tor proxy; full-device Tor routing is unavailable.
+- Laptop Kitty terminals with shared browser control over Tailscale SSH. See [usage and pairing](docs/LAPTOP-TERMINALS.md).
 - tmux response scrolling and persistent sessions; supervisor recovery respects deliberate stops.
 
 See [operations and setup](docs/OPERATIONS.md), [measured performance](docs/PERFORMANCE.md), and [third-party notices](licenses/README.md). Runtime credentials, keys, databases and user files are excluded.

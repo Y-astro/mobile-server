@@ -44,6 +44,7 @@ def services():
         'vaultwarden': dict(port=8082, path='/alive', cmd=[f'{p}/bin/proot-distro', 'login', 'debian', '--', '/usr/bin/env', 'ROCKET_PORT=8082', 'ROCKET_ADDRESS=127.0.0.1', f'DATA_FOLDER={h}/vaultwarden/data', f'WEB_VAULT_FOLDER={h}/vaultwarden/web-vault', f'{h}/vaultwarden/vaultwarden']),
         'terminal': dict(port=7681, path='/terminal/', cmd=[f'{p}/bin/ttyd', '-W', '-i', '127.0.0.1', '-p', '7681', '-b', '/terminal', '-I', f'{h}/.config/ttyd/termux_index.html', f'{h}/bin/termux_session.sh']),
         'agy': dict(port=7682, path='/agy/', cmd=[f'{p}/bin/ttyd', '-W', '-i', '127.0.0.1', '-p', '7682', '-b', '/agy', '-I', f'{h}/.config/ttyd/agy_index.html', f'{h}/bin/agy_session.sh']),
+        'laptop_terminal': dict(port=7683, path='/laptop/', cmd=[f'{p}/bin/ttyd', '-W', '-a', '-O', '-m', '8', '-i', '127.0.0.1', '-p', '7683', '-b', '/laptop', f'{p}/bin/python3', f'{h}/bin/laptop_session.py']),
         'tor': dict(port=9050, protocol='socks5', cmd=[f'{p}/bin/tor', '-f', f'{h}/.config/tor/torrc']),
         'battery_guard': dict(cmd=[f'{p}/bin/bash', f'{h}/bin/battery_guard.sh', '--daemon']),
     }
@@ -111,7 +112,7 @@ def matching_processes(sid):
                 match = base.startswith('python') and str(PREFIX / 'bin/dashboard') in args
             elif sid == 'caddy':
                 match = base == 'caddy' and 'run' in args and str(HOME / '.config/caddy/Caddyfile') in args
-            elif sid in ('terminal', 'agy'):
+            elif sid in ('terminal', 'agy', 'laptop_terminal'):
                 port = str(services()[sid]['port'])
                 match = base == 'ttyd' and any(args[i:i+2] == ['-p', port] for i in range(len(args)-1))
             elif sid == 'transfer_gateway':
