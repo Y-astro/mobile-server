@@ -58,7 +58,7 @@ const assert = require('node:assert/strict');
     else await route.abort();
   });
   await dashboard.goto('http://mobile.test/');await dashboard.waitForTimeout(200);
-  assert.equal(await dashboard.locator('#header-local-ip').textContent(),'192.168.1.8');
+  assert.equal(await dashboard.locator('#header-local-ip').textContent(),'192.168.1.8:8000');
   assert.equal(await dashboard.locator('#header-local-ip').getAttribute('href'),'http://192.168.1.8:8000/');
   assert.equal(await dashboard.locator('#battery-pct').textContent(),'0%');
   assert.equal(await dashboard.locator('#net-wifi-speed').textContent(),'N/A');

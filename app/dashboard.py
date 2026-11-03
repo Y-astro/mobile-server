@@ -37,7 +37,7 @@ MOBILE_LIB = os.path.expanduser("~/.local/lib/mobile-server")
 sys.path.insert(0, MOBILE_LIB if os.path.isdir(MOBILE_LIB) else os.path.dirname(__file__))
 from auth import CredentialStore, LoginLimiter
 from telemetry import Telemetry
-from limits import Admission, BODY_LIMITS
+from limits import Admission, BODY_LIMITS, CONVERSION_PATHS, canonical_post_path
 from tor_proxy import TorProxy
 from laptop import LaptopClient, LaptopError
 LAPTOP_CLIENT = LaptopClient()
@@ -2804,6 +2804,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         slot = None
         acquired = False
+        post_path = canonical_post_path(self.path)
         try:
             if self.headers.get("Transfer-Encoding"):
                 self.json_error(400, "Use a Content-Length request")
@@ -2813,14 +2814,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.json_error(400, "Invalid Content-Length")
                 return
             length = int(value)
-            if length > BODY_LIMITS.get(self.path, 0):
+            if length > BODY_LIMITS.get(post_path, 0):
                 self.json_error(413, "Request exceeds this endpoint's size limit")
                 return
-            slot, acquired = ADMISSION.acquire(self.path)
+            slot, acquired = ADMISSION.acquire(post_path)
             if not acquired:
                 self.json_error(429, "This operation is busy; retry shortly", retry_after=3)
                 return
-            self._do_POST()
+            self._do_POST(post_path=post_path)
         except (ValueError, TypeError, AttributeError, UnicodeError):
             self.json_error(400, "Invalid request body")
         except (TimeoutError, socket.timeout):
@@ -2829,7 +2830,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if slot is not None and acquired:
                 slot.release()
 
-    def _do_POST(self):
+    def _do_POST(self, post_path=None):
+        route = post_path if post_path is not None else canonical_post_path(self.path)
         if self.path == "/api/login":
             length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(length).decode('utf-8')
@@ -3077,7 +3079,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(resp_bytes)
             return
 
-        elif self.path == "/api/convert":
+        elif route == "/api/convert":
             user = self.get_session_user()
             if not user:
                 self.send_response(403)

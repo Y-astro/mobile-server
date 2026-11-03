@@ -1,6 +1,12 @@
 """In-flight work admission for dashboard uploads and conversions."""
 import threading
 
+CONVERSION_PATHS = frozenset(("/api/convert", "/api/convert/pdf"))
+
+
+def canonical_post_path(path):
+    return "/api/convert" if path in CONVERSION_PATHS else path
+
 
 class Admission:
     def __init__(self):
@@ -14,7 +20,7 @@ class Admission:
         }
 
     def acquire(self, path):
-        slot = self.slots.get(path)
+        slot = self.slots.get(canonical_post_path(path))
         return slot, slot is None or slot.acquire(blocking=False)
 
 
@@ -29,4 +35,5 @@ BODY_LIMITS = {
     '/api/notes': 64*1024,
     '/api/clipboard/upload': 25*1024*1024,
     '/api/convert': 32*1024*1024,
+    '/api/convert/pdf': 32*1024*1024,
 }
