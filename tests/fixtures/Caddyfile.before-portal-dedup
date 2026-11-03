@@ -1,0 +1,503 @@
+{
+    admin unix//data/data/com.termux/files/home/.config/caddy/admin.sock
+	auto_https disable_redirects
+	servers {
+		enable_full_duplex
+		timeouts {
+			read_body 0s
+			read_body_idle 60s
+			read_header 60s
+			write 0s
+			write_idle 60s
+			idle 120s
+		}
+	}
+}
+
+http://:8000 {
+	encode zstd gzip
+
+    @portalPages path / /login /api/login /api/logout
+    header @portalPages {
+        Cache-Control "no-store, private"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy same-origin
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    }
+
+    handle /wealth-ca.crt {
+        root * /data/data/com.termux/files/home/.config/caddy/public
+        rewrite * /RedmiHomeServerCA.crt
+        file_server
+    }
+
+    handle /portal.css {
+        root * /data/data/com.termux/files/home/.config/dashboard/static
+        file_server
+    }
+
+    handle /wealth* {
+        redir https://{host}:8444/wealth/ 303
+    }
+
+	handle /drive/static/assets/index-BqkXVoMb.js {
+		root * /data/data/com.termux/files/home/.config/dashboard/static
+		rewrite * /patched_index.js
+		file_server
+	}
+
+	handle /drive/branding/* {
+		reverse_proxy 127.0.0.1:8081
+	}
+
+    handle /drive/api/raw/* {
+        forward_auth 127.0.0.1:8001 {
+            uri /api/auth-check
+            copy_headers X-Forwarded-User
+        }
+        reverse_proxy 127.0.0.1:8081 {
+            flush_interval 20ms
+            @activeContent {
+                header Content-Type text/html*
+                header Content-Type image/svg+xml*
+                header Content-Type application/xhtml+xml*
+                header Content-Type application/xml*
+                header Content-Type text/xml*
+                header Content-Type application/javascript*
+                header Content-Type text/javascript*
+            }
+            handle_response @activeContent {
+                header {
+                    >Content-Security-Policy "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+                    >Content-Disposition attachment
+                    >X-Content-Type-Options nosniff
+                }
+                copy_response
+            }
+            transport http {
+                keepalive 90s
+                response_header_timeout 300s
+                read_buffer 131072
+                write_buffer 131072
+            }
+        }
+    }
+
+    redir /drive /drive/ 308
+
+	handle /drive* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check
+			copy_headers X-Forwarded-User
+		}
+		reverse_proxy 127.0.0.1:8081 {
+			flush_interval 20ms
+			transport http {
+				keepalive 90s
+				response_header_timeout 300s
+				read_buffer 131072
+				write_buffer 131072
+			}
+		}
+	}
+
+	handle /laptop* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7683
+	}
+
+	handle /terminal* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7681
+	}
+
+	handle /agy* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7682
+	}
+
+	handle /vault* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		uri strip_prefix /vault
+		reverse_proxy 127.0.0.1:8082
+	}
+
+	redir /suwayomi /suwayomi/ 308
+
+	@mangaThumbnail path_regexp thumb ^/suwayomi/api/v1/manga/([0-9]+)/thumbnail$
+	handle @mangaThumbnail {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+			copy_headers X-Forwarded-User
+		}
+		root * /data/data/com.termux/files/home/suwayomi/data/downloads/thumbnails
+		@hasThumb file /{re.thumb.1}.webp /{re.thumb.1}.jpg /{re.thumb.1}.png /{re.thumb.1}.jpeg /{re.thumb.1}.avif
+		handle @hasThumb {
+			rewrite * {http.matchers.file.relative}
+			header Cache-Control "public, max-age=31536000, immutable"
+			file_server
+		}
+		handle {
+			reverse_proxy 127.0.0.1:4569 {
+				header_down Cache-Control "public, max-age=31536000, immutable"
+				flush_interval 20ms
+				transport http {
+					keepalive 90s
+					response_header_timeout 300s
+					read_buffer 131072
+					write_buffer 131072
+				}
+			}
+		}
+	}
+	@graphqlPost {
+		method POST
+		path /suwayomi/api/graphql
+	}
+	handle @graphqlPost {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+			copy_headers X-Forwarded-User
+		}
+		reverse_proxy 127.0.0.1:4566
+	}
+
+	handle /suwayomi* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+			copy_headers X-Forwarded-User
+		}
+		reverse_proxy 127.0.0.1:4569 {
+			header_down Cache-Control "no-cache, no-store, must-revalidate"
+			flush_interval 20ms
+			transport http {
+				keepalive 90s
+				response_header_timeout 300s
+				read_buffer 131072
+				write_buffer 131072
+			}
+		}
+	}
+
+	handle /screenshots/* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		root * /data/data/com.termux/files/home
+		file_server
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8001 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+}
+
+https://:8443 {
+	tls internal {
+		on_demand
+	}
+	encode zstd gzip
+
+    @portalPages path / /login /api/login /api/logout
+    header @portalPages {
+        Cache-Control "no-store, private"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy same-origin
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    }
+
+    handle /wealth-ca.crt {
+        root * /data/data/com.termux/files/home/.config/caddy/public
+        rewrite * /RedmiHomeServerCA.crt
+        file_server
+    }
+
+    handle /portal.css {
+        root * /data/data/com.termux/files/home/.config/dashboard/static
+        file_server
+    }
+
+    handle /wealth* {
+        redir https://{host}:8444/wealth/ 303
+    }
+
+	handle /drive/static/assets/index-BqkXVoMb.js {
+		root * /data/data/com.termux/files/home/.config/dashboard/static
+		rewrite * /patched_index.js
+		file_server
+	}
+
+	handle /drive/branding/* {
+		reverse_proxy 127.0.0.1:8081
+	}
+
+    handle /drive/api/raw/* {
+        forward_auth 127.0.0.1:8001 {
+            uri /api/auth-check
+            copy_headers X-Forwarded-User
+        }
+        reverse_proxy 127.0.0.1:8081 {
+            flush_interval 20ms
+            @activeContent {
+                header Content-Type text/html*
+                header Content-Type image/svg+xml*
+                header Content-Type application/xhtml+xml*
+                header Content-Type application/xml*
+                header Content-Type text/xml*
+                header Content-Type application/javascript*
+                header Content-Type text/javascript*
+            }
+            handle_response @activeContent {
+                header {
+                    >Content-Security-Policy "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+                    >Content-Disposition attachment
+                    >X-Content-Type-Options nosniff
+                }
+                copy_response
+            }
+            transport http {
+                keepalive 90s
+                response_header_timeout 300s
+                read_buffer 131072
+                write_buffer 131072
+            }
+        }
+    }
+
+    redir /drive /drive/ 308
+
+	handle /drive* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check
+			copy_headers X-Forwarded-User
+		}
+		reverse_proxy 127.0.0.1:8081 {
+			flush_interval 20ms
+			transport http {
+				keepalive 90s
+				response_header_timeout 300s
+				read_buffer 131072
+				write_buffer 131072
+			}
+		}
+	}
+
+	handle /laptop* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7683
+	}
+
+	handle /terminal* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7681
+	}
+
+	handle /agy* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		reverse_proxy 127.0.0.1:7682
+	}
+
+	handle /vault* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		uri strip_prefix /vault
+		reverse_proxy 127.0.0.1:8082
+	}
+
+	redir /suwayomi /suwayomi/ 308
+
+	@mangaThumbnail path_regexp thumb ^/suwayomi/api/v1/manga/([0-9]+)/thumbnail$
+	handle @mangaThumbnail {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+			copy_headers X-Forwarded-User
+		}
+		root * /data/data/com.termux/files/home/suwayomi/data/downloads/thumbnails
+		@hasThumb file /{re.thumb.1}.webp /{re.thumb.1}.jpg /{re.thumb.1}.png /{re.thumb.1}.jpeg /{re.thumb.1}.avif
+		handle @hasThumb {
+			rewrite * {http.matchers.file.relative}
+			header Cache-Control "public, max-age=31536000, immutable"
+			file_server
+		}
+		handle {
+			reverse_proxy 127.0.0.1:4569 {
+				header_down Cache-Control "public, max-age=31536000, immutable"
+				flush_interval 20ms
+				transport http {
+					keepalive 90s
+					response_header_timeout 300s
+					read_buffer 131072
+					write_buffer 131072
+				}
+			}
+		}
+	}
+	@graphqlPost {
+		method POST
+		path /suwayomi/api/graphql
+	}
+	handle @graphqlPost {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+			copy_headers X-Forwarded-User
+		}
+		reverse_proxy 127.0.0.1:4566
+	}
+
+	handle /suwayomi* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+			copy_headers X-Forwarded-User
+		}
+		reverse_proxy 127.0.0.1:4569 {
+			header_down Cache-Control "no-cache, no-store, must-revalidate"
+			flush_interval 20ms
+			transport http {
+				keepalive 90s
+				response_header_timeout 300s
+				read_buffer 131072
+				write_buffer 131072
+			}
+		}
+	}
+
+	handle /screenshots/* {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/auth-check-admin
+		}
+		root * /data/data/com.termux/files/home
+		file_server
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8001 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+}
+
+https://192.168.1.8:8444, https://192.168.1.10:8444, https://100.75.159.53:8444, https://redmi-k20-pro.tail939a82.ts.net:8444 {
+    tls internal
+    encode zstd gzip
+    header {
+        ?Cache-Control "no-store, private, max-age=0"
+        Pragma "no-cache"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy same-origin
+        -Server
+        -Access-Control-Allow-Origin
+        -Access-Control-Allow-Credentials
+    }
+    redir / /wealth/ 303
+    redir /login https://{host}:8443/login 303
+    redir /portal https://{host}:8443/ 303
+    handle /wealth/* {
+        route {
+            request_body {
+                max_size 52MB
+            }
+            forward_auth 127.0.0.1:8001 {
+                uri /api/auth-check
+            }
+            reverse_proxy 127.0.0.1:18930 {
+                header_up X-Real-IP {remote_host}
+                flush_interval 20ms
+            }
+        }
+    }
+    # Wealthfolio offline status page
+    handle_errors {
+        header Cache-Control "no-store, private"
+        header Content-Type "text/html; charset=utf-8"
+        header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"
+        respond `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wealthfolio · Laptop unavailable</title><style>body{margin:0;background:#111210;color:#eeede6;font:16px system-ui;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box}main{max-width:480px;padding:32px;border:1px solid #626558;border-radius:18px;background:#1b1c18}p{line-height:1.65;color:#b7b9ad}a{display:inline-block;margin:12px 12px 0 0;padding:12px 16px;border-radius:8px;background:#d5e8d5;color:#142417;text-decoration:none}.quiet{background:transparent;color:#d5e8d5;border:1px solid #626558}</style><main><p>WEALTHFOLIO · LAPTOP CONNECTION</p><h1>The laptop is not connected</h1><p>It may be asleep, restarting, or Wealthfolio may be switched off. Ask the laptop owner to start Wealthfolio and keep the laptop awake, then try again.</p><p>Your statements and processing results stay saved on the laptop. This page does not show a cached financial copy.</p><a href="/wealth/">Try again</a><a class="quiet" href="/portal">Back to home server</a></main></html>` 503
+    }
+}
+
+
+# Reject unknown Wealthfolio Host headers without issuing on-demand certificates.
+https://:8444 {
+    tls internal
+    header {
+        Cache-Control "no-store"
+        Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+        -Server
+    }
+    respond "Unrecognized Wealthfolio host." 421
+}
+
+# Tsumiru / Native client direct port
+http://:4567 {
+	encode zstd gzip
+
+	redir /suwayomi /suwayomi/ 308
+
+	@mangaThumbnail path_regexp thumb ^/suwayomi/api/v1/manga/([0-9]+)/thumbnail$
+	handle @mangaThumbnail {
+		root * /data/data/com.termux/files/home/suwayomi/data/downloads/thumbnails
+		@hasThumb file /{re.thumb.1}.webp /{re.thumb.1}.jpg /{re.thumb.1}.png /{re.thumb.1}.jpeg /{re.thumb.1}.avif
+		handle @hasThumb {
+			rewrite * {http.matchers.file.relative}
+			header Cache-Control "public, max-age=31536000, immutable"
+			file_server
+		}
+		handle {
+			reverse_proxy 127.0.0.1:4569 {
+				header_down Cache-Control "public, max-age=31536000, immutable"
+				flush_interval 20ms
+				transport http {
+					keepalive 90s
+					response_header_timeout 300s
+					read_buffer 131072
+					write_buffer 131072
+				}
+			}
+		}
+	}
+
+	@graphqlPost {
+		method POST
+		path /suwayomi/api/graphql
+	}
+	handle @graphqlPost {
+		reverse_proxy 127.0.0.1:4566 {
+			flush_interval 20ms
+			transport http {
+				keepalive 90s
+				response_header_timeout 300s
+			}
+		}
+	}
+
+	handle /suwayomi* {
+		reverse_proxy 127.0.0.1:4569 {
+			flush_interval 20ms
+			transport http {
+				keepalive 90s
+				response_header_timeout 300s
+				read_buffer 131072
+				write_buffer 131072
+			}
+		}
+	}
+}

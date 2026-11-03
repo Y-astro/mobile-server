@@ -14,7 +14,7 @@
 	}
 }
 
-http://:8000 {
+(portal_body) {
 	encode zstd gzip
 
     @portalPages path / /login /api/login /api/logout
@@ -203,196 +203,15 @@ http://:8000 {
 	}
 }
 
+http://:8000 {
+	import portal_body
+}
+
 https://:8443 {
 	tls internal {
 		on_demand
 	}
-	encode zstd gzip
-
-    @portalPages path / /login /api/login /api/logout
-    header @portalPages {
-        Cache-Control "no-store, private"
-        X-Content-Type-Options nosniff
-        X-Frame-Options DENY
-        Referrer-Policy same-origin
-        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
-    }
-
-    handle /wealth-ca.crt {
-        root * /data/data/com.termux/files/home/.config/caddy/public
-        rewrite * /RedmiHomeServerCA.crt
-        file_server
-    }
-
-    handle /portal.css {
-        root * /data/data/com.termux/files/home/.config/dashboard/static
-        file_server
-    }
-
-    handle /wealth* {
-        redir https://{host}:8444/wealth/ 303
-    }
-
-	handle /drive/static/assets/index-BqkXVoMb.js {
-		root * /data/data/com.termux/files/home/.config/dashboard/static
-		rewrite * /patched_index.js
-		file_server
-	}
-
-	handle /drive/branding/* {
-		reverse_proxy 127.0.0.1:8081
-	}
-
-    handle /drive/api/raw/* {
-        forward_auth 127.0.0.1:8001 {
-            uri /api/auth-check
-            copy_headers X-Forwarded-User
-        }
-        reverse_proxy 127.0.0.1:8081 {
-            flush_interval 20ms
-            @activeContent {
-                header Content-Type text/html*
-                header Content-Type image/svg+xml*
-                header Content-Type application/xhtml+xml*
-                header Content-Type application/xml*
-                header Content-Type text/xml*
-                header Content-Type application/javascript*
-                header Content-Type text/javascript*
-            }
-            handle_response @activeContent {
-                header {
-                    >Content-Security-Policy "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
-                    >Content-Disposition attachment
-                    >X-Content-Type-Options nosniff
-                }
-                copy_response
-            }
-            transport http {
-                keepalive 90s
-                response_header_timeout 300s
-                read_buffer 131072
-                write_buffer 131072
-            }
-        }
-    }
-
-    redir /drive /drive/ 308
-
-	handle /drive* {
-		forward_auth 127.0.0.1:8001 {
-			uri /api/auth-check
-			copy_headers X-Forwarded-User
-		}
-		reverse_proxy 127.0.0.1:8081 {
-			flush_interval 20ms
-			transport http {
-				keepalive 90s
-				response_header_timeout 300s
-				read_buffer 131072
-				write_buffer 131072
-			}
-		}
-	}
-
-	handle /laptop* {
-		forward_auth 127.0.0.1:8001 {
-			uri /api/auth-check-admin
-		}
-		reverse_proxy 127.0.0.1:7683
-	}
-
-	handle /terminal* {
-		forward_auth 127.0.0.1:8001 {
-			uri /api/auth-check-admin
-		}
-		reverse_proxy 127.0.0.1:7681
-	}
-
-	handle /agy* {
-		forward_auth 127.0.0.1:8001 {
-			uri /api/auth-check-admin
-		}
-		reverse_proxy 127.0.0.1:7682
-	}
-
-	handle /vault* {
-		forward_auth 127.0.0.1:8001 {
-			uri /api/auth-check-admin
-		}
-		uri strip_prefix /vault
-		reverse_proxy 127.0.0.1:8082
-	}
-
-	redir /suwayomi /suwayomi/ 308
-
-	@mangaThumbnail path_regexp thumb ^/suwayomi/api/v1/manga/([0-9]+)/thumbnail$
-	handle @mangaThumbnail {
-		forward_auth 127.0.0.1:8001 {
-			uri /api/auth-check-admin
-			copy_headers X-Forwarded-User
-		}
-		root * /data/data/com.termux/files/home/suwayomi/data/downloads/thumbnails
-		@hasThumb file /{re.thumb.1}.webp /{re.thumb.1}.jpg /{re.thumb.1}.png /{re.thumb.1}.jpeg /{re.thumb.1}.avif
-		handle @hasThumb {
-			rewrite * {http.matchers.file.relative}
-			header Cache-Control "public, max-age=31536000, immutable"
-			file_server
-		}
-		handle {
-			reverse_proxy 127.0.0.1:4569 {
-				header_down Cache-Control "public, max-age=31536000, immutable"
-				flush_interval 20ms
-				transport http {
-					keepalive 90s
-					response_header_timeout 300s
-					read_buffer 131072
-					write_buffer 131072
-				}
-			}
-		}
-	}
-	@graphqlPost {
-		method POST
-		path /suwayomi/api/graphql
-	}
-	handle @graphqlPost {
-		forward_auth 127.0.0.1:8001 {
-			uri /api/auth-check-admin
-			copy_headers X-Forwarded-User
-		}
-		reverse_proxy 127.0.0.1:4566
-	}
-
-	handle /suwayomi* {
-		forward_auth 127.0.0.1:8001 {
-			uri /api/auth-check-admin
-			copy_headers X-Forwarded-User
-		}
-		reverse_proxy 127.0.0.1:4569 {
-			header_down Cache-Control "no-cache, no-store, must-revalidate"
-			flush_interval 20ms
-			transport http {
-				keepalive 90s
-				response_header_timeout 300s
-				read_buffer 131072
-				write_buffer 131072
-			}
-		}
-	}
-
-	handle /screenshots/* {
-		forward_auth 127.0.0.1:8001 {
-			uri /api/auth-check-admin
-		}
-		root * /data/data/com.termux/files/home
-		file_server
-	}
-
-	handle {
-		reverse_proxy 127.0.0.1:8001 {
-			header_up X-Real-IP {remote_host}
-		}
-	}
+	import portal_body
 }
 
 https://192.168.1.8:8444, https://192.168.1.10:8444, https://100.75.159.53:8444, https://redmi-k20-pro.tail939a82.ts.net:8444 {
