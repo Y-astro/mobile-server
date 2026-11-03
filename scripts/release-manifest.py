@@ -3,10 +3,10 @@
 release-manifest.py: Deterministic release manifest generation and offline validation.
 
 Provides machine-generated SHA-256 and byte sizes for maintained source files and
-declared build artifacts. Enforces source-to-destination ownership, completeness
-for required role templates, helper assets, launchers, and dynamically discovered
-Python runtime modules, and strictly refuses path traversal, symlink escapes,
-duplicate destinations, and secret/runtime state files.
+declared built gateway artifact. Derives canonical source-to-destination ownership
+from audited config/deployment-files.json and safe dynamic app/*.py helpers. Enforces
+strict path resolution, parent symlink escape rejection, exact destination matching,
+and non-zero failure on missing, tampered, unowned, or forbidden secret/runtime state files.
 
 Usage:
   python3 scripts/release-manifest.py generate [--root DIR] [--output FILE] [--include-gateway]
@@ -22,94 +22,18 @@ from pathlib import Path
 import sys
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-# Canonical mapping of maintained repository sources to remote deployment destinations.
-CANONICAL_MAPPINGS: Dict[str, str] = {
-    # app/ - Python runtime modules
-    "app/auth.py": "/data/data/com.termux/files/home/.local/lib/mobile-server/auth.py",
-    "app/dashboard.py": "/data/data/com.termux/files/usr/bin/dashboard",
-    "app/laptop.py": "/data/data/com.termux/files/home/.local/lib/mobile-server/laptop.py",
-    "app/limits.py": "/data/data/com.termux/files/home/.local/lib/mobile-server/limits.py",
-    "app/telemetry.py": "/data/data/com.termux/files/home/.local/lib/mobile-server/telemetry.py",
-    "app/tor_proxy.py": "/data/data/com.termux/files/home/.local/lib/mobile-server/tor_proxy.py",
+# Authorized top-level source directories
+ALLOWED_TOP_DIRS: Tuple[str, ...] = ("app", "web", "scripts", "config", ".work")
 
-    # web/ - Served pages, stylesheets, and vendor bundles
-    "web/admin.html": "/data/data/com.termux/files/home/.config/dashboard/static/admin.html",
-    "web/agy_index.html": "/data/data/com.termux/files/home/.config/ttyd/agy_index.html",
-    "web/family.html": "/data/data/com.termux/files/home/.config/dashboard/static/family.html",
-    "web/filebrowser.js": "/data/data/com.termux/files/home/.config/dashboard/static/patched_index.js",
-    "web/interactive_player.js": "/data/data/com.termux/files/home/.config/dashboard/static/interactive_player.js",
-    "web/laptop.js": "/data/data/com.termux/files/home/.config/dashboard/static/laptop.js",
-    "web/login.html": "/data/data/com.termux/files/home/.config/dashboard/static/login.html",
-    "web/portal.css": "/data/data/com.termux/files/home/.config/dashboard/static/portal.css",
-    "web/termux_index.html": "/data/data/com.termux/files/home/.config/ttyd/termux_index.html",
+# Authorized remote destination prefix
+ALLOWED_REMOTE_PREFIX = "/data/data/com.termux/files/"
 
-    # scripts/ - Process lifecycle, supervisor, launchers, and management tools
-    "scripts/agy-resume": "/data/data/com.termux/files/usr/bin/agy-resume",
-    "scripts/agy-runner-loop": "/data/data/com.termux/files/usr/var/lib/proot-distro/containers/debian/rootfs/usr/local/bin/agy-runner-loop",
-    "scripts/agy_session.sh": "/data/data/com.termux/files/home/bin/agy_session.sh",
-    "scripts/battery_guard.sh": "/data/data/com.termux/files/home/bin/battery_guard.sh",
-    "scripts/laptop_session.py": "/data/data/com.termux/files/home/bin/laptop_session.py",
-    "scripts/server-down": "/data/data/com.termux/files/usr/bin/server-down",
-    "scripts/server-health": "/data/data/com.termux/files/usr/bin/server-health",
-    "scripts/server-restart": "/data/data/com.termux/files/usr/bin/server-restart",
-    "scripts/server-status": "/data/data/com.termux/files/usr/bin/server-status",
-    "scripts/server-up": "/data/data/com.termux/files/usr/bin/server-up",
-    "scripts/server-user": "/data/data/com.termux/files/usr/bin/server-user",
-    "scripts/server_supervisor.py": "/data/data/com.termux/files/home/bin/server_supervisor.py",
-    "scripts/start-services.sh": "/data/data/com.termux/files/home/start_services.sh",
-    "scripts/start_suwayomi.sh": "/data/data/com.termux/files/home/bin/start_suwayomi.sh",
-    "scripts/suwayomi_daily_update.py": "/data/data/com.termux/files/home/bin/suwayomi_daily_update.py",
-    "scripts/suwayomi_graphql_filter.py": "/data/data/com.termux/files/home/bin/suwayomi_graphql_filter.py",
-    "scripts/suwayomi_update.sh": "/data/data/com.termux/files/home/bin/suwayomi_update.sh",
-    "scripts/termux_session.sh": "/data/data/com.termux/files/home/bin/termux_session.sh",
+# Built gateway artifact constants
+DEFAULT_GATEWAY_LOCAL = ".work/mobile-gateway"
+DEFAULT_GATEWAY_REMOTE = "/data/data/com.termux/files/home/bin/mobile-gateway"
 
-    # config/ - Edge proxy configuration
-    "config/Caddyfile": "/data/data/com.termux/files/home/.config/caddy/Caddyfile",
-}
-
-# Required assets that cannot silently be omitted from any valid release.
-REQUIRED_SOURCES: Set[str] = {
-    "web/admin.html",
-    "web/family.html",
-    "web/login.html",
-    "web/portal.css",
-    "app/limits.py",
-    "app/auth.py",
-    "app/dashboard.py",
-    "app/telemetry.py",
-    "app/tor_proxy.py",
-    "app/laptop.py",
-    "web/agy_index.html",
-    "web/termux_index.html",
-    "web/filebrowser.js",
-    "web/laptop.js",
-    "web/interactive_player.js",
-    "scripts/server_supervisor.py",
-    "scripts/battery_guard.sh",
-    "scripts/agy_session.sh",
-    "scripts/laptop_session.py",
-    "scripts/termux_session.sh",
-    "scripts/start-services.sh",
-    "scripts/start_suwayomi.sh",
-    "scripts/suwayomi_daily_update.py",
-    "scripts/suwayomi_graphql_filter.py",
-    "scripts/suwayomi_update.sh",
-    "scripts/server-user",
-    "scripts/server-status",
-    "scripts/server-health",
-    "scripts/server-up",
-    "scripts/server-down",
-    "scripts/server-restart",
-    "scripts/agy-resume",
-    "scripts/agy-runner-loop",
-    "config/Caddyfile",
-}
-
-# Source directory prefixes allowed for release inputs.
-ALLOWED_SOURCE_PREFIXES: Tuple[str, ...] = ("app/", "web/", "scripts/", "config/", ".work/")
-
-# Authorized target prefixes on the deployed system.
-ALLOWED_REMOTE_PREFIXES: Tuple[str, ...] = ("/data/data/com.termux/files/",)
+# Mobile server python helper lib destination
+MOBILE_SERVER_LIB_PREFIX = "/data/data/com.termux/files/home/.local/lib/mobile-server/"
 
 # Forbidden secret, runtime, credential, database, and history patterns.
 FORBIDDEN_SECRET_PATTERNS: Tuple[str, ...] = (
@@ -127,6 +51,7 @@ FORBIDDEN_SECRET_PATTERNS: Tuple[str, ...] = (
     "*id_rsa*",
     "*id_ed25519*",
     "*session.key*",
+    "*authorized_keys*",
     "*.db",
     "*.sqlite",
     "*.sqlite3",
@@ -140,9 +65,6 @@ FORBIDDEN_SECRET_PATTERNS: Tuple[str, ...] = (
     "*server_recovery*",
 )
 
-DEFAULT_GATEWAY_LOCAL = ".work/mobile-gateway"
-DEFAULT_GATEWAY_REMOTE = "/data/data/com.termux/files/home/bin/mobile-gateway"
-
 
 class ManifestError(Exception):
     """Base exception for manifest validation and generation errors."""
@@ -150,79 +72,184 @@ class ManifestError(Exception):
 
 
 def is_forbidden_secret_or_runtime_path(path_str: str) -> bool:
-    """Check whether a path matches forbidden secret, runtime, DB, or credential patterns."""
+    """Check whether a path matches forbidden secret, runtime, DB, key, or credential patterns."""
     normalized = path_str.replace("\\", "/").lower()
     basename = os.path.basename(normalized)
     parts = normalized.split("/")
 
     for pattern in FORBIDDEN_SECRET_PATTERNS:
         pat_lower = pattern.lower()
-        if fnmatch.fnmatch(basename, pat_lower):
-            return True
-        if fnmatch.fnmatch(normalized, pat_lower):
+        if fnmatch.fnmatch(basename, pat_lower) or fnmatch.fnmatch(normalized, pat_lower):
             return True
         for part in parts:
             if fnmatch.fnmatch(part, pat_lower):
                 return True
 
-    # Check substring indicators of credentials/tokens
-    for keyword in ("token", "credential", "private_key", "secret_key"):
-        if keyword in basename:
+    for keyword in ("token", "credential", "private_key", "secret_key", "authorized_keys"):
+        if keyword in basename or keyword in normalized:
             return True
 
     return False
 
 
+def load_baseline_mapping(root_dir: Path) -> Dict[str, str]:
+    """
+    Load canonical ownership mapping from config/deployment-files.json.
+    Fails closed on invalid shape, unreadable baseline, or duplicate ownership.
+    """
+    baseline_file = root_dir / "config/deployment-files.json"
+    if not baseline_file.exists():
+        raise ManifestError(f"Audited baseline mapping file not found at {baseline_file}")
+
+    try:
+        with open(baseline_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        raise ManifestError(f"Failed to parse baseline mapping {baseline_file}: {exc}") from exc
+
+    if not isinstance(data, list):
+        raise ManifestError(f"Baseline mapping in {baseline_file} must be a JSON array")
+
+    mapping: Dict[str, str] = {}
+    seen_remotes: Dict[str, str] = {}
+
+    for idx, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise ManifestError(f"Baseline item at index {idx} is not an object")
+        for key in ("local", "remote"):
+            if key not in item or not isinstance(item[key], str) or not item[key].strip():
+                raise ManifestError(f"Baseline item at index {idx} missing valid '{key}' field")
+
+        local_path = item["local"].strip()
+        remote_path = item["remote"].strip()
+
+        if local_path in mapping:
+            raise ManifestError(f"Duplicate local entry in baseline mapping: {local_path}")
+        if remote_path in seen_remotes:
+            raise ManifestError(
+                f"Duplicate remote destination '{remote_path}' in baseline for '{seen_remotes[remote_path]}' and '{local_path}'"
+            )
+
+        mapping[local_path] = remote_path
+        seen_remotes[remote_path] = local_path
+
+    return mapping
+
+
+def get_canonical_ownership(root_dir: Path, include_gateway: bool = False) -> Dict[str, str]:
+    """
+    Construct canonical ownership table:
+    1. Audited baseline rows from config/deployment-files.json
+    2. Safe dynamically discovered app/*.py helpers (excluding dashboard executable)
+    3. Optional declared built gateway (.work/mobile-gateway)
+    """
+    ownership = load_baseline_mapping(root_dir)
+
+    # Dynamically discover any additional safe Python runtime helpers in app/
+    app_dir = root_dir / "app"
+    if app_dir.is_dir():
+        # Check for nested subdirectories in app/ (ignoring __pycache__) - reject unsupported nesting explicitly
+        for root, dirs, files in os.walk(app_dir):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            rel_root = Path(root).relative_to(root_dir)
+            if rel_root != Path("app") and (dirs or files):
+                raise ManifestError(
+                    f"Unsupported nested directory or modules in app/: {rel_root.as_posix()}. "
+                    "Only flat app/*.py runtime modules are supported."
+                )
+
+        for py_path in sorted(app_dir.glob("*.py")):
+            rel_path = py_path.relative_to(root_dir).as_posix()
+            if rel_path not in ownership:
+                if py_path.name == "dashboard.py":
+                    ownership[rel_path] = "/data/data/com.termux/files/usr/bin/dashboard"
+                else:
+                    ownership[rel_path] = f"{MOBILE_SERVER_LIB_PREFIX}{py_path.name}"
+
+    if include_gateway:
+        gw_path = root_dir / DEFAULT_GATEWAY_LOCAL
+        if gw_path.exists():
+            ownership[DEFAULT_GATEWAY_LOCAL] = DEFAULT_GATEWAY_REMOTE
+
+    return ownership
+
+
 def validate_path_safety(local_str: str, remote_str: str, root_dir: Path) -> None:
-    """Refuse path traversal, unsafe destinations, forbidden secret/runtime patterns."""
-    # 1. Local path checks
+    """
+    Validate path safety, component structure, symlink safety (including all parents),
+    and secret/runtime protection.
+    """
     if not local_str or not isinstance(local_str, str):
         raise ManifestError("Local source path must be a non-empty string")
 
+    # Reject backslashes and normalize
+    if "\\" in local_str:
+        raise ManifestError(f"Refused non-posix local path: {local_str}")
     norm_local = os.path.normpath(local_str)
     if os.path.isabs(local_str):
         raise ManifestError(f"Refused absolute source path: {local_str}")
 
-    if norm_local.startswith("..") or "/../" in local_str or local_str.startswith("../"):
-        raise ManifestError(f"Refused path traversal in source: {local_str}")
+    local_path = Path(norm_local)
+    parts = local_path.parts
 
-    if not any(norm_local.startswith(prefix.rstrip("/")) for prefix in ALLOWED_SOURCE_PREFIXES):
+    if not parts or parts[0] == ".." or ".." in parts:
+        raise ManifestError(f"Refused traversal in source path: {local_str}")
+
+    # Check first path component exactly matches allowed directory
+    if parts[0] not in ALLOWED_TOP_DIRS:
         raise ManifestError(
-            f"Refused source path: {local_str} is not inside allowed source roots "
-            f"({', '.join(ALLOWED_SOURCE_PREFIXES)})"
+            f"Refused source path '{local_str}': component '{parts[0]}' is not inside allowed source roots "
+            f"({', '.join(ALLOWED_TOP_DIRS)})"
         )
 
     if is_forbidden_secret_or_runtime_path(local_str):
         raise ManifestError(f"Refused secret or runtime class in source path: {local_str}")
 
-    # Check symlink escape on filesystem if file exists
-    full_local = root_dir / norm_local
-    if full_local.is_symlink():
+    # Validate all parent paths and the file itself for symlink traversal escaping root
+    root_resolved = root_dir.resolve()
+    current = root_dir
+    for part in parts:
+        current = current / part
+        if current.is_symlink():
+            try:
+                target = current.resolve()
+                if not target.is_relative_to(root_resolved):
+                    raise ManifestError(
+                        f"Refused symlink escape in path '{local_str}': component '{current.name}' "
+                        f"points outside release root to {target}"
+                    )
+                if is_forbidden_secret_or_runtime_path(str(target)):
+                    raise ManifestError(
+                        f"Refused symlink pointing to forbidden secret: {local_str} -> {target}"
+                    )
+            except (ValueError, RuntimeError) as exc:
+                raise ManifestError(f"Refused invalid symlink in path '{local_str}': {exc}") from exc
+
+    # Final resolved target check
+    if current.exists() or current.is_symlink():
         try:
-            target = full_local.resolve()
-            root_resolved = root_dir.resolve()
+            target = current.resolve()
             if not target.is_relative_to(root_resolved):
-                raise ManifestError(f"Refused symlink escape: {local_str} points outside release root ({target})")
+                raise ManifestError(f"Refused symlink escape: '{local_str}' points outside release root ({target})")
             if is_forbidden_secret_or_runtime_path(str(target)):
                 raise ManifestError(f"Refused symlink pointing to forbidden secret: {local_str} -> {target}")
         except (ValueError, RuntimeError) as exc:
-            raise ManifestError(f"Refused invalid symlink: {local_str}: {exc}") from exc
+            raise ManifestError(f"Refused invalid symlink: '{local_str}': {exc}") from exc
 
-    # 2. Remote path checks
+    # Remote destination checks
     if not remote_str or not isinstance(remote_str, str):
         raise ManifestError(f"Remote destination path for '{local_str}' must be a non-empty string")
-
     if not os.path.isabs(remote_str):
         raise ManifestError(f"Refused relative remote destination: {remote_str}")
 
     norm_remote = os.path.normpath(remote_str)
-    if "/../" in remote_str or norm_remote.startswith("..") or "/.." in remote_str:
+    remote_parts = Path(norm_remote).parts
+    if ".." in remote_parts:
         raise ManifestError(f"Refused path traversal in remote destination: {remote_str}")
 
-    if not any(norm_remote.startswith(prefix) for prefix in ALLOWED_REMOTE_PREFIXES):
+    if not norm_remote.startswith(ALLOWED_REMOTE_PREFIX):
         raise ManifestError(
-            f"Refused remote destination: {remote_str} is outside permitted prefix "
-            f"({', '.join(ALLOWED_REMOTE_PREFIXES)})"
+            f"Refused remote destination: {remote_str} is outside permitted prefix {ALLOWED_REMOTE_PREFIX}"
         )
 
     if is_forbidden_secret_or_runtime_path(remote_str):
@@ -251,60 +278,28 @@ def compute_sha256_and_size(file_path: Path) -> Tuple[str, int]:
 
 def generate_manifest(
     root_dir: Path,
-    mapping: Optional[Dict[str, str]] = None,
-    built_artifacts: Optional[List[Tuple[str, str]]] = None,
     include_gateway: bool = False,
     require_gateway: bool = False,
 ) -> List[Dict[str, Any]]:
     """
-    Generate candidate release manifest from source tree.
-    Enforces that all required sources exist, newly added app/*.py modules are mapped,
-    and returns deterministically sorted entries with exact sha256 and sizes.
+    Generate candidate release manifest from source tree based on canonical ownership.
     """
-    effective_mapping = dict(CANONICAL_MAPPINGS) if mapping is None else dict(mapping)
+    canonical_ownership = get_canonical_ownership(root_dir, include_gateway=include_gateway)
 
-    # Check for newly added Python runtime modules in app/
-    app_dir = root_dir / "app"
-    if app_dir.is_dir():
-        for py_path in sorted(app_dir.glob("*.py")):
-            rel_path = py_path.relative_to(root_dir).as_posix()
-            if rel_path not in effective_mapping:
-                # Newly added Python module must be mapped
-                if rel_path == "app/dashboard.py":
-                    effective_mapping[rel_path] = "/data/data/com.termux/files/usr/bin/dashboard"
-                else:
-                    effective_mapping[rel_path] = f"/data/data/com.termux/files/home/.local/lib/mobile-server/{py_path.name}"
-
-    # Handle built gateway artifact
-    if include_gateway or require_gateway:
+    if require_gateway:
         gw_path = root_dir / DEFAULT_GATEWAY_LOCAL
-        if gw_path.exists():
-            effective_mapping[DEFAULT_GATEWAY_LOCAL] = DEFAULT_GATEWAY_REMOTE
-        elif require_gateway:
+        if not gw_path.exists():
             raise ManifestError(
                 f"Required Go built artifact not found at {gw_path}. "
                 "Build gateway first: cd gateway && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o ../.work/mobile-gateway ."
             )
+        canonical_ownership[DEFAULT_GATEWAY_LOCAL] = DEFAULT_GATEWAY_REMOTE
 
-    # Process explicit declared built artifacts
-    if built_artifacts:
-        for local_art, remote_art in built_artifacts:
-            effective_mapping[local_art] = remote_art
-
-    # Validate required sources are present in mapping
-    missing_required = REQUIRED_SOURCES - set(effective_mapping.keys())
-    if missing_required:
-        raise ManifestError(
-            f"Release manifest generation missing required sources: {', '.join(sorted(missing_required))}"
-        )
-
-    # Validate unique remote destinations
     seen_remotes: Dict[str, str] = {}
     entries: List[Dict[str, Any]] = []
 
-    for local_str in sorted(effective_mapping.keys()):
-        remote_str = effective_mapping[local_str]
-
+    for local_str in sorted(canonical_ownership.keys()):
+        remote_str = canonical_ownership[local_str]
         validate_path_safety(local_str, remote_str, root_dir)
 
         if remote_str in seen_remotes:
@@ -326,7 +321,6 @@ def generate_manifest(
             "bytes": file_bytes,
         })
 
-    # Sort deterministically by local source path
     entries.sort(key=lambda x: x["local"])
     return entries
 
@@ -337,11 +331,14 @@ def validate_manifest(
     require_gateway: bool = False,
 ) -> None:
     """
-    Validate candidate release manifest entries against source/candidate bundle root.
-    Nonzero failure on missing, unmapped, tampered, escaping, or forbidden files.
+    Validate candidate release manifest entries against canonical ownership and bundle root.
+    Candidate destinations must exactly match canonical ownership.
     """
     if not isinstance(manifest_entries, list):
         raise ManifestError("Manifest root must be a list of file entries")
+
+    # Load canonical allowed ownership
+    canonical_ownership = get_canonical_ownership(root_dir, include_gateway=True)
 
     manifest_locals: Set[str] = set()
     seen_remotes: Dict[str, str] = {}
@@ -364,6 +361,17 @@ def validate_manifest(
 
         validate_path_safety(local_str, remote_str, root_dir)
 
+        # Enforce exact canonical ownership match
+        if local_str not in canonical_ownership:
+            raise ManifestError(f"Unowned source file in candidate manifest: '{local_str}'")
+
+        allowed_remote = canonical_ownership[local_str]
+        if remote_str != allowed_remote:
+            raise ManifestError(
+                f"Destination substitution rejected for '{local_str}': candidate specifies '{remote_str}', "
+                f"but allowed canonical destination is '{allowed_remote}'"
+            )
+
         if remote_str in seen_remotes:
             raise ManifestError(
                 f"Duplicate remote destination '{remote_str}' declared for '{seen_remotes[remote_str]}' and '{local_str}'"
@@ -374,7 +382,6 @@ def validate_manifest(
             raise ManifestError(f"Duplicate local entry in manifest: '{local_str}'")
         manifest_locals.add(local_str)
 
-        # Verify file presence and integrity on disk
         full_path = root_dir / local_str
         if not full_path.exists():
             raise ManifestError(f"Missing release source file: {local_str} (expected at {full_path})")
@@ -393,14 +400,15 @@ def validate_manifest(
                 f"actual on-disk hash is {actual_sha256}"
             )
 
-    # Verify all required core sources are declared
-    missing_required = REQUIRED_SOURCES - manifest_locals
-    if missing_required:
+    # Verify all baseline sources are declared in candidate manifest
+    baseline_ownership = load_baseline_mapping(root_dir)
+    missing_baseline = set(baseline_ownership.keys()) - manifest_locals
+    if missing_baseline:
         raise ManifestError(
-            f"Release manifest omits required assets: {', '.join(sorted(missing_required))}"
+            f"Release manifest omits required baseline assets: {', '.join(sorted(missing_baseline))}"
         )
 
-    # Verify no newly added Python runtime module in app/ was silently omitted
+    # Verify all app/*.py files are declared in candidate manifest
     app_dir = root_dir / "app"
     if app_dir.is_dir():
         for py_path in sorted(app_dir.glob("*.py")):
@@ -411,7 +419,6 @@ def validate_manifest(
                     "All runtime app modules must be explicitly mapped in the release."
                 )
 
-    # If gateway is required, verify it is declared and matched
     if require_gateway and DEFAULT_GATEWAY_LOCAL not in manifest_locals:
         raise ManifestError(
             f"Required Go built artifact '{DEFAULT_GATEWAY_LOCAL}' is not declared in release manifest"
@@ -424,18 +431,9 @@ def main() -> int:
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
-    # Generate parser
     gen_parser = subparsers.add_parser("generate", help="Generate deterministic release manifest")
     gen_parser.add_argument("--root", default=".", help="Root directory of release source (default: .)")
     gen_parser.add_argument("--output", "-o", default=None, help="Output JSON path (default: stdout)")
-    gen_parser.add_argument("--mapping", default=None, help="Optional JSON mapping override file")
-    gen_parser.add_argument(
-        "--built-artifact",
-        action="append",
-        dest="built_artifacts",
-        metavar="LOCAL:REMOTE",
-        help="Explicit declared built artifact mapping (can be repeated)",
-    )
     gen_parser.add_argument(
         "--include-gateway",
         action="store_true",
@@ -447,7 +445,6 @@ def main() -> int:
         help=f"Require {DEFAULT_GATEWAY_LOCAL} to be built and included",
     )
 
-    # Validate parser
     val_parser = subparsers.add_parser("validate", help="Validate candidate release manifest")
     val_parser.add_argument("--manifest", "-m", required=True, help="Path to manifest JSON file")
     val_parser.add_argument("--root", default=".", help="Root directory of candidate bundle (default: .)")
@@ -467,34 +464,12 @@ def main() -> int:
 
     try:
         if args.command == "generate":
-            mapping: Optional[Dict[str, str]] = None
-            if args.mapping:
-                with open(args.mapping, "r", encoding="utf-8") as f:
-                    raw_mapping = json.load(f)
-                    if isinstance(raw_mapping, list):
-                        mapping = {item["local"]: item["remote"] for item in raw_mapping}
-                    elif isinstance(raw_mapping, dict):
-                        mapping = raw_mapping
-                    else:
-                        raise ManifestError("Mapping file must be a JSON array or object")
-
-            built_list: List[Tuple[str, str]] = []
-            if args.built_artifacts:
-                for item in args.built_artifacts:
-                    if ":" not in item:
-                        raise ManifestError(f"Built artifact must be in LOCAL:REMOTE format: {item}")
-                    loc, rem = item.split(":", 1)
-                    built_list.append((loc.strip(), rem.strip()))
-
             entries = generate_manifest(
                 root_dir=root_dir,
-                mapping=mapping,
-                built_artifacts=built_list,
                 include_gateway=args.include_gateway,
                 require_gateway=args.require_gateway,
             )
 
-            # Format deterministic JSON
             formatted_json = json.dumps(entries, indent=2) + "\n"
 
             if args.output:

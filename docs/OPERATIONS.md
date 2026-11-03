@@ -40,8 +40,8 @@ python3 scripts/release-manifest.py validate --manifest candidate-manifest.json 
 
 ### Artifact ownership and baseline separation
 
-- **Audited Installed Baseline (`config/deployment-files.json`)**: Captures the historical audited installed state of the running server. Its baseline entries and checksums remain byte-for-byte preserved for historical comparison.
-- **Candidate Release Manifests**: Machine-generated from current maintained repository sources (`app/`, `web/`, `scripts/`, `config/`) and explicitly declared Go built artifacts (`.work/mobile-gateway`).
+- **Audited Installed Baseline (`config/deployment-files.json`)**: Captures the historical audited installed state of the running server (35 verified rows including `scripts/agy-runner-loop` and `config/torrc`). Its baseline entries and checksums remain byte-for-byte preserved for historical comparison. Canonical local-to-remote ownership is derived from this file.
+- **Candidate Release Manifests**: Machine-generated from current maintained repository sources (`app/`, `web/`, `scripts/`, `config/`), safe dynamically discovered `app/*.py` runtime helpers, and explicitly declared Go built artifacts (`.work/mobile-gateway`). Candidate destinations must strictly match canonical ownership.
 - **Binary Provenance**: The Go streaming gateway executable is compiled from source in `gateway/` with `-trimpath` (provenance fix `c4b7791`). Binary patching is strictly prohibited. The compiled binary must be declared and checksummed in the candidate manifest before installation.
 - **External and Manual Prerequisites**:
   - `scripts/agy-runner-loop` is maintained in source and mapped to Debian proot `/usr/local/bin/agy-runner-loop`.

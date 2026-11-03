@@ -42,7 +42,11 @@ rev="$state/releases/$(date +%Y%m%dT%H%M%S)"
 mkdir -p "$rev"
 chmod 700 "$rev"
 cp app/*.py "$rev/"
-for source in app/*.py; do install -m 600 "$source" "$lib/$(basename "$source")"; done
+for source in app/*.py; do
+    if [ "$(basename "$source")" != "dashboard.py" ]; then
+        install -m 600 "$source" "$lib/$(basename "$source")"
+    fi
+done
 install -m 700 app/dashboard.py "$PREFIX/bin/dashboard.new"
 mv "$PREFIX/bin/dashboard.new" "$PREFIX/bin/dashboard"
 install -m 700 .work/mobile-gateway "$HOME/bin/mobile-gateway.new"

@@ -202,5 +202,11 @@
     "remote": "/data/data/com.termux/files/usr/var/lib/proot-distro/containers/debian/rootfs/usr/local/bin/agy-runner-loop",
     "sha256": "fe4148a9a6e92680c94748d7637b5cffeddedf95d5bb6e66e59489f4cdbe9d2c",
     "bytes": 1193
+  },
+  {
+    "local": "config/torrc",
+    "remote": "/data/data/com.termux/files/home/.config/tor/torrc",
+    "sha256": "ccbcef3b051c6db3fcb9b8f796d6d3d0d4184ad8c0347a41f013aa9f45463e36",
+    "bytes": 235
   }
 ]
