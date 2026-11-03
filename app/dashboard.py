@@ -42,7 +42,7 @@ from telemetry import Telemetry
 from limits import Admission, BODY_LIMITS, CONVERSION_PATHS, canonical_post_path
 from tor_proxy import TorProxy
 from laptop import LaptopClient, LaptopError
-from service_catalog import dashboard_services
+from service_catalog import dashboard_services, suwayomi_probe_ports
 LAPTOP_CLIENT = LaptopClient()
 TOR_PROXY = TorProxy()
 USER_STORE = CredentialStore()
@@ -337,7 +337,7 @@ def get_services_report(force=False):
             if cfg.get("port"):
                 check_ports.append(cfg["port"])
             if sid == "suwayomi":
-                check_ports.extend([4569, 4567])
+                check_ports.extend(suwayomi_probe_ports())
             for cp in check_ports:
                 if is_service_port_open(cp):
                     port_listening = True

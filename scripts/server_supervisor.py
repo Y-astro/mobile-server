@@ -27,8 +27,8 @@ import subprocess
 import sys
 import time
 
-HOME = Path(os.environ.get('TERMUX_HOME', '/data/data/com.termux/files/home'))
-PREFIX = Path(os.environ.get('PREFIX', '/data/data/com.termux/files/usr'))
+HOME = Path('/data/data/com.termux/files/home')
+PREFIX = Path('/data/data/com.termux/files/usr')
 MOBILE_LIB = Path.home() / '.local/lib/mobile-server'
 _lib_dir = MOBILE_LIB if MOBILE_LIB.is_dir() else (HOME / '.local/lib/mobile-server' if (HOME / '.local/lib/mobile-server').is_dir() else Path(__file__).resolve().parents[1] / 'app')
 if str(_lib_dir) not in sys.path:

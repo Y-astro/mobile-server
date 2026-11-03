@@ -7,6 +7,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,21 +23,35 @@ class ServiceCatalogTests(unittest.TestCase):
     def test_import_purity(self):
         """Catalog import performs no filesystem access, subprocess calls, network, or secret reads."""
         code = (
-            "import sys\n"
-            "import os\n"
-            "# Track if filesystem writes, network, or subprocess are called\n"
-            "sys.path.insert(0, 'app')\n"
-            "import service_catalog\n"
-            "assert hasattr(service_catalog, 'runtime_services')\n"
-            "assert hasattr(service_catalog, 'dashboard_services')\n"
+            "import sys, os, typing\n"
+            "with open('app/service_catalog.py') as f:\n"
+            "    source = f.read()\n"
+            "def audit_hook(event, args):\n"
+            "    if event in ('open', 'os.mkdir', 'os.rename', 'os.remove', 'shutil.rmtree'):\n"
+            "        raise PermissionError(f'Denied fs operation: {event}')\n"
+            "    if event.startswith('subprocess.'):\n"
+            "        raise PermissionError(f'Denied subprocess: {event}')\n"
+            "    if event in ('socket.connect', 'socket.bind'):\n"
+            "        raise PermissionError(f'Denied socket: {event}')\n"
+            "    if event == '_thread.start_new_thread':\n"
+            "        raise PermissionError(f'Denied thread start')\n"
+            "sys.addaudithook(audit_hook)\n"
+            "g = {}\n"
+            "exec(compile(source, 'app/service_catalog.py', 'exec'), g)\n"
+            "assert 'runtime_services' in g\n"
+            "assert 'dashboard_services' in g\n"
+            "print('EXEC_AUDIT_OK')\n"
         )
-        res = subprocess.run(
-            [sys.executable, '-c', code],
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True
-        )
-        self.assertEqual(res.returncode, 0, f"Import failed: {res.stderr}")
+        with tempfile.TemporaryDirectory() as td:
+            res = subprocess.run(
+                [sys.executable, '-I', '-c', code],
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+            self.assertEqual(res.returncode, 0, f"Import purity audit failed: {res.stderr}\n{res.stdout}")
+            self.assertIn("EXEC_AUDIT_OK", res.stdout)
 
     def test_fresh_copy_isolation(self):
         """Builders return independent mutable dictionaries that do not leak across calls."""
@@ -56,15 +71,20 @@ class ServiceCatalogTests(unittest.TestCase):
 
     def test_runtime_services_characterization_and_order(self):
         """Preserve all 15 services, order, commands, arguments, ports, paths, and protocols."""
-        char_file = ROOT / '.superpowers/sdd/pre_extraction_characterization.json'
-        if char_file.exists():
-            with open(char_file) as f:
-                char = json.load(f)
-            rt_default = service_catalog.runtime_services('/data/data/com.termux/files/home', '/data/data/com.termux/files/usr')
-            self.assertEqual(rt_default, char['supervisor_default'])
+        char_file = ROOT / 'tests/fixtures/service-catalog-baseline.json'
+        # Fixture is tracked; missing fixture must fail immediately
+        self.assertTrue(char_file.is_file(), f"Missing required baseline fixture: {char_file}")
+        with open(char_file) as f:
+            char = json.load(f)
 
-            rt_alt = service_catalog.runtime_services('/custom/home', '/custom/usr')
-            self.assertEqual(rt_alt, char['supervisor_alt'])
+        rt_default = service_catalog.runtime_services('/data/data/com.termux/files/home', '/data/data/com.termux/files/usr')
+        self.assertEqual(rt_default, char['supervisor_default'])
+        # Assert full order matches baseline keys exactly
+        self.assertEqual(list(rt_default.keys()), list(char['supervisor_default'].keys()))
+
+        rt_alt = service_catalog.runtime_services('/custom/home', '/custom/usr')
+        self.assertEqual(rt_alt, char['supervisor_alt'])
+        self.assertEqual(list(rt_alt.keys()), list(char['supervisor_alt'].keys()))
 
         # Explicit order & count check
         services = service_catalog.runtime_services('/h', '/p')
@@ -78,24 +98,26 @@ class ServiceCatalogTests(unittest.TestCase):
 
     def test_dashboard_services_characterization_and_order(self):
         """Preserve all 9 dashboard cards, order, IDs, URLs, and verify absence of start_cmd/env."""
-        char_file = ROOT / '.superpowers/sdd/pre_extraction_characterization.json'
+        char_file = ROOT / 'tests/fixtures/service-catalog-baseline.json'
+        self.assertTrue(char_file.is_file(), f"Missing required baseline fixture: {char_file}")
+        with open(char_file) as f:
+            char = json.load(f)
+
         cards = service_catalog.dashboard_services()
         expected_keys = [
             'filebrowser', 'suwayomi', 'vaultwarden', 'adguard', 'terminal',
             'agy', 'converter', 'syncthing', 'battery_guard'
         ]
         self.assertEqual(list(cards.keys()), expected_keys)
+        self.assertEqual(list(cards.keys()), list(char['dashboard_services_config'].keys()))
         self.assertEqual(len(cards), 9)
 
-        if char_file.exists():
-            with open(char_file) as f:
-                char = json.load(f)
-            for k, card in cards.items():
-                orig = dict(char['dashboard_services_config'][k])
-                orig.pop('start_cmd', None)
-                orig.pop('stop_cmd', None)
-                orig.pop('env', None)
-                self.assertEqual(card, orig)
+        for k, card in cards.items():
+            orig = dict(char['dashboard_services_config'][k])
+            orig.pop('start_cmd', None)
+            orig.pop('stop_cmd', None)
+            orig.pop('env', None)
+            self.assertEqual(card, orig)
 
         # Verify no stale keys remain in cards
         for sid, card in cards.items():
@@ -115,6 +137,9 @@ class ServiceCatalogTests(unittest.TestCase):
         self.assertEqual(dash['suwayomi']['port'], 4567)
         self.assertEqual(dash['suwayomi']['open_url'], '/suwayomi/')
 
+        # Fallback probe ports helper
+        self.assertEqual(service_catalog.suwayomi_probe_ports(), [4569, 4567])
+
     def test_supervisor_compatibility_wrapper(self):
         """server_supervisor.services() returns runtime_services with supervisor globals."""
         import importlib.util
@@ -125,13 +150,16 @@ class ServiceCatalogTests(unittest.TestCase):
         s = sup.services()
         self.assertEqual(len(s), 15)
         self.assertEqual(s['caddy']['port'], 8000)
+        # Verify supervisor HOME and PREFIX globals remain unmodified
+        self.assertEqual(sup.HOME, Path('/data/data/com.termux/files/home'))
+        self.assertEqual(sup.PREFIX, Path('/data/data/com.termux/files/usr'))
 
     def test_installed_layout_bootstrap(self):
         """Supervisor and dashboard execute cleanly when installed to HOME/bin and PREFIX/bin with shared module in ~/.local/lib/mobile-server."""
         with tempfile.TemporaryDirectory() as td:
-            tmp_path = Path(td)
-            fake_home = tmp_path / 'home'
-            fake_prefix = tmp_path / 'usr'
+            tmp = Path(td)
+            fake_home = tmp / 'home'
+            fake_prefix = tmp / 'usr'
             lib_dir = fake_home / '.local/lib/mobile-server'
             home_bin = fake_home / 'bin'
             prefix_bin = fake_prefix / 'bin'
@@ -140,65 +168,84 @@ class ServiceCatalogTests(unittest.TestCase):
             home_bin.mkdir(parents=True, exist_ok=True)
             prefix_bin.mkdir(parents=True, exist_ok=True)
 
-            # Copy service_catalog.py to installed lib_dir
-            catalog_src = (ROOT / 'app/service_catalog.py').read_text()
-            (lib_dir / 'service_catalog.py').write_text(catalog_src)
+            # Copy all flat app helpers so later modules integrate without a hardcoded incomplete list
+            for app_file in (ROOT / 'app').glob('*.py'):
+                shutil.copy(app_file, lib_dir / app_file.name)
 
-            # Copy server_supervisor.py to home_bin
-            sup_src = (ROOT / 'scripts/server_supervisor.py').read_text()
-            (home_bin / 'server_supervisor.py').write_text(sup_src)
+            # Copy server_supervisor.py and dashboard
+            shutil.copy(ROOT / 'scripts/server_supervisor.py', home_bin / 'server_supervisor.py')
+            shutil.copy(ROOT / 'app/dashboard.py', prefix_bin / 'dashboard')
 
-            # Smoke test running supervisor from installed layout
-            env = os.environ.copy()
-            env.pop('PYTHONPATH', None)
-            env['HOME'] = str(fake_home)
+            child_code = '''
+import sys, os, importlib.util, runpy
+from pathlib import Path
 
-            test_sup_cmd = (
-                f"import sys\n"
-                f"sys.path.insert(0, '{home_bin}')\n"
-                f"import server_supervisor\n"
-                f"svcs = server_supervisor.services()\n"
-                f"assert len(svcs) == 15, len(svcs)\n"
-                f"assert svcs['ssh']['port'] == 8022\n"
-                f"print('INSTALLED_SUPERVISOR_BOOTSTRAP_OK')\n"
-            )
+td = Path(os.environ['TEMP_RUN_DIR'])
+fake_home = td / 'home'
+fake_prefix = td / 'usr'
+lib_dir = fake_home / '.local/lib/mobile-server'
+home_bin = fake_home / 'bin'
+prefix_bin = fake_prefix / 'bin'
+
+# Load installed telemetry.py via importlib spec, register sys.modules, mock start before runpy
+spec = importlib.util.spec_from_file_location('telemetry', str(lib_dir / 'telemetry.py'))
+telem_mod = importlib.util.module_from_spec(spec)
+sys.modules['telemetry'] = telem_mod
+spec.loader.exec_module(telem_mod)
+telem_mod.Telemetry.start = lambda self: None
+
+# Install audit hook blocking connect/Popen/kill/killpg and writes outside temp
+def audit_hook(event, args):
+    if event in ('socket.connect', 'socket.bind'):
+        raise PermissionError(f'Blocked network: {event}')
+    if event.startswith('subprocess.'):
+        raise PermissionError(f'Blocked subprocess: {event}')
+    if event in ('os.kill', 'os.killpg'):
+        raise PermissionError(f'Blocked signal: {event}')
+    if event == 'open' and len(args) > 1 and args[1] is not None:
+        mode = str(args[1])
+        if any(m in mode for m in ('w', 'a', '+', 'x')):
+            p = str(args[0])
+            if not p.startswith(str(td)):
+                raise PermissionError(f'Blocked write outside temp: {p}')
+
+sys.addaudithook(audit_hook)
+
+# Run supervisor via runpy
+sup_globals = runpy.run_path(str(home_bin / 'server_supervisor.py'), run_name='server_supervisor')
+assert sup_globals['HOME'] == Path('/data/data/com.termux/files/home'), f"HOME modified: {sup_globals['HOME']}"
+assert sup_globals['PREFIX'] == Path('/data/data/com.termux/files/usr'), f"PREFIX modified: {sup_globals['PREFIX']}"
+sc = sys.modules['service_catalog']
+assert Path(sc.__file__).resolve() == (lib_dir / 'service_catalog.py').resolve(), f"Wrong service_catalog: {sc.__file__}"
+
+# Run dashboard via runpy
+dash_globals = runpy.run_path(str(prefix_bin / 'dashboard'), run_name='dashboard')
+assert len(dash_globals['SERVICES_CONFIG']) == 9
+assert dash_globals['SERVICES_CONFIG']['filebrowser']['port'] == 8085
+print('INSTALLED_BOOTSTRAP_OK')
+'''
+            child_runner = tmp / 'runner.py'
+            child_runner.write_text(child_code)
+
+            env = {
+                'HOME': str(fake_home),
+                'TEMP_RUN_DIR': str(tmp),
+                'PATH': '/usr/bin:/bin',
+                'TERMUX_HOME': '/hostile/home',
+                'PREFIX': '/hostile/usr',
+                'PYTHONDONTWRITEBYTECODE': '1'
+            }
 
             res = subprocess.run(
-                [sys.executable, '-c', test_sup_cmd],
-                cwd=td, # arbitrary cwd outside repo
+                [sys.executable, '-I', str(child_runner)],
+                cwd=str(tmp),
                 env=env,
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=15
             )
-            self.assertEqual(res.returncode, 0, f"Supervisor bootstrap smoke failed: {res.stderr}\n{res.stdout}")
-            self.assertIn("INSTALLED_SUPERVISOR_BOOTSTRAP_OK", res.stdout)
-
-            # Copy dashboard.py to prefix_bin/dashboard
-            dash_src = (ROOT / 'app/dashboard.py').read_text()
-            (prefix_bin / 'dashboard.py').write_text(dash_src)
-
-            # Also need dummy auth/telemetry/limits/tor_proxy/laptop modules in lib_dir for dashboard import smoke
-            for dep in ['auth.py', 'telemetry.py', 'limits.py', 'tor_proxy.py', 'laptop.py']:
-                (lib_dir / dep).write_text((ROOT / 'app' / dep).read_text())
-
-            test_dash_cmd = (
-                f"import sys\n"
-                f"sys.path.insert(0, '{prefix_bin}')\n"
-                f"import dashboard\n"
-                f"assert len(dashboard.SERVICES_CONFIG) == 9, len(dashboard.SERVICES_CONFIG)\n"
-                f"assert dashboard.SERVICES_CONFIG['filebrowser']['port'] == 8085\n"
-                f"print('INSTALLED_DASHBOARD_BOOTSTRAP_OK')\n"
-            )
-
-            res2 = subprocess.run(
-                [sys.executable, '-c', test_dash_cmd],
-                cwd=td, # arbitrary cwd outside repo
-                env=env,
-                capture_output=True,
-                text=True
-            )
-            self.assertEqual(res2.returncode, 0, f"Dashboard bootstrap smoke failed: {res2.stderr}\n{res2.stdout}")
-            self.assertIn("INSTALLED_DASHBOARD_BOOTSTRAP_OK", res2.stdout)
+            self.assertEqual(res.returncode, 0, f"Bootstrap smoke failed: {res.stderr}\n{res.stdout}")
+            self.assertIn("INSTALLED_BOOTSTRAP_OK", res.stdout)
 
 
 if __name__ == '__main__':
