@@ -2,7 +2,8 @@
 
 ## Component Responsibilities
 
-- **`app/dashboard.py`**: Owns HTTP request composition, route dispatching, session token generation/verification, and service orchestration. It delegates role template loading to `app/role_templates.py`.
+- **`app/dashboard.py`**: Owns HTTP request composition, route dispatching, session token generation/verification, and service orchestration. It delegates role template loading to `app/role_templates.py` and AGY tmux session management to `app/agy_sessions.py`.
+- **`app/agy_sessions.py`**: Pure owner for AGY tmux instance operations (`AgySessions`), managing command discovery/fallback, session listing, locked instance creation up to 8 instances, and secondary session termination without direct HTTP coupling.
 - **`app/role_templates.py`**: Owns single-source loading of installed role templates from disk (`web/` templates installed to static directory), enforcing raw byte loading without interpolation and raising structured unavailability errors when pages are missing.
 - **`app/notes.py`**: Owns user quick notes persistence (`NotesStore`), including thread-safe locking, JSON file encoding, 0600 file permissions, and atomic temporary replacement.
 - **`app/document_conversion.py`**: Owns batch document conversion (`convert_documents_batch`) via headless LibreOffice in proot-distro, isolated batch scratch directories, process timeout handling, safe output naming, and single PDF vs. ZIP packaging.

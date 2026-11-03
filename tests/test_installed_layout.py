@@ -40,6 +40,7 @@ class InstalledLayoutImportTests(unittest.TestCase):
                 "limits.py",
                 "tor_proxy.py",
                 "laptop.py",
+                "agy_sessions.py",
             ]
             for py_file in app_dir.glob("*.py"):
                 if py_file.name == "dashboard.py":

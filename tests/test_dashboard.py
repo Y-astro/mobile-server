@@ -86,6 +86,44 @@ class DashboardTests(unittest.TestCase):
    self.assertEqual(self.request('DELETE','/api/laptop/terminals/'+'a'*32,'testadmin')[0],200)
    self.assertEqual(client.operation.call_args_list[0].args,('create',None))
    self.assertEqual(client.operation.call_args_list[1].args,('close','a'*32))
+ def test_agy_controls_are_admin_only(self):
+  with patch.object(self.mod, 'AGY_SESSIONS') as mgr:
+   for method,path,body in [('GET','/api/agy/sessions',None),('POST','/api/agy/sessions',b'{}'),('DELETE','/api/agy/sessions/abc',None)]:
+    self.assertEqual(self.request(method,path,'testfamily',body)[0],403)
+    self.assertIn(self.request(method,path,None,body)[0], (401, 403))
+   mgr.list_agy_sessions.assert_not_called()
+   mgr.create_agy_session.assert_not_called()
+   mgr.close_agy_session.assert_not_called()
+ def test_agy_create_list_close_http_contracts(self):
+  with patch.object(self.mod, 'AGY_SESSIONS') as mgr:
+   mgr.list_agy_sessions.return_value=[{"id": "default", "name": "AGY (Primary)", "is_primary": True}]
+   mgr.create_agy_session.return_value='testident'
+   mgr.close_agy_session.return_value=True
+   # GET list
+   code, data = self.request('GET','/api/agy/sessions','testadmin')
+   self.assertEqual(code, 200)
+   self.assertEqual(json.loads(data), {"online": True, "sessions": [{"id": "default", "name": "AGY (Primary)", "is_primary": True}], "max_sessions": 8})
+   mgr.list_agy_sessions.assert_called_once()
+   # POST create
+   code, data = self.request('POST','/api/agy/sessions','testadmin',body=b'')
+   self.assertEqual(code, 200)
+   self.assertEqual(json.loads(data), {"status": "ok", "id": "testident"})
+   mgr.create_agy_session.assert_called_once_with(ident=None)
+   # DELETE close
+   code, data = self.request('DELETE','/api/agy/sessions/testident','testadmin')
+   self.assertEqual(code, 200)
+   self.assertEqual(json.loads(data), {"status": "ok"})
+   mgr.close_agy_session.assert_called_once_with('testident')
+ def test_agy_manager_errors_mapped_through_http(self):
+  with patch.object(self.mod, 'AGY_SESSIONS') as mgr:
+   mgr.create_agy_session.side_effect = ValueError("Maximum of 8 AGY instances reached")
+   code, data = self.request('POST','/api/agy/sessions','testadmin',body=b'')
+   self.assertEqual(code, 500)
+   self.assertIn("Maximum of 8 AGY instances reached", json.loads(data).get("message", ""))
+   mgr.close_agy_session.side_effect = ValueError("Primary AGY session cannot be terminated")
+   code, data = self.request('DELETE','/api/agy/sessions/default','testadmin')
+   self.assertEqual(code, 500)
+   self.assertIn("Primary AGY session cannot be terminated", json.loads(data).get("message", ""))
  def test_body_limits_and_malformed_requests(self):
   self.assertEqual(self.request('POST','/api/login',body=b'x'*8193)[0],413)
   self.assertEqual(self.request('POST','/api/login',body=b'[]')[0],400)

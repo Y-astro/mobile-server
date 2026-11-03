@@ -44,6 +44,8 @@ from tor_proxy import TorProxy
 from laptop import LaptopClient, LaptopError
 from service_catalog import dashboard_services, suwayomi_probe_ports
 from role_templates import read_role_template, RoleTemplateUnavailable
+from agy_sessions import AgySessions
+AGY_SESSIONS = AgySessions(prefix=PREFIX, tmux_bin=TMUX_BIN)
 LAPTOP_CLIENT = LaptopClient()
 TOR_PROXY = TorProxy()
 USER_STORE = CredentialStore()
@@ -444,70 +446,16 @@ def toggle_service(sid, enable=None):
 # AGY MULTI-INSTANCE SESSION MANAGER
 # =====================================================================
 def get_tmux_cmd():
-    import glob
-    for sock in glob.glob('/data/data/com.termux/files/usr/var/run/tmux-*/default') + glob.glob('/tmp/tmux-*/default'):
-        if os.path.exists(sock):
-            try:
-                res = subprocess.run([TMUX_BIN, '-S', sock, 'list-sessions'], capture_output=True, text=True, timeout=1)
-                if res.returncode == 0:
-                    return [TMUX_BIN, '-S', sock]
-            except Exception:
-                pass
-    return [TMUX_BIN]
+    return AGY_SESSIONS.get_tmux_cmd()
 
 def list_agy_sessions():
-    try:
-        cmd = get_tmux_cmd() + ["list-sessions", "-F", "#{session_name}"]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
-        if res.returncode != 0:
-            return []
-        sessions = []
-        has_primary = False
-        for line in res.stdout.splitlines():
-            s = line.strip()
-            if s == "agy":
-                has_primary = True
-            elif s.startswith("agy-"):
-                ident = s[4:]
-                sessions.append({"id": ident, "name": f"AGY Instance {ident}", "is_primary": False})
-        if has_primary:
-            sessions.insert(0, {"id": "default", "name": "AGY (Primary)", "is_primary": True})
-        return sessions
-    except Exception:
-        return []
+    return AGY_SESSIONS.list_agy_sessions()
 
 def create_agy_session(ident=None):
-    if not ident:
-        ident = secrets.token_hex(4)
-    ident = re.sub(r'[^a-zA-Z0-9_-]', '', ident)[:32]
-    if not ident or ident == "default":
-        ident = secrets.token_hex(4)
-    session_name = f"agy-{ident}"
-    current = list_agy_sessions()
-    if len(current) >= 8:
-        raise ValueError("Maximum of 8 AGY instances reached")
-    tmux = get_tmux_cmd()
-    check = subprocess.run(tmux + ["has-session", "-t", f"={session_name}"], capture_output=True)
-    if check.returncode != 0:
-        cmd = f"{PREFIX}/bin/proot-distro login debian -- /usr/local/bin/agy-runner-loop"
-        env = os.environ.copy()
-        env["TERM"] = "xterm-256color"
-        env["TMPDIR"] = f"{PREFIX}/tmp"
-        env["PATH"] = f"{PREFIX}/bin:{PREFIX}/bin/applets:" + env.get("PATH", "")
-        subprocess.run(
-            tmux + ["new-session", "-d", "-s", session_name, "-n", "agy", cmd],
-            check=True, timeout=5, env=env
-        )
-    return ident
+    return AGY_SESSIONS.create_agy_session(ident=ident)
 
 def close_agy_session(ident):
-    ident = re.sub(r'[^a-zA-Z0-9_-]', '', ident)[:32]
-    if not ident or ident in ("default", "agy"):
-        raise ValueError("Primary AGY session cannot be terminated")
-    session_name = f"agy-{ident}"
-    tmux = get_tmux_cmd()
-    subprocess.run(tmux + ["kill-session", "-t", f"={session_name}"], capture_output=True, timeout=5)
-    return True
+    return AGY_SESSIONS.close_agy_session(ident)
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
