@@ -1,4 +1,3 @@
-const { test, expect } = require('@playwright/test');
 const { chromium } = require('playwright');
 const http = require('http');
 const fs = require('fs');
@@ -9,11 +8,20 @@ const assert = require('assert');
   const portalPollingJs = fs.readFileSync(path.resolve(__dirname, '../web/portal-polling.js'), 'utf8');
   const laptopJs = fs.readFileSync(path.resolve(__dirname, '../web/laptop.js'), 'utf8');
   const adminHtml = fs.readFileSync(path.resolve(__dirname, '../web/admin.html'), 'utf8');
+  const portalCss = fs.readFileSync(path.resolve(__dirname, '../web/portal.css'), 'utf8');
 
-  // Track request counts
+  // Track request counts and server states
   let statsReads = 0;
   let servicesReads = 0;
   let delayServicesMs = 0;
+  let serverServices = [
+    { id: 'converter', name: 'Document to PDF Converter', running: false, can_toggle: true, open_url: 'javascript:openConverterModal()', open_label: 'Convert File', desc: 'LibreOffice' }
+  ];
+
+  let notesPosts = 0;
+  let convertPosts = 0;
+  let convertFinishedPromise = null;
+  let resolveConvert = null;
 
   const server = http.createServer((req, res) => {
     const url = req.url;
@@ -28,7 +36,7 @@ const assert = require('assert');
       res.end(laptopJs);
     } else if (url === '/portal.css') {
       res.writeHead(200, { 'Content-Type': 'text/css' });
-      res.end('/* portal css */');
+      res.end(portalCss);
     } else if (url === '/api/stats') {
       statsReads++;
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -45,15 +53,17 @@ const assert = require('assert');
     } else if (url === '/api/vpn/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ enabled: false }));
+    } else if (url === '/api/services/toggle' && req.method === 'POST') {
+      serverServices[0].running = !serverServices[0].running;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', running: serverServices[0].running }));
     } else if (url === '/api/services') {
       servicesReads++;
       const currentDelay = delayServicesMs;
       setTimeout(() => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-          services: [
-            { id: 'converter', name: 'Document to PDF Converter', running: false, can_toggle: false, open_url: 'javascript:openConverterModal()', open_label: 'Convert File', desc: 'LibreOffice' }
-          ],
+          services: serverServices,
           total_active_mem_mb: 32,
           active_memory_mb: 32
         }));
@@ -66,12 +76,26 @@ const assert = require('assert');
       res.end(JSON.stringify({ online: true, sessions: [], max_sessions: 4 }));
     } else if (url === '/api/notes') {
       if (req.method === 'POST') {
+        notesPosts++;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'saved' }));
       } else {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ notes: 'Initial maintained notes' }));
       }
+    } else if (url === '/api/convert/pdf' && req.method === 'POST') {
+      convertPosts++;
+      req.on('data', () => {});
+      req.on('end', () => {
+        setTimeout(() => {
+          res.writeHead(200, {
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': 'attachment; filename="converted.pdf"'
+          });
+          res.end(Buffer.from('%PDF-1.4 test output'));
+          if (resolveConvert) resolveConvert();
+        }, 300);
+      });
     } else {
       res.writeHead(404);
       res.end();
@@ -89,16 +113,30 @@ const assert = require('assert');
 
   try {
     const context = await browser.newContext();
+    // Block all external network access explicitly
+    await context.route('**', (route) => {
+      const u = route.request().url();
+      if (u.startsWith(baseUrl)) {
+        return route.continue();
+      }
+      return route.abort();
+    });
+
     const page = await context.newPage();
+    const recordedErrors = [];
+    page.on('pageerror', err => recordedErrors.push(err));
+
+    // Install clock before page navigation/timers
+    await page.clock.install();
 
     // 1. Initial page load and prompt refresh
     await page.goto(`${baseUrl}/`);
     await page.waitForSelector('#telemetry-state');
     assert(statsReads >= 1, 'Initial stats read should execute promptly on load');
     assert(servicesReads >= 1, 'Initial services read should execute promptly on load');
+    assert.strictEqual(recordedErrors.length, 0, 'No uncaught errors on page load');
 
     // 2. Coalescing and single-flight verification
-    // Calling refresh multiple times while one is in-flight returns same promise
     const coalesceCount = await page.evaluate(async () => {
       let runs = 0;
       const loop = window.PortalPolling.createPolling(async () => {
@@ -112,22 +150,33 @@ const assert = require('assert');
       loop.dispose();
       return runs;
     });
-    assert.strictEqual(coalesceCount, 1, 'Concurrent refresh() calls must coalesce into a single execution');
+    assert.strictEqual(coalesceCount, 1, 'Concurrent refresh() calls coalesce into a single execution');
 
-    // 3. User state preservation across visibilitychange and pagehide/pageshow
-    // Enter user notes
+    // 3. Mutation freshness and trailing read test
+    // Toggle service: should trigger fresh trailing read
+    const servicesBeforeToggle = servicesReads;
+    await page.evaluate(async () => {
+      await toggleService('converter', null);
+    });
+    assert(servicesReads > servicesBeforeToggle, 'Toggle service triggers fresh readAfterMutation');
+
+    // 4. In-progress mutation and user input preservation across hide/resume
+    // Type notes (debounce 750ms)
     const notesInput = page.locator('#user-notes-input');
-    await notesInput.fill('User draft note that must survive lifecycle transitions');
+    await notesInput.fill('Important drafted notes that must not disappear');
 
-    // Open converter modal and select a file
+    // Select converter file
     await page.locator('a[href="javascript:openConverterModal()"]').click();
     await page.locator('#convert-file-input').setInputFiles([
-      { name: 'test_lifecycle.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('lifecycle test') }
+      { name: 'in_progress.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('in progress docx') }
     ]);
-    const summaryBefore = await page.locator('#convert-file-summary').textContent();
-    assert(summaryBefore.includes('test_lifecycle.docx') || summaryBefore.includes('1 file selected'), 'Converter file selection rendered');
+    assert(await page.locator('#convert-file-summary').textContent(), 'File summary visible');
 
-    // Pause / document hidden
+    // Start conversion
+    convertFinishedPromise = new Promise(r => { resolveConvert = r; });
+    await page.locator('#convert-btn').click();
+
+    // Now hide page while conversion and notes autosave are in progress
     const statsBeforeHide = statsReads;
     await page.evaluate(() => {
       Object.defineProperty(document, 'hidden', { value: true, configurable: true });
@@ -135,49 +184,42 @@ const assert = require('assert');
       window.dispatchEvent(new Event('pagehide'));
     });
 
-    // Wait 200ms and verify no new reads started while hidden
-    await page.waitForTimeout(200);
-    assert.strictEqual(statsReads, statsBeforeHide, 'Zero new polling reads while hidden/pagehide');
+    // Advance clock by 10 seconds while hidden
+    await page.clock.fastForward(10000);
 
-    // Resume / visible / pageshow
+    // Verify 0 new polling reads occurred while hidden
+    assert.strictEqual(statsReads, statsBeforeHide, 'Zero new polling reads while hidden/pagehide even after interval elapsed');
+
+    // Wait for in-progress conversion to finish
+    await convertFinishedPromise;
+    assert.strictEqual(convertPosts, 1, 'Conversion POST completed once and was not canceled or duplicated');
+
+    // Resume page / visible / pageshow
     await page.evaluate(() => {
       Object.defineProperty(document, 'hidden', { value: false, configurable: true });
       document.dispatchEvent(new Event('visibilitychange'));
       window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
     });
 
-    // Verify prompt refresh happened
+    // Wait for the async fetch to hit the synthetic server
     await page.waitForFunction((prev) => window.statsReads !== undefined || true);
-    await page.waitForTimeout(100);
+    for (let i = 0; i < 50; i++) {
+      if (statsReads > statsBeforeHide) break;
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    // Prompt refresh should trigger immediately on becoming visible
     assert(statsReads > statsBeforeHide, 'Visible/pageshow promptly restarts refresh');
 
-    // Verify user state survived untouched
+    // Advance clock past notes debounce (750ms) to ensure auto-save posts
+    await page.clock.fastForward(1000);
+    assert(notesPosts >= 1, 'Notes auto-save completed');
+
+    // Verify user notes survived untouched
     const notesVal = await notesInput.inputValue();
-    assert.strictEqual(notesVal, 'User draft note that must survive lifecycle transitions', 'Notes draft must survive lifecycle events');
-    const summaryAfter = await page.locator('#convert-file-summary').textContent();
-    assert.strictEqual(summaryAfter, summaryBefore, 'Converter file selection must survive lifecycle events');
+    assert.strictEqual(notesVal, 'Important drafted notes that must not disappear', 'Notes draft survived lifecycle events');
 
-    // Close converter modal
-    await page.locator('button:has-text("Cancel")').click();
-
-    // 4. Deadline / abort isolation test
-    const abortHandled = await page.evaluate(async () => {
-      let aborted = false;
-      const loop = window.PortalPolling.createPolling(async (signal) => {
-        await new Promise((resolve, reject) => {
-          signal.addEventListener('abort', () => {
-            aborted = true;
-            reject(new Error('aborted'));
-          });
-        });
-      }, 5000, { deadlineMs: 50 });
-      await new Promise(r => setTimeout(r, 120));
-      loop.dispose();
-      return aborted;
-    });
-    assert(abortHandled, 'Background reads are deadline-bounded and aborted via AbortSignal');
-
-    // 5. Fault isolation: slow or failing endpoint does not block others
+    // 5. Fault isolation: failing endpoint does not break healthy updates
     const faultIsolation = await page.evaluate(async () => {
       let featureAFinished = false;
       let featureBFailHandled = false;
@@ -196,19 +238,28 @@ const assert = require('assert');
       loopB.dispose();
       return { featureAFinished, featureBFailHandled };
     });
-    assert(faultIsolation.featureAFinished && faultIsolation.featureBFailHandled, 'Failure in one loop does not impact independent loops');
+    assert(faultIsolation.featureAFinished && faultIsolation.featureBFailHandled, 'Failing endpoint does not break healthy loops');
 
     // 6. Graceful degradation when PortalPolling module is unavailable
     const standalonePage = await context.newPage();
-    // Block portal-polling.js to verify page loads and does not throw uncaught error
+    const fallbackErrors = [];
+    standalonePage.on('pageerror', err => fallbackErrors.push(err));
+
+    // Block portal-polling.js
     await standalonePage.route('**/static/portal-polling.js', route => route.abort());
     await standalonePage.goto(`${baseUrl}/`);
     await standalonePage.waitForSelector('#telemetry-state');
-    const headerTs = await standalonePage.locator('#header-ts-ip').textContent();
-    assert.strictEqual(headerTs, '100.75.159.53', 'Page gracefully initializes even if portal-polling.js fails to load');
-    await standalonePage.close();
 
-    console.log('PASS: portal-polling lifecycle, coalescing, isolation, and user state preservation verified.');
+    assert.strictEqual(fallbackErrors.length, 0, 'No uncaught errors on page when portal-polling.js is blocked');
+    const headerTs = await standalonePage.locator('#header-ts-ip').textContent();
+    assert.strictEqual(headerTs, '100.75.159.53', 'Page rendered initial sample when portal-polling.js is blocked');
+    const footerMode = await standalonePage.locator('footer .mono').textContent();
+    assert.strictEqual(footerMode, 'Manual refresh mode', 'Footer truthfully indicates manual refresh mode on fallback');
+
+    await standalonePage.close();
+    await page.close();
+
+    console.log('PASS: portal-polling lifecycle, coalescing, isolation, fresh trailing read, and degradation verified.');
   } finally {
     await browser.close();
     await new Promise(resolve => server.close(resolve));

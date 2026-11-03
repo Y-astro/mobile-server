@@ -3,6 +3,11 @@
 # NOTE: This legacy installer performs preflight manifest validation and file synchronization.
 # It does not provide atomic release activation or rollback. Atomic release switching and live-drift refusal are deferred to a later reviewed stage.
 set -euo pipefail
+
+# Fail-fast guard: direct source writes via legacy installer are disabled until reviewed transactional activation adapter takes over.
+echo "Direct source writes via legacy installer are disabled: reviewed transactional activation adapter is required." >&2
+exit 1
+
 cd "$(dirname "$0")/.."
 PREFIX=/data/data/com.termux/files/usr
 export PREFIX
@@ -28,10 +33,6 @@ if ! python3 scripts/release-manifest.py validate --root . --manifest "$MANIFEST
 fi
 if [ "$CLEANUP_MANIFEST" -eq 1 ]; then rm -f "$MANIFEST"; fi
 # ---------------------------------------------------------------------------
-
-# Fail-fast guard: direct source writes via legacy installer are disabled until reviewed transactional activation adapter takes over.
-echo "Direct source writes via legacy installer are disabled: reviewed transactional activation adapter is required." >&2
-exit 1
 
 mkdir -p "$lib" "$HOME/bin" "$state" "$HOME/.config/dashboard/static" "$HOME/.config/ttyd" "$HOME/.config/tor" "$HOME/.local/share/mobile-server-tor" "$HOME/.config/services_disabled"
 chmod 700 "$HOME/.local/share/mobile-server-tor" "$HOME/.config/tor"

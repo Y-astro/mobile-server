@@ -21,6 +21,9 @@
       this.isDisposed = false;
       this.isPaused = false;
       this.generation = 0;
+      this.hasPendingResume = false;
+      this.pendingFreshGen = 0;
+      this.trailingPromise = null;
 
       this._onVisibilityChange = this._onVisibilityChange.bind(this);
       this._onPageHide = this._onPageHide.bind(this);
@@ -38,7 +41,7 @@
       if (typeof document !== 'undefined' && document.hidden) {
         this.isPaused = true;
       } else {
-        // Prompt initial execution
+        // Prompt initial execution deferred to next microtask so constructor finishes cleanly
         this.refresh();
       }
     }
@@ -50,10 +53,10 @@
       }
     }
 
-    _abortActive() {
+    _abortActive(reason = 'lifecycle_pause') {
       if (this.activeController) {
         try {
-          this.activeController.abort();
+          this.activeController.abort(reason);
         } catch (_) {}
         this.activeController = null;
       }
@@ -91,28 +94,60 @@
 
     pause() {
       this.isPaused = true;
+      this.hasPendingResume = false;
       this.generation++;
       this._clearTimer();
-      this._abortActive();
+      this._abortActive('lifecycle_pause');
     }
 
     resume() {
       if (this.isDisposed) return;
       this.isPaused = false;
       this._clearTimer();
-      // Prompt refresh on becoming visible
-      this.refresh();
+      if (this.inFlightPromise) {
+        // Active aborted run is still settling; remember pending resume to kick next read after it settles
+        this.hasPendingResume = true;
+      } else {
+        this.refresh();
+      }
     }
 
-    async refresh() {
+    async refresh(options = {}) {
       if (this.isDisposed) return;
-      // If currently in flight, coalesce and return existing promise
-      if (this.inFlightPromise) {
-        return this.inFlightPromise;
-      }
+
+      const isFresh = Boolean(options && (options.fresh || options.trailing));
+
       // If hidden or paused, do not start new network reads
       if (this.isPaused || (typeof document !== 'undefined' && document.hidden)) {
+        if (isFresh) {
+          this.hasPendingResume = true;
+        }
         return;
+      }
+
+      if (this.inFlightPromise) {
+        if (isFresh) {
+          // A mutation or fresh read requested while a pre-mutation read is in flight.
+          // Enqueue at most one trailing fresh read that will run after current in-flight settles.
+          const freshGen = ++this.pendingFreshGen;
+          if (!this.trailingPromise) {
+            this.trailingPromise = (async () => {
+              try {
+                await this.inFlightPromise;
+              } catch (_) {}
+              // After in-flight settles, if still current fresh request and not disposed/hidden, run fresh read
+              if (this.isDisposed || this.isPaused || (typeof document !== 'undefined' && document.hidden)) {
+                return;
+              }
+              if (freshGen === this.pendingFreshGen) {
+                this.trailingPromise = null;
+                return await this.refresh();
+              }
+            })();
+          }
+          return this.trailingPromise;
+        }
+        return this.inFlightPromise;
       }
 
       this._clearTimer();
@@ -125,19 +160,22 @@
       if (controller && this.deadlineMs > 0) {
         deadlineTimer = setTimeout(() => {
           try {
-            controller.abort(new Error('Polling read deadline exceeded'));
+            controller.abort('deadline_timeout');
           } catch (_) {}
         }, this.deadlineMs);
       }
 
       const signal = controller ? controller.signal : null;
 
+      // Microtask deferral ensures inFlightPromise is assigned and state established
+      // even if this.fn throws synchronously.
       this.inFlightPromise = (async () => {
+        await Promise.resolve();
         try {
           await this.fn(signal);
         } catch (err) {
-          // If aborted due to lifecycle pause or deadline, keep failure isolated
-          if (signal && signal.aborted) {
+          // If aborted due to lifecycle pause, keep failure silent
+          if (signal && signal.aborted && signal.reason === 'lifecycle_pause') {
             return;
           }
         } finally {
@@ -150,9 +188,12 @@
           }
           this.inFlightPromise = null;
 
-          // Only schedule next if still on the same generation and not paused/disposed
-          if (!this.isDisposed && !this.isPaused && runGen === this.generation) {
-            if (typeof document === 'undefined' || !document.hidden) {
+          // Check if a resume or trailing fresh read was queued while settling
+          if (!this.isDisposed && !this.isPaused && (typeof document === 'undefined' || !document.hidden)) {
+            if (this.hasPendingResume) {
+              this.hasPendingResume = false;
+              this.refresh();
+            } else if (runGen === this.generation) {
               this._scheduleNext();
             }
           }
@@ -162,12 +203,17 @@
       return this.inFlightPromise;
     }
 
+    refreshAfterMutation() {
+      return this.refresh({ fresh: true });
+    }
+
     dispose() {
       this.isDisposed = true;
       this.isPaused = true;
+      this.hasPendingResume = false;
       this.generation++;
       this._clearTimer();
-      this._abortActive();
+      this._abortActive('lifecycle_dispose');
 
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', this._onVisibilityChange);

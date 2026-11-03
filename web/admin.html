@@ -389,9 +389,11 @@
     async function fetchStats(signal) {
       try {
         const res = await fetch('/api/stats', signal ? { signal } : {});
+        if (signal && signal.aborted) return;
         if (res.status === 401 || res.status === 403) { location.href = '/login'; return; }
         if (!res.ok) throw new Error('Telemetry unavailable');
         const data = await res.json();
+        if (signal && signal.aborted) return;
         setText('telemetry-state', data.stale ? 'Stale / unavailable' : 'Active sample');
         setText('header-ts-ip', data.tailscale_ip);
         const lanLink = document.getElementById('header-local-ip');
@@ -424,15 +426,24 @@
         setText('net-wifi-rssi', metric(data.network?.rssi));
         setText('net-wan-ping', metric(data.network?.wan_ping));
         setText('adguard-state', data.network?.dns_status);
-      } catch (err) { setText('telemetry-state', 'Unavailable'); }
+      } catch (err) {
+        if (signal && signal.aborted && signal.reason === 'lifecycle_pause') return;
+        setText('telemetry-state', 'Unavailable');
+      }
     }
     let torEnabled = false;
     async function fetchVPN(signal) {
       try {
         const res = await fetch('/api/vpn/status', signal ? { signal } : {});
+        if (signal && signal.aborted) return;
         if (!res.ok) throw new Error();
-        updateVPNUI(await res.json());
-      } catch (err) { setText('vpn-badge', 'Status unavailable'); }
+        const data = await res.json();
+        if (signal && signal.aborted) return;
+        updateVPNUI(data);
+      } catch (err) {
+        if (signal && signal.aborted && signal.reason === 'lifecycle_pause') return;
+        setText('vpn-badge', 'Status unavailable');
+      }
     }
     function updateVPNUI(data) {
       torEnabled = data.enabled === true;
@@ -571,7 +582,7 @@
           alert('Toggle failed: ' + (data.message || data.error));
           if (el) el.checked = !origChecked;
         } else {
-          await (servicesLoop ? servicesLoop.refresh() : fetchServices());
+          await (servicesLoop ? servicesLoop.refreshAfterMutation() : fetchServices());
         }
       } catch (err) {
         alert('Network error toggling service');
@@ -584,9 +595,11 @@
     async function fetchServices(signal) {
       try {
         const res = await fetch('/api/services', signal ? { signal } : {});
+        if (signal && signal.aborted) return;
         if (res.status === 401 || res.status === 403) { location.href = '/login'; return; }
         if (!res.ok) throw new Error();
         const data = await res.json();
+        if (signal && signal.aborted) return;
         if (Array.isArray(data.services)) {
           renderServices(data.services);
         }
@@ -965,8 +978,10 @@
       if (!container) return;
       try {
         const res = await fetch('/api/agy/sessions', signal ? { signal } : {});
+        if (signal && signal.aborted) return;
         if (!res.ok) throw new Error('Failed to load AGY sessions');
         const data = await res.json();
+        if (signal && signal.aborted) return;
         const sessions = data.sessions || [];
         if (newBtn) {
           newBtn.disabled = sessions.length >= (data.max_sessions || 8);
@@ -1005,6 +1020,7 @@
           `;
         }).join('');
       } catch (err) {
+        if (signal && signal.aborted && signal.reason === 'lifecycle_pause') return;
         container.innerHTML = `<div class="p-3 rounded-lg bg-red-500/10 text-red-300 text-xs">AGY status unavailable: ${err.message}</div>`;
       }
     }
@@ -1024,7 +1040,7 @@
         if (safeId) {
           window.open('/agy/?arg=' + safeId, '_blank');
         }
-        await (agyLoop ? agyLoop.refresh() : fetchAgySessions());
+        await (agyLoop ? agyLoop.refreshAfterMutation() : fetchAgySessions());
       } catch (e) {
         alert('Network error creating AGY session: ' + e);
       } finally {
@@ -1043,7 +1059,7 @@
           alert(err.message || 'Failed to terminate AGY session');
           return;
         }
-        await (agyLoop ? agyLoop.refresh() : fetchAgySessions());
+        await (agyLoop ? agyLoop.refreshAfterMutation() : fetchAgySessions());
       } catch (e) {
         alert('Network error closing AGY session: ' + e);
       }
@@ -1057,14 +1073,13 @@
       servicesLoop = window.PortalPolling.createPolling((signal) => fetchServices(signal), 4000, { name: 'services' });
       agyLoop = window.PortalPolling.createPolling((signal) => fetchAgySessions(signal), 5000, { name: 'agy' });
     } else {
+      // Degraded static fallback: execute small bounded initial sample without unmanaged recurring intervals
+      const pollText = document.querySelector('footer .mono');
+      if (pollText) pollText.textContent = 'Manual refresh mode';
       fetchStats();
       fetchVPN();
       fetchServices();
       fetchAgySessions();
-      setInterval(fetchStats, 3000);
-      setInterval(fetchVPN, 10000);
-      setInterval(fetchServices, 4000);
-      setInterval(fetchAgySessions, 5000);
     }
 
     document.addEventListener('DOMContentLoaded', () => {
