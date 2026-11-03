@@ -50,17 +50,21 @@ class CredentialStore:
 
     def invalidate(self):
         with self._lock:
+            self._version = None
             self._last_checked = 0.0
 
     @property
     def users(self):
-        now = time.monotonic()
         with self._lock:
-            if self._users and (now - self._last_checked < self._ttl):
-                return self._users
             try:
                 stat = self.path.stat()
-                version = (stat.st_mtime_ns, stat.st_size)
+                version = (
+                    stat.st_dev,
+                    stat.st_ino,
+                    stat.st_mtime_ns,
+                    stat.st_ctime_ns,
+                    stat.st_size,
+                )
                 if version != self._version:
                     data = json.loads(self.path.read_text())
                     if data.get('version') != 1 or not isinstance(data.get('users'), dict):
@@ -70,11 +74,10 @@ class CredentialStore:
                         raise ValueError('Invalid user record')
                     self._users = users
                     self._version = version
-                self._last_checked = now
-            except FileNotFoundError:
+            except Exception:
                 self._users = {}
                 self._version = None
-                self._last_checked = now
+            self._last_checked = time.monotonic()
             return self._users
 
     def verify(self, username, password):

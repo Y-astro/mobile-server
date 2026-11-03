@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -48,5 +49,83 @@ class PasswordTests(unittest.TestCase):
         self.assertTrue(limiter.verifiers.acquire(False))
         self.assertTrue(limiter.verifiers.acquire(False))
         self.assertFalse(limiter.verifiers.acquire(False))
+
+    def test_credential_freshness_lifecycle(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'users.json'
+            users = {
+                'alice': {'password_hash': hash_password('alice-pass', iterations=100_000), 'role': 'admin'},
+                'bob': {'password_hash': hash_password('bob-pass', iterations=100_000), 'role': 'family'}
+            }
+            save_users(path, users)
+            store = CredentialStore(path)
+
+            # Baseline checks
+            self.assertTrue(store.verify('alice', 'alice-pass'))
+            self.assertTrue(store.is_admin('alice'))
+            self.assertTrue(store.verify('bob', 'bob-pass'))
+            self.assertFalse(store.is_admin('bob'))
+
+            # Unchanged file uses cached parsed dict rather than re-reading/re-parsing
+            orig_users_dict = store.users
+            with patch.object(Path, 'read_text', side_effect=AssertionError("read_text called")):
+                self.assertIs(store.users, orig_users_dict)
+                self.assertTrue(store.verify('alice', 'alice-pass'))
+
+            # Immediate role downgrade
+            users['alice']['role'] = 'family'
+            save_users(path, users)
+            self.assertTrue(store.verify('alice', 'alice-pass'))
+            self.assertFalse(store.is_admin('alice'))
+
+            # Immediate removal
+            del users['bob']
+            save_users(path, users)
+            self.assertFalse(store.exists('bob'))
+            self.assertFalse(store.verify('bob', 'bob-pass'))
+
+            # Immediate disable
+            users['alice']['disabled'] = True
+            save_users(path, users)
+            self.assertFalse(store.exists('alice'))
+            self.assertFalse(store.verify('alice', 'alice-pass'))
+
+            # Atomic replacement with same size / mtime via inode replacement
+            users['alice']['disabled'] = False
+            # Write to a temp file and replace atomically
+            temp_file = Path(d) / 'temp_replace.json'
+            temp_file.write_text(json.dumps({'version': 1, 'users': users}))
+            stat_before = path.stat()
+            # Ensure same mtime
+            os.utime(temp_file, ns=(stat_before.st_atime_ns, stat_before.st_mtime_ns))
+            os.replace(temp_file, path)
+            stat_after = path.stat()
+            self.assertNotEqual(stat_before.st_ino, stat_after.st_ino)
+            self.assertTrue(store.verify('alice', 'alice-pass'))
+
+            # Corrupted store fails closed and denies stale user
+            path.write_text('{ invalid json')
+            self.assertFalse(store.exists('alice'))
+            self.assertFalse(store.verify('alice', 'alice-pass'))
+            self.assertEqual(store.users, {})
+
+            # Recoverable after valid replacement
+            save_users(path, users)
+            self.assertTrue(store.exists('alice'))
+            self.assertTrue(store.verify('alice', 'alice-pass'))
+
+            # Missing store fails closed and denies stale user
+            path.unlink()
+            self.assertFalse(store.exists('alice'))
+            self.assertFalse(store.verify('alice', 'alice-pass'))
+            self.assertEqual(store.users, {})
+
+            # Recoverable again after valid replacement
+            save_users(path, users)
+            self.assertTrue(store.exists('alice'))
+
+            # Invalidate forces reload
+            store.invalidate()
+            self.assertTrue(store.exists('alice'))
 
 if __name__ == '__main__': unittest.main()
