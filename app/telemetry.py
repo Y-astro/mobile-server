@@ -161,10 +161,26 @@ class Telemetry:
             pass
         if result['local_ip'] is None:
             try:
-                interfaces = json.loads(bounded_command(['ip', '-j', '-4', 'addr', 'show', 'wlan0']))
-                result['local_ip'] = next(a['local'] for i in interfaces for a in i.get('addr_info', []) if a.get('scope') == 'global')
-                sources['local_ip'] = 'ip address'
-            except (OSError, ValueError, KeyError, StopIteration, subprocess.TimeoutExpired):
+                import ifaddr
+                for a in ifaddr.get_adapters():
+                    if a.name == 'wlan0':
+                        for ip in a.ips:
+                            if ip.is_IPv4 and not ip.ip.startswith('127.'):
+                                result['local_ip'] = ip.ip
+                                sources['local_ip'] = 'ifaddr wlan0'
+                                break
+                        if result['local_ip']:
+                            break
+            except Exception:
+                pass
+        if result['local_ip'] is None:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(('1.1.1.1', 80))
+                result['local_ip'] = s.getsockname()[0]
+                s.close()
+                sources['local_ip'] = 'socket route'
+            except Exception:
                 pass
         try:
             text = bounded_command(['ping', '-n', '-c', '1', '-W', '1', '1.1.1.1'], timeout=2)

@@ -24,7 +24,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
 .ace-tm .ace_cursor {
   color: black;
 }
-
+        
 .ace-tm .ace_invisible {
   color: rgb(191, 191, 191);
 }
@@ -492,7 +492,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
     opacity: 1;
 }
 .ace_composition_placeholder { color: transparent }
-.ace_composition_marker {
+.ace_composition_marker { 
     border-bottom: 1px solid;
     position: absolute;
     border-radius: 0;
@@ -556,7 +556,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
 .ace_hidpi .ace_gutter {
     contain: strict;
 }
-.ace_hidpi .ace_text-layer > .ace_line,
+.ace_hidpi .ace_text-layer > .ace_line, 
 .ace_hidpi .ace_text-layer > .ace_line_group {
     contain: strict;
 }
@@ -616,7 +616,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
     animation-timing-function: ease-in-out;
     animation-name: blink-ace-animate-smooth;
 }
-
+    
 @keyframes blink-ace-animate {
     from, to { opacity: 1; }
     60% { opacity: 0; }
@@ -759,7 +759,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
     background-position: center;
 
     border-radius: 3px;
-
+    
     border: 1px solid transparent;
     cursor: pointer;
     pointer-events: auto;
@@ -770,7 +770,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
 }
 
 .ace_folding-enabled .ace_fold-widget {
-    display: inline-block;
+    display: inline-block;   
 }
 
 .ace_fold-widget.ace_end {

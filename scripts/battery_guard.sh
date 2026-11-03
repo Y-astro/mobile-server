@@ -111,7 +111,7 @@ check_battery() {
         log "[ALERT] Thermal limit exceeded: ${temp}°C (limit: ${MAX_TEMP_CELSIUS}°C)"
         send_notification "⚠️ Server Overheating (${temp}°C)" "$alert_msg" "high"
         speak_alert "Warning. Server battery temperature is high at ${temp_int} degrees."
-
+    
     # 2. Overcharge / High Voltage Swelling Prevention
     elif [ "$is_plugged" = true ] && { [ "$pct" -ge "$MAX_BATTERY_PERCENT" ] || [ "$voltage" -ge "$MAX_BATTERY_VOLTAGE_MV" ]; }; then
         alert_state="OVERCHARGE_WARNING"

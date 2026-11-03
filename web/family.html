@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Family Cloud &bull; K20 Pro</title>
+  <link rel="stylesheet" href="/portal.css">
+  <style>
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body class="bg-wallpaper p-4 sm:p-6 min-h-screen">
+  <div class="fixed inset-0 backdrop-overlay pointer-events-none"></div>
+
+  <div class="relative z-10 max-w-6xl mx-auto space-y-6">
+    <!-- Header -->
+    <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-white/10">
+      <div class="flex items-center gap-3">
+        <div class="brand-mark">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z"></path></svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-medium text-secondary">Private Cloud</span>
+            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Family portal</span>
+          </div>
+          <h1 class="text-xl sm:text-2xl font-semibold text-white tracking-tight">Family Vault</h1>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2.5">
+        <div class="px-3 py-1.5 rounded-lg bg-surface-raised border border-white/10 text-xs text-soft">
+          Logged in as <span class="font-medium text-white">Family</span>
+        </div>
+        <button onclick="handleLogout()" class="px-3 py-1.5 rounded-lg bg-surface-raised hover:bg-white/10 border border-white/10 text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+          <span>Sign Out</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Welcome Banner -->
+    <div class="golden-glass p-5 sm:p-6 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div class="space-y-1">
+        <h2 class="text-base font-semibold text-white">Family Cloud Vault</h2>
+        <p class="text-xs text-soft">Access shared documents, photo albums, and music streaming from any connected device on Wi-Fi or Tailscale.</p>
+      </div>
+      <div class="flex items-center gap-2 text-xs font-medium text-positive bg-emerald-500/10 px-3 py-1.5 rounded-lg border border-emerald-500/20 shrink-0">
+        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+        <span>Storage online & encrypted</span>
+      </div>
+    </div>
+
+    <!-- 5 Family Services Grid -->
+    <div class="family-services-grid">
+
+      <!-- 1. Personal Cloud Storage -->
+      <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+        <div class="space-y-3">
+          <div class="flex items-start justify-between">
+            <div class="service-icon-box">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
+            </div>
+            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Drive</span>
+          </div>
+          <div>
+            <span class="text-[11px] font-medium text-muted">Family files</span>
+            <h3 class="text-base font-semibold text-white mt-0.5">Cloud Storage</h3>
+            <p class="text-xs text-soft mt-1.5 leading-relaxed">
+              Upload, organize, and download documents, downloads, and important files safely.
+            </p>
+          </div>
+        </div>
+        <div class="pt-3 border-t border-white/5">
+          <a href="/drive/" class="gold-gradient-btn w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5">
+            <span>Open Cloud Drive</span>
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+          </a>
+        </div>
+      </div>
+
+      <!-- 2. Family Photos -->
+      <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+        <div class="space-y-3">
+          <div class="flex items-start justify-between">
+            <div class="service-icon-box">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+            </div>
+            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Photos</span>
+          </div>
+          <div>
+            <span class="text-[11px] font-medium text-muted">Memories & vacations</span>
+            <h3 class="text-base font-semibold text-white mt-0.5">Family Photos</h3>
+            <p class="text-xs text-soft mt-1.5 leading-relaxed">
+              Browse, view, and share full-resolution family photo albums and picture collections.
+            </p>
+          </div>
+        </div>
+        <div class="pt-3 border-t border-white/5">
+          <a href="/drive/files/Photos" class="gold-gradient-btn w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5">
+            <span>View Photos</span>
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+          </a>
+        </div>
+      </div>
+
+      <!-- 3. Music Jukebox -->
+      <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+        <div class="space-y-3">
+          <div class="flex items-start justify-between">
+            <div class="service-icon-box">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg>
+            </div>
+            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Audio</span>
+          </div>
+          <div>
+            <span class="text-[11px] font-medium text-muted">Hi-Fi streaming</span>
+            <h3 class="text-base font-semibold text-white mt-0.5">Music Jukebox</h3>
+            <p class="text-xs text-soft mt-1.5 leading-relaxed">
+              Listen to songs, audiobooks, and family music playlists directly with built-in streaming.
+            </p>
+          </div>
+        </div>
+        <div class="pt-3 border-t border-white/5">
+          <a href="/drive/files/Music" class="gold-gradient-btn w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5">
+            <span>Open Music</span>
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+          </a>
+        </div>
+      </div>
+
+      <!-- 4. Document to PDF Converter -->
+      <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+        <div class="space-y-3">
+          <div class="flex items-start justify-between">
+            <div class="service-icon-box">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+            </div>
+            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Tools</span>
+          </div>
+          <div>
+            <span class="text-[11px] font-medium text-muted">PDF converter</span>
+            <h3 class="text-base font-semibold text-white mt-0.5">Document to PDF</h3>
+            <p class="text-xs text-soft mt-1.5 leading-relaxed">
+              Convert Word documents, presentations, spreadsheets, and pictures into PDF instantly.
+            </p>
+          </div>
+        </div>
+        <div class="pt-3 border-t border-white/5">
+          <button onclick="openConverterModal()" class="gold-gradient-btn w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5">
+            <span>Convert File to PDF</span>
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 5. Wealthfolio -->
+      <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+        <div class="space-y-3">
+          <div class="flex items-start justify-between">
+            <div class="service-icon-box">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            </div>
+            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Finance</span>
+          </div>
+          <div>
+            <span class="text-[11px] font-medium text-muted">Private finance</span>
+            <h3 class="text-base font-semibold text-white mt-0.5">Wealthfolio</h3>
+            <p class="text-xs text-soft mt-1.5 leading-relaxed">
+              Bank statements, cash flow, and investments streamed securely from the laptop.
+            </p>
+            <p class="text-[11px] text-muted mt-2">Separate password required &bull; Laptop must be on</p>
+          </div>
+        </div>
+        <div class="pt-3 border-t border-white/5">
+          <a href="/wealth/" target="_blank" rel="noopener noreferrer" class="btn-secondary w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5">
+            <span>Unlock Wealthfolio</span>
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+          </a>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Quick Notes Card -->
+    <div class="golden-glass-card p-5 rounded-xl space-y-3">
+      <div class="flex items-center justify-between pb-3 border-b border-white/5">
+        <div class="flex items-center gap-2.5">
+          <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-white leading-none">Quick notes</h3>
+            <p class="text-[11px] text-muted mt-1">Private scratchpad &bull; Auto-saves as you type</p>
+          </div>
+        </div>
+        <div id="notes-status" class="text-xs text-soft flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span>Ready</span>
+        </div>
+      </div>
+
+      <!-- Formatting Toolbar -->
+      <div class="flex items-center gap-2 pt-0.5">
+        <button type="button" onclick="insertBulletList()" title="Add bullet list item" class="px-2.5 py-1 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
+          <span class="text-sm font-black leading-none text-accent">&bull;</span>
+          <span>Bullet</span>
+        </button>
+        <button type="button" onclick="insertNumberedList()" title="Add numbered list item" class="px-2.5 py-1 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
+          <span class="mono text-xs font-bold leading-none text-accent">1.</span>
+          <span>Numbered</span>
+        </button>
+        <span class="text-[11px] text-muted ml-auto hidden sm:inline-block">Press Enter to continue lists</span>
+      </div>
+
+      <div class="relative">
+        <textarea
+          id="user-notes-input"
+          class="notes-textarea w-full rounded-lg p-3 text-sm outline-none resize-none overflow-hidden block"
+          placeholder="Take quick notes or paste reminders (auto-saved)..."
+          rows="3"
+        ></textarea>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="pt-4 border-t border-white/5 text-center text-xs text-muted">
+      <span>Home server &bull; Connected securely via Tailscale & Wi-Fi</span>
+    </footer>
+  </div>
+
+  <script>
+
+    async function handleLogout() {
+      localStorage.removeItem('jwt');
+      await fetch('/api/logout', { method: 'POST' });
+      window.location.href = '/login';
+    }
+
+    let selectedConvertFiles = [];
+
+    function openConverterModal() {
+      document.getElementById('converter-modal').classList.remove('hidden');
+    }
+
+    function addConvertFiles(fileList) {
+      if (!fileList || !fileList.length) return;
+      for (let i = 0; i < fileList.length; i++) {
+        const f = fileList[i];
+        const exists = selectedConvertFiles.some(existing => existing.name === f.name && existing.size === f.size);
+        if (!exists) {
+          selectedConvertFiles.push(f);
+        }
+      }
+      renderSelectedFiles();
+    }
+
+    function removeConvertFile(index) {
+      selectedConvertFiles.splice(index, 1);
+      renderSelectedFiles();
+    }
+
+    function clearAllConvertFiles() {
+      selectedConvertFiles = [];
+      const input = document.getElementById('convert-file-input');
+      if (input) input.value = '';
+      renderSelectedFiles();
+    }
+
+    function escapeHtml(text) {
+      const span = document.createElement('span'); span.textContent = text; return span.innerHTML;
+    }
+    function formatFileSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function renderSelectedFiles() {
+      const dropzone = document.getElementById('convert-dropzone');
+      const listContainer = document.getElementById('convert-file-list-container');
+      const fileListEl = document.getElementById('convert-file-list');
+      const summaryEl = document.getElementById('convert-file-summary');
+      const btn = document.getElementById('convert-btn');
+
+      if (selectedConvertFiles.length === 0) {
+        if (dropzone) dropzone.classList.remove('hidden');
+        if (listContainer) listContainer.classList.add('hidden');
+        if (btn) {
+          btn.disabled = true;
+          btn.innerText = "Convert & Download PDF";
+        }
+      } else {
+        if (dropzone) dropzone.classList.add('hidden');
+        if (listContainer) listContainer.classList.remove('hidden');
+
+        let totalBytes = 0;
+        selectedConvertFiles.forEach(f => totalBytes += f.size);
+        if (summaryEl) {
+          summaryEl.innerText = `${selectedConvertFiles.length} ${selectedConvertFiles.length === 1 ? 'file' : 'files'} selected (${formatFileSize(totalBytes)})`;
+        }
+
+        if (fileListEl) {
+          fileListEl.innerHTML = selectedConvertFiles.map((file, idx) => {
+            const ext = (file.name.split('.').pop() || 'FILE').toUpperCase();
+            return `
+              <div class="flex items-center justify-between p-2 rounded-lg bg-surface-raised border border-white/5 text-xs">
+                <div class="flex items-center gap-2.5 overflow-hidden">
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-white/5 text-white border border-white/10 shrink-0">${escapeHtml(ext)}</span>
+                  <div class="truncate">
+                    <p class="font-medium text-white truncate max-w-[220px] sm:max-w-xs">${escapeHtml(file.name)}</p>
+                    <p class="text-[10px] text-muted">${formatFileSize(file.size)}</p>
+                  </div>
+                </div>
+                <button type="button" onclick="removeConvertFile(${idx})" class="p-1 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition shrink-0 ml-2">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+              </div>
+            `;
+          }).join('');
+        }
+
+        if (btn) {
+          btn.disabled = false;
+          if (selectedConvertFiles.length === 1) {
+            btn.innerText = "Convert 1 File to PDF";
+          } else {
+            btn.innerText = `Convert All (${selectedConvertFiles.length} Files) & Download ZIP`;
+          }
+        }
+      }
+    }
+
+    function closeConverterModal() {
+      document.getElementById('converter-modal').classList.add('hidden');
+      document.getElementById('convert-progress').classList.add('hidden');
+      clearAllConvertFiles();
+    }
+
+    function initConverter() {
+      const fileInput = document.getElementById('convert-file-input');
+      if (fileInput) {
+        fileInput.addEventListener('change', (e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            addConvertFiles(e.target.files);
+          }
+        });
+      }
+      const dropzone = document.getElementById('convert-dropzone');
+      if (dropzone) {
+        ['dragenter', 'dragover'].forEach(name => {
+          dropzone.addEventListener(name, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.add('border-accent', 'bg-accent/10');
+          });
+        });
+        ['dragleave', 'drop'].forEach(name => {
+          dropzone.addEventListener(name, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.remove('border-accent', 'bg-accent/10');
+          });
+        });
+        dropzone.addEventListener('drop', (e) => {
+          if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            addConvertFiles(e.dataTransfer.files);
+          }
+        });
+      }
+    }
+
+    // --- Quick Notes Auto-resize, Smart Lists & Auto-save Logic ---
+    let notesSaveTimeout = null;
+    let lastSavedNotes = null;
+
+    function autoResizeNotes(textarea) {
+      if (!textarea) return;
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.max(90, textarea.scrollHeight) + 'px';
+    }
+
+    function insertBulletList() {
+      const textarea = document.getElementById('user-notes-input');
+      if (!textarea) return;
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const lineStart = text.lastIndexOf(String.fromCharCode(10), start - 1) + 1;
+      const currentLine = text.substring(lineStart, start);
+      let insertion = '• ';
+      if (currentLine.trim() === '') {
+        textarea.setRangeText(insertion, lineStart, start, 'end');
+      } else {
+        insertion = String.fromCharCode(10) + '• ';
+        textarea.setRangeText(insertion, start, end, 'end');
+      }
+      textarea.focus();
+      autoResizeNotes(textarea);
+      triggerNotesAutoSave();
+    }
+
+    function insertNumberedList() {
+      const textarea = document.getElementById('user-notes-input');
+      if (!textarea) return;
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const lineStart = text.lastIndexOf(String.fromCharCode(10), start - 1) + 1;
+      const currentLine = text.substring(lineStart, start);
+      let insertion = '1. ';
+      if (currentLine.trim() === '') {
+        textarea.setRangeText(insertion, lineStart, start, 'end');
+      } else {
+        insertion = String.fromCharCode(10) + '1. ';
+        textarea.setRangeText(insertion, start, end, 'end');
+      }
+      textarea.focus();
+      autoResizeNotes(textarea);
+      triggerNotesAutoSave();
+    }
+
+    function handleNotesKeydown(e) {
+      const textarea = e.target;
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        textarea.setRangeText('  ', start, end, 'end');
+        autoResizeNotes(textarea);
+        triggerNotesAutoSave();
+        return;
+      }
+      if (e.key === 'Enter') {
+        const start = textarea.selectionStart;
+        const text = textarea.value;
+        const lineStart = text.lastIndexOf(String.fromCharCode(10), start - 1) + 1;
+        const currentLine = text.substring(lineStart, start);
+        const bulletMatch = currentLine.match(/^([ 	]*)([-•*])[ 	]+/);
+        const numberMatch = currentLine.match(/^([ 	]*)([0-9]+)\.[ 	]+/);
+
+        if (bulletMatch) {
+          e.preventDefault();
+          const indent = bulletMatch[1];
+          const bullet = bulletMatch[2];
+          if (currentLine.trim() === bullet) {
+            textarea.setRangeText('', lineStart, start, 'end');
+          } else {
+            const nextBullet = String.fromCharCode(10) + indent + bullet + ' ';
+            textarea.setRangeText(nextBullet, start, start, 'end');
+          }
+          autoResizeNotes(textarea);
+          triggerNotesAutoSave();
+        } else if (numberMatch) {
+          e.preventDefault();
+          const indent = numberMatch[1];
+          const num = parseInt(numberMatch[2], 10);
+          if (currentLine.trim() === (num + '.')) {
+            textarea.setRangeText('', lineStart, start, 'end');
+          } else {
+            const nextNum = String.fromCharCode(10) + indent + (num + 1) + '. ';
+            textarea.setRangeText(nextNum, start, start, 'end');
+          }
+          autoResizeNotes(textarea);
+          triggerNotesAutoSave();
+        }
+      }
+    }
+
+    function triggerNotesAutoSave() {
+      const statusEl = document.getElementById('notes-status');
+      if (statusEl) {
+        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-accent"></span><span>Saving…</span>';
+      }
+      if (notesSaveTimeout) clearTimeout(notesSaveTimeout);
+      notesSaveTimeout = setTimeout(saveNotes, 750);
+    }
+
+    async function saveNotes() {
+      const textarea = document.getElementById('user-notes-input');
+      const statusEl = document.getElementById('notes-status');
+      if (!textarea) return;
+      const content = textarea.value;
+      if (content === lastSavedNotes) {
+        if (statusEl) statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>Saved</span>';
+        return;
+      }
+      try {
+        const res = await fetch('/api/notes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes: content })
+        });
+        if (res.ok) {
+          lastSavedNotes = content;
+          if (statusEl) {
+            statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>Saved</span>';
+            setTimeout(() => {
+              if (statusEl && statusEl.innerText.includes('Saved')) {
+                statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>Ready</span>';
+              }
+            }, 2000);
+          }
+        } else {
+          if (statusEl) statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-400"></span><span>Save error</span>';
+        }
+      } catch (err) {
+        if (statusEl) statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-400"></span><span>Offline</span>';
+      }
+    }
+
+    async function loadNotes() {
+      const textarea = document.getElementById('user-notes-input');
+      if (!textarea) return;
+      try {
+        const res = await fetch('/api/notes');
+        if (res.ok) {
+          const data = await res.json();
+          textarea.value = data.notes || '';
+          lastSavedNotes = textarea.value;
+          autoResizeNotes(textarea);
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    async function executeConversion() {
+      if (selectedConvertFiles.length === 0) return;
+      const btn = document.getElementById('convert-btn');
+      const progress = document.getElementById('convert-progress');
+      const statusText = document.getElementById('convert-status-text');
+      const statusPct = document.getElementById('convert-status-pct');
+
+      btn.disabled = true;
+      progress.classList.remove('hidden');
+      statusText.innerText = "Uploading files to server...";
+      statusPct.innerText = "0%";
+
+      const formData = new FormData();
+      selectedConvertFiles.forEach(f => formData.append('files', f));
+
+      try {
+        statusText.innerText = `Converting ${selectedConvertFiles.length} documents to PDF...`;
+        statusPct.innerText = "Processing";
+
+        const res = await fetch('/api/convert/pdf', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.message || 'Conversion failed on server');
+        }
+
+        statusText.innerText = "Preparing download...";
+        statusPct.innerText = "100%";
+
+        const blob = await res.blob();
+        let filename = "converted_documents.zip";
+        const disposition = res.headers.get('Content-Disposition');
+        if (disposition && disposition.indexOf('filename=') !== -1) {
+          const parts = disposition.split('filename='); if (parts.length > 1) filename = parts[1].split(';')[0].trim().replace(/['"]/g, '');
+        } else if (selectedConvertFiles.length === 1) {
+          filename = selectedConvertFiles[0].name.replace(/\.[^/.]+$/, "") + ".pdf";
+        }
+
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
+
+        setTimeout(() => {
+          closeConverterModal();
+          btn.disabled = false;
+        }, 800);
+
+      } catch (err) {
+        alert('Upload/Conversion error: ' + err);
+        progress.classList.add('hidden');
+        btn.disabled = false;
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      initConverter();
+      const textarea = document.getElementById('user-notes-input');
+      if (textarea) {
+        textarea.addEventListener('input', () => {
+          autoResizeNotes(textarea);
+          triggerNotesAutoSave();
+        });
+        textarea.addEventListener('keydown', handleNotesKeydown);
+      }
+      loadNotes();
+    });
+  
+  </script>
+
+  <!-- Document to PDF Converter Modal -->
+  <div id="converter-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm hidden">
+    <div class="golden-glass max-w-lg w-full p-5 sm:p-6 rounded-xl space-y-4 relative max-h-[90vh] flex flex-col justify-between">
+
+      <!-- Modal Header -->
+      <div class="flex items-start justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+          </div>
+          <div>
+            <h3 class="text-base font-semibold text-white">Document to PDF</h3>
+            <p class="text-xs text-soft">Convert single or batch documents instantly</p>
+          </div>
+        </div>
+        <button onclick="closeConverterModal()" class="text-muted hover:text-white p-1 rounded-lg hover:bg-white/5 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+
+      <!-- Hidden Multi-file input -->
+      <input type="file" id="convert-file-input" class="sr-only" accept="*/*" multiple>
+
+      <!-- Dropzone -->
+      <label for="convert-file-input" id="convert-dropzone" class="border border-dashed border-white/15 hover:border-white/30 bg-surface-raised hover:bg-white/5 transition rounded-lg p-6 text-center cursor-pointer flex flex-col items-center justify-center space-y-2 block">
+        <svg class="w-8 h-8 text-muted pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+        <div class="pointer-events-none">
+          <p class="text-xs font-medium text-white">Choose files or drag & drop</p>
+          <p class="text-[11px] text-muted mt-0.5">Word (.docx, .doc), PPT (.pptx), Excel (.xlsx), Images & Text</p>
+        </div>
+        <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-hover text-white border border-white/10 text-xs font-medium transition pointer-events-none">
+          Select files
+        </span>
+      </label>
+
+      <!-- Selected Files Container -->
+      <div id="convert-file-list-container" class="hidden space-y-2 flex-1 overflow-hidden flex flex-col">
+        <div class="flex items-center justify-between text-xs pb-1.5 border-b border-white/5">
+          <span id="convert-file-summary" class="font-medium text-white">0 files selected</span>
+          <div class="flex items-center gap-2">
+            <label for="convert-file-input" class="cursor-pointer text-[11px] px-2 py-0.5 rounded bg-surface-raised text-soft hover:text-white font-medium border border-white/10 transition">
+              + Add More
+            </label>
+            <button type="button" onclick="clearAllConvertFiles()" class="text-[11px] px-2 py-0.5 rounded text-muted hover:text-white transition">
+              Clear All
+            </button>
+          </div>
+        </div>
+        <div id="convert-file-list" class="max-h-48 overflow-y-auto space-y-1 pr-1"></div>
+      </div>
+
+      <!-- Conversion Progress State -->
+      <div id="convert-progress" class="hidden space-y-2">
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-soft font-medium flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+            <span id="convert-status-text">Converting documents to PDF...</span>
+          </span>
+          <span class="mono text-white text-[11px]" id="convert-status-pct">Active</span>
+        </div>
+        <div class="w-full progress-track">
+          <div class="progress-fill w-full"></div>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="pt-2 flex items-center justify-end gap-2 border-t border-white/5">
+        <button onclick="closeConverterModal()" class="px-3.5 py-1.5 rounded-lg text-xs font-medium text-soft hover:bg-white/5 transition">Cancel</button>
+        <button id="convert-btn" onclick="executeConversion()" disabled class="gold-gradient-btn px-4 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed">
+          Convert & Download PDF
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+</body>
+</html>

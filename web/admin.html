@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Console &bull; K20 Pro Server</title>
+  <link rel="stylesheet" href="/portal.css">
+  <style>
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body class="bg-wallpaper p-4 sm:p-6 min-h-screen">
+  <div class="fixed inset-0 backdrop-overlay pointer-events-none"></div>
+
+  <div class="relative z-10 max-w-7xl mx-auto space-y-6">
+    <!-- Header -->
+    <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-white/10">
+      <div class="flex items-center gap-3">
+        <div class="brand-mark">
+          <svg class="w-5 h-5 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-medium text-secondary">Master Console</span>
+            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Admin &bull; astro</span>
+          </div>
+          <h1 class="text-xl sm:text-2xl font-semibold text-white tracking-tight">K20 Pro Server Manager</h1>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2.5">
+        <div class="px-3 py-1.5 rounded-lg bg-surface-raised border border-white/10 text-xs text-soft flex items-center gap-2">
+          <span>TS: <span id="header-ts-ip" class="mono font-semibold text-accent">100.75.159.53</span></span>
+          <span class="text-muted">&bull;</span>
+          <span>Wi-Fi: <a id="header-local-ip" class="mono font-semibold text-accent hover:underline" aria-label="Open Wi-Fi website">Detecting…</a></span>
+          <span class="text-muted">&bull;</span>
+          <span>Uptime: <span id="header-uptime" class="mono text-white font-medium">...</span></span>
+        </div>
+        <button onclick="handleLogout()" class="px-3 py-1.5 rounded-lg bg-surface-raised hover:bg-white/10 border border-white/10 text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+          <span>Sign Out</span>
+        </button>
+      </div>
+    </header>
+
+    
+    <!-- Telemetry Cards -->
+    <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <!-- Battery -->
+      <div class="golden-glass-card p-4 rounded-xl flex flex-col justify-between">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-soft">Battery</span>
+          <span id="battery-status-badge" class="px-1.5 py-0.5 rounded text-[10px] font-medium badge-neutral">...</span>
+        </div>
+        <div class="my-3">
+          <div class="flex items-baseline gap-2">
+            <span id="battery-pct" class="text-2xl sm:text-3xl font-semibold text-white mono">...%</span>
+            <span id="battery-temp" class="text-xs mono text-muted">...°C</span>
+          </div>
+          <div class="w-full progress-track mt-2">
+            <div id="battery-bar" class="progress-fill" style="width: 0%"></div>
+          </div>
+        </div>
+        <span class="text-[11px] text-muted">Hardware UPS &bull; Battery protection</span>
+      </div>
+
+      <!-- RAM -->
+      <div class="golden-glass-card p-4 rounded-xl flex flex-col justify-between">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-soft">RAM memory</span>
+          <span class="text-xs mono text-accent" id="ram-pct">...%</span>
+        </div>
+        <div class="my-3">
+          <div class="flex items-baseline gap-1.5">
+            <span id="ram-used" class="text-2xl sm:text-3xl font-semibold text-white mono">...</span>
+            <span class="text-xs text-muted">/ <span id="ram-total">N/A</span> GB</span>
+          </div>
+          <div class="w-full progress-track mt-2">
+            <div id="ram-bar" class="progress-fill" style="width: 0%"></div>
+          </div>
+        </div>
+        <span class="text-[11px] text-muted">LPDDR4X high-speed</span>
+      </div>
+
+      <!-- Storage -->
+      <div class="golden-glass-card p-4 rounded-xl flex flex-col justify-between">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-soft">UFS storage</span>
+          <span class="text-xs mono text-accent" id="storage-pct">...%</span>
+        </div>
+        <div class="my-3">
+          <div class="flex items-baseline gap-1.5">
+            <span id="storage-free" class="text-2xl sm:text-3xl font-semibold text-white mono">...</span>
+            <span class="text-xs text-muted">GB free</span>
+          </div>
+          <div class="w-full progress-track mt-2">
+            <div id="storage-bar" class="progress-fill" style="width: 0%"></div>
+          </div>
+        </div>
+        <span class="text-[11px] text-muted">UFS 2.1 flash</span>
+      </div>
+
+      <!-- CPU -->
+      <div class="golden-glass-card p-4 rounded-xl flex flex-col justify-between">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-soft">Snapdragon 855</span>
+          <span class="text-xs mono text-accent" id="cpu-temp">...°C</span>
+        </div>
+        <div class="my-3">
+          <div class="flex items-baseline gap-2">
+            <span class="text-2xl sm:text-3xl font-semibold text-white">8 Cores</span>
+            <span class="text-xs text-muted">Octa-core</span>
+          </div>
+          <div class="text-[11px] text-muted mt-1">1x Prime &bull; 3x Gold &bull; 4x Silver</div>
+        </div>
+        <span class="text-[11px] text-muted">Kryo 485 &bull; Up to 2.84 GHz</span>
+      </div>
+    </section>
+
+    
+    <!-- Live Network Monitor -->
+    <section class="golden-glass-card p-5 rounded-xl space-y-3">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path></svg>
+          </div>
+          <div>
+            <h3 class="font-semibold text-white text-sm">Live network & bandwidth monitor</h3>
+            <p class="text-xs text-muted">Measured every 30 seconds; unavailable readings show N/A</p>
+          </div>
+        </div>
+        <span class="flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-medium badge-neutral">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span><span id="telemetry-state">Waiting for sample</span>
+        </span>
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
+        <!-- Wi-Fi Link Speed -->
+        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
+          <span class="text-[11px] font-medium text-muted">Wi-Fi link speed</span>
+          <div class="text-xl font-semibold text-white mt-0.5">
+            <span id="net-wifi-speed" class="mono">N/A</span> <span class="text-xs text-muted">Mbps</span>
+          </div>
+          <div class="text-[11px] text-muted mt-1">Interface: <span class="mono">wlan0</span></div>
+        </div>
+
+        <!-- Signal Strength -->
+        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
+          <span class="text-[11px] font-medium text-muted">Signal strength</span>
+          <div class="text-xl font-semibold text-white mt-0.5">
+            <span id="net-wifi-rssi" class="mono">N/A</span> <span class="text-xs text-muted">dBm</span>
+          </div>
+          <div class="text-[11px] text-positive mt-1 font-medium">Measured RSSI</div>
+        </div>
+
+        <!-- WAN Ping (Cloudflare) -->
+        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
+          <span class="text-[11px] font-medium text-muted">Internet latency</span>
+          <div class="text-xl font-semibold text-white mt-0.5">
+            <span id="net-wan-ping" class="mono">N/A</span> <span class="text-xs text-muted">ms</span>
+          </div>
+          <div class="text-[11px] text-muted mt-1">Target: Cloudflare 1.1.1.1</div>
+        </div>
+
+        <!-- DNS Filter Status -->
+        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
+          <span class="text-[11px] font-medium text-muted">AdGuard DNS</span>
+          <div class="text-xl font-semibold text-white mt-0.5">Port 5353</div>
+          <div class="text-[11px] text-positive mt-1 font-medium"><span id="adguard-state">Checking interface…</span></div>
+        </div>
+      </div>
+    </section>
+
+    
+    <!-- Main Workstation Layout: 2-Column Split on Desktop, Single-Column on Mobile -->
+    <div class="workstation-layout">
+      <!-- Left Column: Core Operations & System Services (~58% width) -->
+      <div class="workstation-col">
+        <!-- System Services & Dynamic RAM Manager -->
+    <section class="space-y-3">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <div class="flex items-center gap-2">
+            <h2 class="text-base font-semibold text-white">System services & RAM optimizer</h2>
+            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Dynamic</span>
+          </div>
+          <p class="text-xs text-muted mt-0.5">Control background services and monitor active memory footprint</p>
+        </div>
+
+        <!-- Live RAM Preservation Summary Pill -->
+        <div class="flex items-center gap-2 bg-surface-raised border border-white/10 px-3 py-1 rounded-lg text-xs">
+          <div class="flex items-center gap-1.5 text-positive font-medium">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span class="mono" id="svc-active-mem">-- MB</span> <span class="text-muted">active</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Services Grid Container -->
+      <div id="services-grid" class="services-subgrid">
+        <!-- Live rendered services -->
+      </div>
+    </section>
+
+    
+        <!-- Wealthfolio Card -->
+    <div class="golden-glass-card p-5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div class="space-y-1">
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-medium text-muted">Private finance</span>
+          <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Wealthfolio</span>
+        </div>
+        <h3 class="text-base font-semibold text-white">Bank statements, cash flow, and investments</h3>
+        <p class="text-xs text-soft">Streamed securely from laptop. Separate password required &bull; Laptop must be on</p>
+      </div>
+      <a href="/wealth/" target="_blank" rel="noopener noreferrer" class="btn-secondary px-4 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5 shrink-0">
+        <span>Unlock Wealthfolio</span>
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+      </a>
+    </div>
+
+    
+        <!-- Tor SOCKS Proxy -->
+    <section class="golden-glass-card p-5 rounded-xl space-y-4">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div class="space-y-1">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-medium text-muted">Privacy & tunneling</span>
+            <span id="vpn-badge" class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">OFF</span>
+          </div>
+          <h2 class="text-base font-semibold text-white">Tor SOCKS proxy</h2>
+          <p class="text-xs text-soft max-w-2xl leading-relaxed">
+            Only applications configured for this proxy use Tor. Full-device routing through Tor is unavailable on this setup. File transfers stay direct over Tailscale.
+            On your laptop run <code class="mono px-1.5 py-0.5 rounded bg-surface-raised border border-white/10 text-white select-all">ssh -N -L 9050:127.0.0.1:9050 -p 8022 u0_a505@100.75.159.53</code>
+          </p>
+        </div>
+
+        <div class="flex items-center gap-2.5 shrink-0">
+          <button id="vpn-toggle-btn" onclick="toggleVPN()" class="gold-gradient-btn px-4 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5">
+            <span id="vpn-btn-text">Enable Tor Proxy</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Network Topology Diagram -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 border-t border-white/5">
+        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5 space-y-1">
+          <div class="text-[10px] font-medium text-muted">Step 1: Application routing</div>
+          <div class="text-sm font-semibold text-white">Application &rarr; local SOCKS5</div>
+          <div class="text-xs text-soft mono mt-1">WireGuard mesh (Tailscale)</div>
+          <div class="text-[11px] text-positive font-medium mt-2">Encrypted end-to-end</div>
+        </div>
+
+        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5 space-y-1">
+          <div class="text-[10px] font-medium text-muted">Step 2: Server gateway</div>
+          <div class="text-sm font-semibold text-white">Tor client on server</div>
+          <div class="text-xs text-soft mono mt-1" id="server-direct-ip">Direct IP: checking…</div>
+          <div class="text-[11px] text-muted font-medium mt-2" id="server-gateway-status">Full-device routing unavailable</div>
+        </div>
+
+        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5 space-y-1">
+          <div class="text-[10px] font-medium text-muted">Step 3: Exit node</div>
+          <div class="text-sm font-semibold text-white" id="dest-exit-name">Proxy disabled</div>
+          <div class="text-xs text-soft mono mt-1" id="dest-exit-ip">Proxy exit: unavailable</div>
+          <div class="text-[11px] text-muted font-medium mt-2" id="dest-exit-status">Only configured applications use this proxy</div>
+        </div>
+      </div>
+    </section>
+
+    
+      </div>
+
+      <!-- Right Column: Autonomous Agents & Dev Control Center (~42% width) -->
+      <div class="workstation-col">
+        <!-- AGY Agent Instances Section -->
+    <section class="golden-glass-card p-5 rounded-xl space-y-4" aria-labelledby="agy-heading">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div class="flex items-center gap-2.5">
+          <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h2 id="agy-heading" class="text-base font-semibold text-white">Autonomous coding agent (AGY)</h2>
+              <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Multi-session</span>
+            </div>
+            <p class="text-xs text-muted mt-0.5">Independent Antigravity CLI coding sessions. Closing a tab keeps commands running.</p>
+          </div>
+        </div>
+        <button type="button" id="agy-new" onclick="createNewAgySession()" class="gold-gradient-btn px-3.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 select-none shrink-0">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+          <span>New AGY Instance</span>
+        </button>
+      </div>
+      <div id="agy-sessions-container" class="space-y-2 text-sm">
+        <div class="text-xs text-muted flex items-center gap-2 p-2">
+          <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+          <span>Loading AGY sessions…</span>
+        </div>
+      </div>
+    </section>
+
+    
+        <!-- Laptop Terminals Section -->
+    <section class="golden-glass-card p-5 rounded-xl space-y-3" aria-labelledby="laptop-heading">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div>
+          <h2 id="laptop-heading" class="text-base font-semibold text-white">Laptop terminals</h2>
+          <p class="text-xs text-muted mt-0.5">Control Kitty terminal sessions streamed over Tailscale from the laptop.</p>
+        </div>
+        <button type="button" id="laptop-new" disabled class="gold-gradient-btn px-3.5 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40 shrink-0">New Terminal</button>
+      </div>
+      <p id="laptop-status" class="text-xs text-soft" role="status" aria-live="polite">Checking laptop…</p>
+      <div id="laptop-sessions" class="space-y-2 text-sm"></div>
+      <p class="text-[11px] text-muted">Laptop must be awake and logged in to open Kitty. Closing the browser keeps commands running; Close terminates the session.</p>
+    </section>
+    <script src="/static/laptop.js" defer></script>
+
+    
+        <!-- Quick Notes Card -->
+    <div class="golden-glass-card p-5 rounded-xl space-y-3">
+      <div class="flex items-center justify-between pb-3 border-b border-white/5">
+        <div class="flex items-center gap-2.5">
+          <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-white leading-none">Quick notes</h3>
+            <p class="text-[11px] text-muted mt-1">Private scratchpad &bull; Auto-saves as you type</p>
+          </div>
+        </div>
+        <div id="notes-status" class="text-xs text-soft flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span>Ready</span>
+        </div>
+      </div>
+
+      <!-- Formatting Toolbar -->
+      <div class="flex items-center gap-2 pt-0.5">
+        <button type="button" onclick="insertBulletList()" title="Add bullet list item" class="px-2.5 py-1 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
+          <span class="text-sm font-black leading-none text-accent">&bull;</span>
+          <span>Bullet</span>
+        </button>
+        <button type="button" onclick="insertNumberedList()" title="Add numbered list item" class="px-2.5 py-1 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
+          <span class="mono text-xs font-bold leading-none text-accent">1.</span>
+          <span>Numbered</span>
+        </button>
+        <span class="text-[11px] text-muted ml-auto hidden sm:inline-block">Press Enter to continue lists</span>
+      </div>
+
+      <div class="relative">
+        <textarea
+          id="user-notes-input"
+          class="notes-textarea w-full rounded-lg p-3 text-sm outline-none resize-none overflow-hidden block"
+          placeholder="Take quick notes or paste snippets (auto-saved)..."
+          rows="3"
+        ></textarea>
+      </div>
+    </div>
+
+    
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="pt-4 border-t border-white/5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-muted">
+      <div class="flex items-center gap-2">
+        <span>Snapdragon 855 &bull; Termux &bull; Caddy Reverse Proxy &bull; Tailscale</span>
+      </div>
+      <div class="flex items-center gap-4">
+        <button onclick="copySSH()" class="hover:text-white transition underline underline-offset-4">Copy SSH command</button>
+        <span class="mono">Auto-refreshes every 3s</span>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+
+    function metric(value, suffix = '') {
+      return typeof value === 'number' && Number.isFinite(value) ? value + suffix : 'N/A';
+    }
+    function setText(id, value) { const e = document.getElementById(id); if(e) e.textContent = value ?? 'N/A'; }
+    function setBar(id, value) {
+      const el = document.getElementById(id);
+      if (el) el.style.width = typeof value === 'number' ? Math.min(100, Math.max(0, value)) + '%' : '0%';
+    }
+    async function fetchStats() {
+      try {
+        const res = await fetch('/api/stats');
+        if (res.status === 401 || res.status === 403) { location.href = '/login'; return; }
+        if (!res.ok) throw new Error('Telemetry unavailable');
+        const data = await res.json();
+        setText('telemetry-state', data.stale ? 'Stale / unavailable' : 'Active sample');
+        setText('header-ts-ip', data.tailscale_ip);
+        const lanLink = document.getElementById('header-local-ip');
+        if (typeof data.local_ip === 'string' && /^(?:[0-9]{1,3}[.]){3}[0-9]{1,3}$/.test(data.local_ip)) {
+          const isHttps = window.location.protocol === 'https:';
+          const port = isHttps ? '8443' : '8000';
+          const scheme = isHttps ? 'https://' : 'http://';
+          lanLink.textContent = data.local_ip + ':' + port;
+          lanLink.href = scheme + data.local_ip + ':' + port + '/';
+        } else {
+          lanLink.textContent = data.local_ip || 'N/A';
+          lanLink.removeAttribute('href');
+        }
+        setText('header-uptime', data.uptime);
+        setText('battery-pct', metric(data.battery?.percentage, '%'));
+        setText('battery-temp', metric(data.battery?.temperature, '°C'));
+        setText('battery-status-badge', data.battery?.status);
+        setBar('battery-bar', data.battery?.percentage);
+        for (const key of ['used','total']) {
+          const value = data.ram?.[key + '_mb'];
+          setText('ram-' + key, typeof value === 'number' ? (value/1024).toFixed(1) : 'N/A');
+        }
+        setText('ram-pct', metric(data.ram?.percent, '%'));
+        setBar('ram-bar', data.ram?.percent);
+        setText('storage-free', metric(data.storage?.free_gb));
+        setText('storage-pct', metric(data.storage?.percent, '%'));
+        setBar('storage-bar', data.storage?.percent);
+        setText('cpu-temp', metric(data.cpu_temp, '°C'));
+        setText('net-wifi-speed', metric(data.network?.wifi_speed));
+        setText('net-wifi-rssi', metric(data.network?.rssi));
+        setText('net-wan-ping', metric(data.network?.wan_ping));
+        setText('adguard-state', data.network?.dns_status);
+      } catch (err) { setText('telemetry-state', 'Unavailable'); }
+    }
+    let torEnabled = false;
+    async function fetchVPN() {
+      try {
+        const res = await fetch('/api/vpn/status');
+        if (!res.ok) throw new Error();
+        updateVPNUI(await res.json());
+      } catch (err) { setText('vpn-badge', 'Status unavailable'); }
+    }
+    function updateVPNUI(data) {
+      torEnabled = data.enabled === true;
+      const verified = torEnabled && data.verified_via_tor === true && !data.stale;
+      setText('vpn-badge', verified ? 'Tor Exit Verified' : torEnabled ? 'Starting / Unverified' : 'OFF');
+      setText('vpn-btn-text', torEnabled ? 'Disable Tor Proxy' : 'Enable Tor Proxy');
+      setText('server-direct-ip', 'Direct IP: ' + (data.direct_ip ?? 'unavailable'));
+      setText('server-gateway-status', 'Full-device routing unavailable');
+      setText('dest-exit-name', verified ? 'Verified Tor exit' : 'No verified Tor exit');
+      setText('dest-exit-ip', 'Proxy exit: ' + (verified ? data.masked_ip : 'unavailable'));
+      setText('dest-exit-status', data.error || 'Only configured applications use this proxy');
+    }
+    async function toggleVPN() {
+      const button = document.getElementById('vpn-toggle-btn');
+      button.disabled = true;
+      try {
+        const res = await fetch('/api/vpn/toggle', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({enabled: !torEnabled}) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || 'Tor control failed');
+        updateVPNUI(data);
+      } catch (err) { alert(err.message); }
+      finally { button.disabled = false; }
+    }
+
+    async function handleLogout() {
+      localStorage.removeItem('jwt');
+      await fetch('/api/logout', { method: 'POST' });
+      window.location.href = '/login';
+    }
+
+    function renderServices(services) {
+      const grid = document.getElementById('services-grid');
+      if (!grid) return;
+
+      const icons = {
+        'filebrowser': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>',
+        'suwayomi': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>',
+        'vaultwarden': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>',
+        'adguard': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>',
+        'terminal': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>',
+        'agy': '<svg class="w-5 h-5 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>',
+        'converter': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>',
+        'syncthing': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>'
+      };
+
+      grid.innerHTML = services.map(svc => {
+        const isRunning = svc.running;
+        const iconSvg = icons[svc.id] || icons['filebrowser'];
+        const badgeClass = isRunning
+          ? 'badge-positive'
+          : 'badge-neutral text-muted';
+
+        const toggleHtml = svc.can_toggle ? `
+          <label class="switch">
+            <input type="checkbox" ${isRunning ? 'checked' : ''} onchange="toggleService('${svc.id}', this)">
+            <span class="slider"></span>
+          </label>
+        ` : `
+          <span class="text-[10px] font-mono px-1.5 py-0.5 rounded badge-neutral">Auto</span>
+        `;
+
+        const openBtnLabel = (svc.id === 'suwayomi' && svc.unread_updates > 0)
+          ? `${svc.open_label} (${svc.unread_updates} new)`
+          : svc.open_label;
+
+        const openBtn = `
+          <a href="${svc.open_url}" ${svc.open_url.startsWith('http') || svc.open_url.startsWith('/') ? 'target="_blank"' : ''} class="gold-gradient-btn w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 ${!isRunning && svc.can_toggle ? 'opacity-40 pointer-events-none' : ''}">
+            <span>${openBtnLabel}</span>
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+          </a>
+        `;
+
+        return `
+          <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+            <div class="space-y-3">
+              <div class="flex items-start justify-between">
+                <div class="service-icon-box">
+                  ${iconSvg}
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="px-2 py-0.5 rounded text-[10px] font-medium ${badgeClass}">
+                    ${svc.status_badge || (isRunning ? 'Active' : 'Disabled')}
+                  </span>
+                  ${toggleHtml}
+                </div>
+              </div>
+              <div>
+                ${svc.category ? `<span class='text-[11px] font-medium text-muted'>${svc.category}</span>` : ''}
+                <h3 class="font-semibold text-sm text-white mt-0.5">${svc.name}</h3>
+                <p class="text-xs text-soft mt-1 leading-relaxed">${svc.desc}</p>
+                ${svc.id === 'vaultwarden' ? `
+                  <div class="mt-2 p-2 rounded-lg bg-surface-raised border border-white/5 text-[11px] text-soft flex items-center justify-between">
+                    <span class="mono">Bitwarden: http://100.75.159.53:8082</span>
+                    <button onclick="navigator.clipboard.writeText('http://100.75.159.53:8082'); alert('Copied Bitwarden Server URL');" class="hover:text-white underline text-[10px]">Copy</button>
+                  </div>
+                ` : ''}
+                ${svc.id === 'syncthing' ? `
+                  <div class="mt-2 p-2 rounded-lg bg-surface-raised border border-white/5 text-[11px] text-soft flex items-center justify-between">
+                    <span class="mono">Sync: PES/Sem3 &harr; PC</span>
+                    <span class="text-accent font-medium">Port 8384</span>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+            <div class="pt-3 border-t border-white/5">
+              ${openBtn}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function openVaultHTTPS() {
+      const host = window.location.hostname;
+      window.open('https://' + host + ':8443/vault/', '_blank');
+    }
+
+    function openSyncthingGUI() {
+      const host = window.location.hostname;
+      window.open('http://' + host + ':8384/', '_blank');
+    }
+
+    async function toggleService(sid, el) {
+      const origChecked = el ? el.checked : false;
+      if (el) el.disabled = true;
+      try {
+        const payload = { service: sid };
+        if (el) payload.enable = origChecked;
+        const res = await fetch('/api/services/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.status === 'error' || data.error) {
+          alert('Toggle failed: ' + (data.message || data.error));
+          if (el) el.checked = !origChecked;
+        } else {
+          await fetchServices();
+        }
+      } catch (err) {
+        alert('Network error toggling service');
+        if (el) el.checked = !origChecked;
+      } finally {
+        if (el) el.disabled = false;
+      }
+    }
+
+    async function fetchServices() {
+      try {
+        const res = await fetch('/api/services');
+        if (res.status === 401 || res.status === 403) { location.href = '/login'; return; }
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        if (Array.isArray(data.services)) {
+          renderServices(data.services);
+        }
+        const totalMem = (data.active_memory_mb !== undefined && data.active_memory_mb !== null)
+          ? data.active_memory_mb
+          : data.total_active_mem_mb;
+        if (totalMem !== undefined && totalMem !== null) {
+          setText('svc-active-mem', totalMem + ' MB');
+        }
+      } catch (err) { /* silent */ }
+    }
+
+    let selectedConvertFiles = [];
+
+    function openConverterModal() {
+      document.getElementById('converter-modal').classList.remove('hidden');
+    }
+
+    function addConvertFiles(fileList) {
+      if (!fileList || !fileList.length) return;
+      for (let i = 0; i < fileList.length; i++) {
+        const f = fileList[i];
+        const exists = selectedConvertFiles.some(existing => existing.name === f.name && existing.size === f.size);
+        if (!exists) {
+          selectedConvertFiles.push(f);
+        }
+      }
+      renderSelectedFiles();
+    }
+
+    function removeConvertFile(index) {
+      selectedConvertFiles.splice(index, 1);
+      renderSelectedFiles();
+    }
+
+    function clearAllConvertFiles() {
+      selectedConvertFiles = [];
+      const input = document.getElementById('convert-file-input');
+      if (input) input.value = '';
+      renderSelectedFiles();
+    }
+
+    function escapeHtml(text) {
+      const span = document.createElement('span'); span.textContent = text; return span.innerHTML;
+    }
+    function formatFileSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function renderSelectedFiles() {
+      const dropzone = document.getElementById('convert-dropzone');
+      const listContainer = document.getElementById('convert-file-list-container');
+      const fileListEl = document.getElementById('convert-file-list');
+      const summaryEl = document.getElementById('convert-file-summary');
+      const btn = document.getElementById('convert-btn');
+
+      if (selectedConvertFiles.length === 0) {
+        if (dropzone) dropzone.classList.remove('hidden');
+        if (listContainer) listContainer.classList.add('hidden');
+        if (btn) {
+          btn.disabled = true;
+          btn.innerText = "Convert & Download PDF";
+        }
+      } else {
+        if (dropzone) dropzone.classList.add('hidden');
+        if (listContainer) listContainer.classList.remove('hidden');
+
+        let totalBytes = 0;
+        selectedConvertFiles.forEach(f => totalBytes += f.size);
+        if (summaryEl) {
+          summaryEl.innerText = `${selectedConvertFiles.length} ${selectedConvertFiles.length === 1 ? 'file' : 'files'} selected (${formatFileSize(totalBytes)})`;
+        }
+
+        if (fileListEl) {
+          fileListEl.innerHTML = selectedConvertFiles.map((file, idx) => {
+            const ext = (file.name.split('.').pop() || 'FILE').toUpperCase();
+            return `
+              <div class="flex items-center justify-between p-2 rounded-lg bg-surface-raised border border-white/5 text-xs">
+                <div class="flex items-center gap-2.5 overflow-hidden">
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-white/5 text-white border border-white/10 shrink-0">${escapeHtml(ext)}</span>
+                  <div class="truncate">
+                    <p class="font-medium text-white truncate max-w-[220px] sm:max-w-xs">${escapeHtml(file.name)}</p>
+                    <p class="text-[10px] text-muted">${formatFileSize(file.size)}</p>
+                  </div>
+                </div>
+                <button type="button" onclick="removeConvertFile(${idx})" class="p-1 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition shrink-0 ml-2">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+              </div>
+            `;
+          }).join('');
+        }
+
+        if (btn) {
+          btn.disabled = false;
+          if (selectedConvertFiles.length === 1) {
+            btn.innerText = "Convert 1 File to PDF";
+          } else {
+            btn.innerText = `Convert All (${selectedConvertFiles.length} Files) & Download ZIP`;
+          }
+        }
+      }
+    }
+
+    function closeConverterModal() {
+      document.getElementById('converter-modal').classList.add('hidden');
+      document.getElementById('convert-progress').classList.add('hidden');
+      clearAllConvertFiles();
+    }
+
+    function initConverter() {
+      const fileInput = document.getElementById('convert-file-input');
+      if (fileInput) {
+        fileInput.addEventListener('change', (e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            addConvertFiles(e.target.files);
+          }
+        });
+      }
+      const dropzone = document.getElementById('convert-dropzone');
+      if (dropzone) {
+        ['dragenter', 'dragover'].forEach(name => {
+          dropzone.addEventListener(name, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.add('border-accent', 'bg-accent/10');
+          });
+        });
+        ['dragleave', 'drop'].forEach(name => {
+          dropzone.addEventListener(name, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.remove('border-accent', 'bg-accent/10');
+          });
+        });
+        dropzone.addEventListener('drop', (e) => {
+          if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            addConvertFiles(e.dataTransfer.files);
+          }
+        });
+      }
+    }
+
+    let notesSaveTimeout = null;
+    let lastSavedNotes = null;
+
+    function autoResizeNotes(textarea) {
+      if (!textarea) return;
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.max(90, textarea.scrollHeight) + 'px';
+    }
+
+    function insertBulletList() {
+      const textarea = document.getElementById('user-notes-input');
+      if (!textarea) return;
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const lineStart = text.lastIndexOf(String.fromCharCode(10), start - 1) + 1;
+      const currentLine = text.substring(lineStart, start);
+      let insertion = '• ';
+      if (currentLine.trim() === '') {
+        textarea.setRangeText(insertion, lineStart, start, 'end');
+      } else {
+        insertion = String.fromCharCode(10) + '• ';
+        textarea.setRangeText(insertion, start, end, 'end');
+      }
+      textarea.focus();
+      autoResizeNotes(textarea);
+      triggerNotesAutoSave();
+    }
+
+    function insertNumberedList() {
+      const textarea = document.getElementById('user-notes-input');
+      if (!textarea) return;
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const lineStart = text.lastIndexOf(String.fromCharCode(10), start - 1) + 1;
+      const currentLine = text.substring(lineStart, start);
+      let insertion = '1. ';
+      if (currentLine.trim() === '') {
+        textarea.setRangeText(insertion, lineStart, start, 'end');
+      } else {
+        insertion = String.fromCharCode(10) + '1. ';
+        textarea.setRangeText(insertion, start, end, 'end');
+      }
+      textarea.focus();
+      autoResizeNotes(textarea);
+      triggerNotesAutoSave();
+    }
+
+    function handleNotesKeydown(e) {
+      const textarea = e.target;
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        textarea.setRangeText('  ', start, end, 'end');
+        autoResizeNotes(textarea);
+        triggerNotesAutoSave();
+        return;
+      }
+      if (e.key === 'Enter') {
+        const start = textarea.selectionStart;
+        const text = textarea.value;
+        const lineStart = text.lastIndexOf(String.fromCharCode(10), start - 1) + 1;
+        const currentLine = text.substring(lineStart, start);
+        const bulletMatch = currentLine.match(/^(\s*)([•\-\*])\s+/);
+        const numberMatch = currentLine.match(/^(\s*)(\d+)\.\s+/);
+
+        if (bulletMatch) {
+          e.preventDefault();
+          const indent = bulletMatch[1];
+          const bullet = bulletMatch[2];
+          if (currentLine.trim() === bullet) {
+            textarea.setRangeText('', lineStart, start, 'end');
+          } else {
+            const nextBullet = String.fromCharCode(10) + indent + bullet + ' ';
+            textarea.setRangeText(nextBullet, start, start, 'end');
+          }
+          autoResizeNotes(textarea);
+          triggerNotesAutoSave();
+        } else if (numberMatch) {
+          e.preventDefault();
+          const indent = numberMatch[1];
+          const num = parseInt(numberMatch[2], 10);
+          if (currentLine.trim() === (num + '.')) {
+            textarea.setRangeText('', lineStart, start, 'end');
+          } else {
+            const nextNum = String.fromCharCode(10) + indent + (num + 1) + '. ';
+            textarea.setRangeText(nextNum, start, start, 'end');
+          }
+          autoResizeNotes(textarea);
+          triggerNotesAutoSave();
+        }
+      }
+    }
+
+    function triggerNotesAutoSave() {
+      const statusEl = document.getElementById('notes-status');
+      if (statusEl) {
+        statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-accent"></span><span>Saving…</span>';
+      }
+      if (notesSaveTimeout) clearTimeout(notesSaveTimeout);
+      notesSaveTimeout = setTimeout(saveNotes, 750);
+    }
+
+    async function saveNotes() {
+      const textarea = document.getElementById('user-notes-input');
+      const statusEl = document.getElementById('notes-status');
+      if (!textarea) return;
+      const content = textarea.value;
+      if (content === lastSavedNotes) {
+        if (statusEl) statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>Saved</span>';
+        return;
+      }
+      try {
+        const res = await fetch('/api/notes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes: content })
+        });
+        if (res.ok) {
+          lastSavedNotes = content;
+          if (statusEl) {
+            statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>Saved</span>';
+            setTimeout(() => {
+              if (statusEl && statusEl.innerText.includes('Saved')) {
+                statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>Ready</span>';
+              }
+            }, 2000);
+          }
+        } else {
+          if (statusEl) statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-400"></span><span>Save error</span>';
+        }
+      } catch (err) {
+        if (statusEl) statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-400"></span><span>Offline</span>';
+      }
+    }
+
+    async function loadNotes() {
+      const textarea = document.getElementById('user-notes-input');
+      if (!textarea) return;
+      try {
+        const res = await fetch('/api/notes');
+        if (res.ok) {
+          const data = await res.json();
+          textarea.value = data.notes || '';
+          lastSavedNotes = textarea.value;
+          autoResizeNotes(textarea);
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    function copySSH() {
+      const cmd = "ssh -p 8022 u0_a505@100.75.159.53";
+      navigator.clipboard.writeText(cmd).then(() => {
+        alert("Copied SSH command to clipboard: " + cmd);
+      }).catch(err => {
+        prompt("Copy SSH Command manually:", cmd);
+      });
+    }
+
+    async function executeConversion() {
+      if (selectedConvertFiles.length === 0) return;
+      const btn = document.getElementById('convert-btn');
+      const progress = document.getElementById('convert-progress');
+      const statusText = document.getElementById('convert-status-text');
+      const statusPct = document.getElementById('convert-status-pct');
+
+      btn.disabled = true;
+      progress.classList.remove('hidden');
+      statusText.innerText = "Uploading files to server...";
+      statusPct.innerText = "0%";
+
+      const formData = new FormData();
+      selectedConvertFiles.forEach(f => formData.append('files', f));
+
+      try {
+        statusText.innerText = `Converting ${selectedConvertFiles.length} documents to PDF...`;
+        statusPct.innerText = "Processing";
+
+        const res = await fetch('/api/convert/pdf', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.message || 'Conversion failed on server');
+        }
+
+        statusText.innerText = "Preparing download...";
+        statusPct.innerText = "100%";
+
+        const blob = await res.blob();
+        let filename = "converted_documents.zip";
+        const disposition = res.headers.get('Content-Disposition');
+        if (disposition && disposition.indexOf('filename=') !== -1) {
+          const parts = disposition.split('filename='); if (parts.length > 1) filename = parts[1].split(';')[0].trim().replace(/['"]/g, '');
+        } else if (selectedConvertFiles.length === 1) {
+          filename = selectedConvertFiles[0].name.replace(/\.[^/.]+$/, "") + ".pdf";
+        }
+
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
+
+        setTimeout(() => {
+          closeConverterModal();
+          btn.disabled = false;
+        }, 800);
+
+      } catch (err) {
+        alert('Upload/Conversion error: ' + err);
+        progress.classList.add('hidden');
+        btn.disabled = false;
+      }
+    }
+
+    // --- AGY Multi-Instance Session Management ---
+    async function fetchAgySessions() {
+      const container = document.getElementById('agy-sessions-container');
+      const newBtn = document.getElementById('agy-new');
+      if (!container) return;
+      try {
+        const res = await fetch('/api/agy/sessions');
+        if (!res.ok) throw new Error('Failed to load AGY sessions');
+        const data = await res.json();
+        const sessions = data.sessions || [];
+        if (newBtn) {
+          newBtn.disabled = sessions.length >= (data.max_sessions || 8);
+        }
+        if (sessions.length === 0) {
+          container.innerHTML = '<div class="p-3.5 rounded-lg bg-surface-raised border border-white/5 text-xs text-soft flex items-center justify-between"><span>No active AGY instances running. Click <b>New AGY Instance</b> to spawn one.</span></div>';
+          return;
+        }
+        container.innerHTML = sessions.map(s => {
+          const safeId = s.id.replace(/[^a-zA-Z0-9_-]/g, '');
+          const isPrimary = Boolean(s.is_primary || safeId === 'default');
+          const label = isPrimary ? 'AGY (Primary)' : (s.name || ('AGY Instance ' + safeId));
+          const badgeText = isPrimary ? 'Primary' : `ID: ${safeId}`;
+          const openUrl = isPrimary ? '/agy/' : `/agy/?arg=${safeId}`;
+          return `
+            <div class="flex items-center justify-between gap-3 p-3 rounded-lg bg-surface-raised border border-white/5 hover:border-white/15 transition">
+              <div class="flex items-center gap-2.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span class="font-medium text-white mono text-xs">${label}</span>
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-mono badge-neutral">${badgeText}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <a href="${openUrl}" target="_blank" rel="noopener noreferrer" class="px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-white text-xs font-medium transition flex items-center gap-1.5">
+                  <span>Open / Reconnect</span>
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                </a>
+                ${isPrimary ? `
+                  <span class="px-2 py-1 rounded-md text-[11px] text-muted font-medium select-none">Protected</span>
+                ` : `
+                  <button type="button" onclick="closeAgySession('${safeId}')" class="px-2.5 py-1 rounded-md bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-300 text-xs font-medium transition">
+                    Close
+                  </button>
+                `}
+              </div>
+            </div>
+          `;
+        }).join('');
+      } catch (err) {
+        container.innerHTML = `<div class="p-3 rounded-lg bg-red-500/10 text-red-300 text-xs">AGY status unavailable: ${err.message}</div>`;
+      }
+    }
+
+    async function createNewAgySession() {
+      const newBtn = document.getElementById('agy-new');
+      if (newBtn) newBtn.disabled = true;
+      try {
+        const res = await fetch('/api/agy/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(err.message || 'Failed to create AGY instance');
+          return;
+        }
+        const data = await res.json();
+        const safeId = (data.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+        if (safeId) {
+          window.open('/agy/?arg=' + safeId, '_blank');
+        }
+        await fetchAgySessions();
+      } catch (e) {
+        alert('Network error creating AGY session: ' + e);
+      } finally {
+        if (newBtn) newBtn.disabled = false;
+      }
+    }
+
+    async function closeAgySession(sessionId) {
+      if (!confirm(`Are you sure you want to terminate AGY instance '${sessionId}'? Any ongoing tasks will be stopped.`)) {
+        return;
+      }
+      try {
+        const res = await fetch(`/api/agy/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(err.message || 'Failed to terminate AGY session');
+          return;
+        }
+        await fetchAgySessions();
+      } catch (e) {
+        alert('Network error closing AGY session: ' + e);
+      }
+    }
+
+    // Init & Polling
+    fetchStats();
+    fetchVPN();
+    fetchServices();
+    fetchAgySessions();
+    setInterval(fetchStats, 3000);
+    setInterval(fetchVPN, 10000);
+    setInterval(fetchServices, 4000);
+    setInterval(fetchAgySessions, 5000);
+
+    document.addEventListener('DOMContentLoaded', () => {
+      initConverter();
+      const textarea = document.getElementById('user-notes-input');
+      if (textarea) {
+        textarea.addEventListener('input', () => {
+          autoResizeNotes(textarea);
+          triggerNotesAutoSave();
+        });
+        textarea.addEventListener('keydown', handleNotesKeydown);
+      }
+      loadNotes();
+    });
+  
+  </script>
+
+  <!-- Document to PDF Converter Modal -->
+  <div id="converter-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm hidden">
+    <div class="golden-glass max-w-lg w-full p-5 sm:p-6 rounded-xl space-y-4 relative max-h-[90vh] flex flex-col justify-between">
+
+      <!-- Modal Header -->
+      <div class="flex items-start justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+          </div>
+          <div>
+            <h3 class="text-base font-semibold text-white">Document to PDF</h3>
+            <p class="text-xs text-soft">Convert single or batch documents instantly</p>
+          </div>
+        </div>
+        <button onclick="closeConverterModal()" class="text-muted hover:text-white p-1 rounded-lg hover:bg-white/5 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+
+      <!-- Hidden Multi-file input -->
+      <input type="file" id="convert-file-input" class="sr-only" accept="*/*" multiple>
+
+      <!-- Dropzone -->
+      <label for="convert-file-input" id="convert-dropzone" class="border border-dashed border-white/15 hover:border-white/30 bg-surface-raised hover:bg-white/5 transition rounded-lg p-6 text-center cursor-pointer flex flex-col items-center justify-center space-y-2 block">
+        <svg class="w-8 h-8 text-muted pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+        <div class="pointer-events-none">
+          <p class="text-xs font-medium text-white">Choose files or drag & drop</p>
+          <p class="text-[11px] text-muted mt-0.5">Word (.docx, .doc), PPT (.pptx), Excel (.xlsx), Images & Text</p>
+        </div>
+        <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-hover text-white border border-white/10 text-xs font-medium transition pointer-events-none">
+          Select files
+        </span>
+      </label>
+
+      <!-- Selected Files Container -->
+      <div id="convert-file-list-container" class="hidden space-y-2 flex-1 overflow-hidden flex flex-col">
+        <div class="flex items-center justify-between text-xs pb-1.5 border-b border-white/5">
+          <span id="convert-file-summary" class="font-medium text-white">0 files selected</span>
+          <div class="flex items-center gap-2">
+            <label for="convert-file-input" class="cursor-pointer text-[11px] px-2 py-0.5 rounded bg-surface-raised text-soft hover:text-white font-medium border border-white/10 transition">
+              + Add More
+            </label>
+            <button type="button" onclick="clearAllConvertFiles()" class="text-[11px] px-2 py-0.5 rounded text-muted hover:text-white transition">
+              Clear All
+            </button>
+          </div>
+        </div>
+        <div id="convert-file-list" class="max-h-48 overflow-y-auto space-y-1 pr-1"></div>
+      </div>
+
+      <!-- Conversion Progress State -->
+      <div id="convert-progress" class="hidden space-y-2">
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-soft font-medium flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+            <span id="convert-status-text">Converting documents to PDF...</span>
+          </span>
+          <span class="mono text-white text-[11px]" id="convert-status-pct">Active</span>
+        </div>
+        <div class="w-full progress-track">
+          <div class="progress-fill w-full"></div>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="pt-2 flex items-center justify-end gap-2 border-t border-white/5">
+        <button onclick="closeConverterModal()" class="px-3.5 py-1.5 rounded-lg text-xs font-medium text-soft hover:bg-white/5 transition">Cancel</button>
+        <button id="convert-btn" onclick="executeConversion()" disabled class="gold-gradient-btn px-4 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed">
+          Convert & Download PDF
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+</body>
+</html>

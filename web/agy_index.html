@@ -529,9 +529,10 @@ html, body {
     return work;
   }
   async function doScroll(action, lines) {
+    const agyArg = (new URLSearchParams(window.location.search).get('arg') || 'default').trim();
     const res = await fetch('/api/agy/scroll', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({action, lines}), credentials: 'same-origin'
+      body: JSON.stringify({action, lines, id: agyArg}), credentials: 'same-origin'
     });
     if (!res.ok) throw new Error('Scroll unavailable (' + res.status + ')');
   }
@@ -596,8 +597,12 @@ html, body {
     scrollPending = 0;
     const val = promptInput.value;
     try {
-      await scrollHistory('bottom');
-      if (!sendTerminalRaw(val + "\r")) throw new Error('Terminal is disconnected');
+      try {
+        await scrollHistory('bottom');
+      } catch (scrollErr) {
+        console.warn('Scroll to bottom skipped/failed:', scrollErr);
+      }
+      if (!sendTerminalRaw(val ? (val + "\r") : "\r")) throw new Error('Terminal is disconnected');
       promptInput.value = '';
     } catch (err) {
       showToast({type:'error', title:'Prompt was not sent', message:err.message});

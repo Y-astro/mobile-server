@@ -39,16 +39,25 @@ def verify_password(password, encoded):
 
 
 class CredentialStore:
-    def __init__(self, path=None):
+    def __init__(self, path=None, ttl=30.0):
         self.path = Path(path or os.environ.get('MOBILE_SERVER_USERS', '~/.config/dashboard/users.json')).expanduser()
         self._lock = threading.Lock()
         self._version = None
         self._users = {}
+        self._last_checked = 0.0
+        self._ttl = ttl
         self._dummy = hash_password(secrets.token_urlsafe(32))
+
+    def invalidate(self):
+        with self._lock:
+            self._last_checked = 0.0
 
     @property
     def users(self):
+        now = time.monotonic()
         with self._lock:
+            if self._users and (now - self._last_checked < self._ttl):
+                return self._users
             try:
                 stat = self.path.stat()
                 version = (stat.st_mtime_ns, stat.st_size)
@@ -61,10 +70,12 @@ class CredentialStore:
                         raise ValueError('Invalid user record')
                     self._users = users
                     self._version = version
+                self._last_checked = now
             except FileNotFoundError:
                 self._users = {}
                 self._version = None
-            return dict(self._users)
+                self._last_checked = now
+            return self._users
 
     def verify(self, username, password):
         record = self.users.get(username)

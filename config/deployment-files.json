@@ -1,0 +1,194 @@
+[
+  {
+    "local": "app/dashboard.py",
+    "remote": "/data/data/com.termux/files/usr/bin/dashboard",
+    "sha256": "4ccc59c1d5a170a7b0e0fe6322db61289033d2e9be9bec9bbe287d9d970b83f9",
+    "bytes": 154457
+  },
+  {
+    "local": "app/auth.py",
+    "remote": "/data/data/com.termux/files/home/.local/lib/mobile-server/auth.py",
+    "sha256": "1684c592f5d468713b45070755ed8f7687b94fde8853439c8b35beaf7f3773be",
+    "bytes": 5455
+  },
+  {
+    "local": "app/telemetry.py",
+    "remote": "/data/data/com.termux/files/home/.local/lib/mobile-server/telemetry.py",
+    "sha256": "f6254516e5eaad10bf49145b95af6cd680ba434c5d492d57cbbc58eb022217be",
+    "bytes": 9239
+  },
+  {
+    "local": "app/limits.py",
+    "remote": "/data/data/com.termux/files/home/.local/lib/mobile-server/limits.py",
+    "sha256": "9434d37af4e784f0aa66bd68d5d7e172d67c1244888ec7d4631a9fecd8688235",
+    "bytes": 1006
+  },
+  {
+    "local": "app/tor_proxy.py",
+    "remote": "/data/data/com.termux/files/home/.local/lib/mobile-server/tor_proxy.py",
+    "sha256": "9ba95fa3769b0afb48fd3b54e78bd47a5b5f9b374ef0b1d6b9228495d17914f1",
+    "bytes": 3665
+  },
+  {
+    "local": "app/laptop.py",
+    "remote": "/data/data/com.termux/files/home/.local/lib/mobile-server/laptop.py",
+    "sha256": "f122f2c16a6859cf8ea803f4882c744168d08cc1e30473f411467d16a69f98b0",
+    "bytes": 3772
+  },
+  {
+    "local": "scripts/server_supervisor.py",
+    "remote": "/data/data/com.termux/files/home/bin/server_supervisor.py",
+    "sha256": "286aec0e2e224d3308d6a551d141261b27e674e8590995f2b49379b7b70388cb",
+    "bytes": 19671
+  },
+  {
+    "local": "scripts/battery_guard.sh",
+    "remote": "/data/data/com.termux/files/home/bin/battery_guard.sh",
+    "sha256": "98f88929468638d037d18414ef98d9dfe30d89f4f36dc120f1ddb0b5c80a02c4",
+    "bytes": 7637
+  },
+  {
+    "local": "scripts/agy_session.sh",
+    "remote": "/data/data/com.termux/files/home/bin/agy_session.sh",
+    "sha256": "9492dd9a536fbbb5b9391388cc7a6dcc1392b01872a306564ef2ba5cc12feab5",
+    "bytes": 1872
+  },
+  {
+    "local": "scripts/laptop_session.py",
+    "remote": "/data/data/com.termux/files/home/bin/laptop_session.py",
+    "sha256": "a03cbfdea4b88f5980386c94d5cdce6718e7a951df204fed3343bf194b7d2388",
+    "bytes": 574
+  },
+  {
+    "local": "config/Caddyfile",
+    "remote": "/data/data/com.termux/files/home/.config/caddy/Caddyfile",
+    "sha256": "45e006d5bd51447eb892d76704cef962bfb285d554416af4c78d63963eae7d1c",
+    "bytes": 13914
+  },
+  {
+    "local": "web/laptop.js",
+    "remote": "/data/data/com.termux/files/home/.config/dashboard/static/laptop.js",
+    "sha256": "8ab251067598d961965d214a6eb967f7dc0df9155815d120cd7e3caeba43eda8",
+    "bytes": 3721
+  },
+  {
+    "local": "web/interactive_player.js",
+    "remote": "/data/data/com.termux/files/home/.config/dashboard/static/interactive_player.js",
+    "sha256": "ad0a6271eb111cf5ca8358eb38867c65e146a496182a21936da38614f81854d4",
+    "bytes": 16455
+  },
+  {
+    "local": "web/filebrowser.js",
+    "remote": "/data/data/com.termux/files/home/.config/dashboard/static/patched_index.js",
+    "sha256": "d63c427d016386e4ced6b58f91390ca3d436eb12c3ed0011c9a9b79065e0c287",
+    "bytes": 792396
+  },
+  {
+    "local": "web/admin.html",
+    "remote": "/data/data/com.termux/files/home/.config/dashboard/static/admin.html",
+    "sha256": "e41551d1962ab0ee0e2d03738ce2eb7c232e945306086a904d84286451cd4cd5",
+    "bytes": 57391
+  },
+  {
+    "local": "web/family.html",
+    "remote": "/data/data/com.termux/files/home/.config/dashboard/static/family.html",
+    "sha256": "862f1a93eba3c9f4d13ed95be6fc511facd797f665215a9daf60b7be371f6a77",
+    "bytes": 32744
+  },
+  {
+    "local": "web/login.html",
+    "remote": "/data/data/com.termux/files/home/.config/dashboard/static/login.html",
+    "sha256": "b497e6e43ad50ca2283d807d67aab90655df3976bc30f2e5dd0b61fbe2c795b7",
+    "bytes": 4373
+  },
+  {
+    "local": "web/portal.css",
+    "remote": "/data/data/com.termux/files/home/.config/dashboard/static/portal.css",
+    "sha256": "f83d62fbeeb434d0e8b99d36e932ee6ad1c8571a95bb69e6b4b53436d6af72a2",
+    "bytes": 33148
+  },
+  {
+    "local": "scripts/start_suwayomi.sh",
+    "remote": "/data/data/com.termux/files/home/bin/start_suwayomi.sh",
+    "sha256": "e592efd96cdfde382054b748dda3d2bdd261040973153b22ae9750c5a464e81e",
+    "bytes": 1704
+  },
+  {
+    "local": "scripts/suwayomi_daily_update.py",
+    "remote": "/data/data/com.termux/files/home/bin/suwayomi_daily_update.py",
+    "sha256": "bbec2444b53bc5838564fc6c038ff99d5269f08746485eeb47331cd2aa581c1d",
+    "bytes": 9567
+  },
+  {
+    "local": "scripts/suwayomi_graphql_filter.py",
+    "remote": "/data/data/com.termux/files/home/bin/suwayomi_graphql_filter.py",
+    "sha256": "e2e090ff925d3b0472882c22909e32de9499aeb182c5b340c231c0db5416fa0e",
+    "bytes": 6665
+  },
+  {
+    "local": "scripts/suwayomi_update.sh",
+    "remote": "/data/data/com.termux/files/home/bin/suwayomi_update.sh",
+    "sha256": "c7441c0d7461154456077321639f86eca52798b01a86fd040fecbbfd08afdfc5",
+    "bytes": 679
+  },
+  {
+    "local": "web/agy_index.html",
+    "remote": "/data/data/com.termux/files/home/.config/ttyd/agy_index.html",
+    "sha256": "16232cf26719cea2dfddddfabca8908fdd005495adc7d660a2f28cdfb7a7a5d6",
+    "bytes": 756858
+  },
+  {
+    "local": "scripts/server-user",
+    "remote": "/data/data/com.termux/files/usr/bin/server-user",
+    "sha256": "2369a32e44ae455669602fedea3b33d4cc110f158d94167ad52a420ba7f94ef9",
+    "bytes": 1264
+  },
+  {
+    "local": "scripts/server-status",
+    "remote": "/data/data/com.termux/files/usr/bin/server-status",
+    "sha256": "d92773c1d3333616b9be339f8778fb1b8260745fcfa018a4b9a73f42c570b316",
+    "bytes": 277
+  },
+  {
+    "local": "scripts/server-health",
+    "remote": "/data/data/com.termux/files/usr/bin/server-health",
+    "sha256": "3806a5dd437b637a97441d25d747a0421246338d9371e730fa8a475c51a5f1cb",
+    "bytes": 98
+  },
+  {
+    "local": "scripts/server-up",
+    "remote": "/data/data/com.termux/files/usr/bin/server-up",
+    "sha256": "4b9ab1911a443d297428a3714806a0b8d6b8ae42e2801a68804e92a4d8a18556",
+    "bytes": 98
+  },
+  {
+    "local": "scripts/server-down",
+    "remote": "/data/data/com.termux/files/usr/bin/server-down",
+    "sha256": "0e8697c27172c6475bb8f47d5f9fb2f62b863d59e6358836afe3d994618c0907",
+    "bytes": 97
+  },
+  {
+    "local": "scripts/server-restart",
+    "remote": "/data/data/com.termux/files/usr/bin/server-restart",
+    "sha256": "1517055c450a2251f5d30f18d4e81857cef175cde7e1a7fca00699f3989deace",
+    "bytes": 154
+  },
+  {
+    "local": "scripts/agy-resume",
+    "remote": "/data/data/com.termux/files/usr/bin/agy-resume",
+    "sha256": "d6752bfb64e8f4b92bb3151a53c80fd206be242f4033c136451d179277ebb513",
+    "bytes": 612
+  },
+  {
+    "local": "scripts/termux_session.sh",
+    "remote": "/data/data/com.termux/files/home/bin/termux_session.sh",
+    "sha256": "17db9b6b6d526ed81ef3230e00e8b104c5e4a4edec24c8008e5d8d6f33ac4fe0",
+    "bytes": 853
+  },
+  {
+    "local": "scripts/start-services.sh",
+    "remote": "/data/data/com.termux/files/home/start_services.sh",
+    "sha256": "90dd7aacc85f3289ed53e35752b4dc804d48c92abd29136f4cc81b63f89d0bcc",
+    "bytes": 316
+  }
+]
