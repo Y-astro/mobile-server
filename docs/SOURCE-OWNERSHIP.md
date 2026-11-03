@@ -5,6 +5,7 @@
 - **`app/dashboard.py`**: Owns HTTP request composition, route dispatching, session token generation/verification, and service orchestration. It embeds fallback HTML templates but prefers external templates on disk when present.
 - **`app/notes.py`**: Owns user quick notes persistence (`NotesStore`), including thread-safe locking, JSON file encoding, 0600 file permissions, and atomic temporary replacement.
 - **`app/document_conversion.py`**: Owns batch document conversion (`convert_documents_batch`) via headless LibreOffice in proot-distro, isolated batch scratch directories, process timeout handling, safe output naming, and single PDF vs. ZIP packaging.
+- **`app/service_catalog.py`**: Pure, shared single source of truth for service identity and endpoint facts. Exposes focused builders `runtime_services(home, prefix)` and `dashboard_services()`. Free of side effects, subprocess calls, network requests, filesystem access, and background work.
 - **`app/auth.py`**: Owns credential verification (PBKDF2 SHA-256), login rate limiting, and cached user credential storage (`CredentialStore`) with bounded memory and thread-safe invalidation.
 - **`app/limits.py`**: Owns admission control (per-endpoint semaphores) and request body size enforcement (`BODY_LIMITS`).
 - **`app/telemetry.py`**: Owns system measurements, including hardware telemetry (battery, RAM, storage, CPU temperature), network metrics, and process RSS tracking.

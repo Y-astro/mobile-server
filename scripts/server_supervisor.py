@@ -27,8 +27,14 @@ import subprocess
 import sys
 import time
 
-HOME = Path('/data/data/com.termux/files/home')
-PREFIX = Path('/data/data/com.termux/files/usr')
+HOME = Path(os.environ.get('TERMUX_HOME', '/data/data/com.termux/files/home'))
+PREFIX = Path(os.environ.get('PREFIX', '/data/data/com.termux/files/usr'))
+MOBILE_LIB = Path.home() / '.local/lib/mobile-server'
+_lib_dir = MOBILE_LIB if MOBILE_LIB.is_dir() else (HOME / '.local/lib/mobile-server' if (HOME / '.local/lib/mobile-server').is_dir() else Path(__file__).resolve().parents[1] / 'app')
+if str(_lib_dir) not in sys.path:
+    sys.path.insert(0, str(_lib_dir))
+
+from service_catalog import runtime_services
 STATE = HOME / '.config/server_recovery'
 DISABLED = HOME / '.config/services_disabled'
 PAUSED = STATE / 'paused'
@@ -39,24 +45,7 @@ FAILURES = 3
 
 
 def services():
-    h, p = str(HOME), str(PREFIX)
-    return {
-        'ssh': dict(port=8022, cmd=[f'{p}/bin/sshd', '-D']),
-        'dashboard': dict(port=8001, path='/healthz', cmd=[f'{p}/bin/python3', '-u', f'{p}/bin/dashboard']),
-        'caddy': dict(port=8000, path='/healthz', cmd=[f'{p}/bin/caddy', 'run', '--config', f'{h}/.config/caddy/Caddyfile']),
-        'filebrowser': dict(port=8085, path='/drive/', cmd=[f'{p}/bin/filebrowser', '-d', f'{h}/.config/filebrowser/filebrowser.db', '-a', '127.0.0.1', '-p', '8085', '-c', f'{h}/.config/filebrowser/fb_config.json', '--cacheDir', f'{h}/.cache/filebrowser', '--disableImageResolutionCalc', '--imageProcessors', '2']),
-        'transfer_gateway': dict(port=8081, path='/healthz', cmd=[f'{h}/bin/mobile-gateway', '-backend', 'http://127.0.0.1:8085']),
-        'adguard': dict(port=3000, path='/', cmd=[f'{h}/adguard/AdGuardHome/AdGuardHome', '-c', f'{h}/adguard/data/AdGuardHome.yaml', '-w', f'{h}/adguard/data', '--no-permcheck', '--no-etc-hosts']),
-        'syncthing': dict(port=8384, path='/rest/noauth/health', cmd=[f'{p}/bin/syncthing', 'serve', '--config', f'{h}/.local/state/syncthing', '--data', f'{h}/.local/state/syncthing', '--allow-newer-config', '--no-browser']),
-        'vaultwarden': dict(port=8082, path='/alive', cmd=[f'{p}/bin/proot-distro', 'login', 'debian', '--', '/usr/bin/env', 'ROCKET_PORT=8082', 'ROCKET_ADDRESS=127.0.0.1', f'DATA_FOLDER={h}/vaultwarden/data', f'WEB_VAULT_FOLDER={h}/vaultwarden/web-vault', f'{h}/vaultwarden/vaultwarden']),
-        'terminal': dict(port=7681, path='/terminal/', cmd=[f'{p}/bin/ttyd', '-W', '-i', '127.0.0.1', '-p', '7681', '-b', '/terminal', '-I', f'{h}/.config/ttyd/termux_index.html', f'{h}/bin/termux_session.sh']),
-        'agy': dict(port=7682, path='/agy/', cmd=[f'{p}/bin/ttyd', '-W', '-a', '-m', '8', '-i', '127.0.0.1', '-p', '7682', '-b', '/agy', '-I', f'{h}/.config/ttyd/agy_index.html', f'{h}/bin/agy_session.sh']),
-        'laptop_terminal': dict(port=7683, path='/laptop/', cmd=[f'{p}/bin/ttyd', '-W', '-a', '-m', '8', '-i', '127.0.0.1', '-p', '7683', '-b', '/laptop', f'{p}/bin/python3', f'{h}/bin/laptop_session.py']),
-        'tor': dict(port=9050, protocol='socks5', cmd=[f'{p}/bin/tor', '-f', f'{h}/.config/tor/torrc']),
-        'suwayomi': dict(port=4569, path='/suwayomi/', cmd=[f'{h}/bin/start_suwayomi.sh']),
-        'suwayomi_filter': dict(port=4566, path='/healthz', cmd=[f'{p}/bin/python3', f'{h}/bin/suwayomi_graphql_filter.py']),
-        'battery_guard': dict(cmd=[f'{p}/bin/bash', f'{h}/bin/battery_guard.sh', '--daemon']),
-    }
+    return runtime_services(str(HOME), str(PREFIX))
 
 
 def initialize():
