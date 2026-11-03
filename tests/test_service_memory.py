@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
+import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'app'))
 from auth import hash_password, save_users
@@ -34,6 +35,26 @@ class ServiceMemoryTests(unittest.TestCase):
         cls.temp.cleanup()
         if cls.oldhome is not None:
             os.environ['HOME'] = cls.oldhome
+
+    def setUp(self):
+        # Guard against any outbound network calls during tests
+        self.urlopen_patcher = patch.object(
+            urllib.request,
+            'urlopen',
+            side_effect=AssertionError("Outbound network access forbidden in unit tests")
+        )
+        self.urlopen_patcher.start()
+        # Mock get_suwayomi_unread_cached deterministically for all tests
+        self.suwayomi_unread_patcher = patch.object(
+            self.mod,
+            'get_suwayomi_unread_cached',
+            return_value={'unread': 0, 'unread_30d': 0, 'last_chapter_title': None, 'ts': 0}
+        )
+        self.suwayomi_unread_patcher.start()
+
+    def tearDown(self):
+        self.suwayomi_unread_patcher.stop()
+        self.urlopen_patcher.stop()
 
     def test_no_synthetic_jitter_or_estimates_exist(self):
         self.assertFalse(hasattr(self.mod, 'ESTIMATED_SERVICE_MEM'))
@@ -128,8 +149,6 @@ class ServiceMemoryTests(unittest.TestCase):
             self.assertEqual(vw['status_badge'], 'Active (10.0 MB)')
 
     def test_disabled_service_zero_behavior(self):
-        orig_exists = Path.exists
-
         def fake_exists(self):
             p = str(self)
             if 'services_disabled/filebrowser' in p:
