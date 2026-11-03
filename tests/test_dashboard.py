@@ -133,3 +133,57 @@ class DashboardTests(unittest.TestCase):
    mock_conv.return_value = (b"%PDF-test", "test.pdf", "application/pdf", None)
    status, _ = self.request('POST', '/api/convert/pdf', user='testadmin', body=body, headers={'Content-Type': ctype})
    self.assertEqual(status, 200)
+
+ def test_notes_api_unauthenticated_denial(self):
+  status, _ = self.request('GET', '/api/notes')
+  self.assertEqual(status, 401)
+  status, _ = self.request('POST', '/api/notes', body=b'{"notes":"test"}', headers={'Content-Type': 'application/json'})
+  self.assertEqual(status, 401)
+
+ def test_notes_api_load_save_and_role_isolation(self):
+  import json
+  # Initial load is empty string
+  status, data = self.request('GET', '/api/notes', user='testadmin')
+  self.assertEqual(status, 200)
+  self.assertEqual(json.loads(data), {'notes': ''})
+
+  # Save admin notes
+  payload = json.dumps({'notes': 'Admin confidential note'}).encode('utf-8')
+  status, data = self.request('POST', '/api/notes', user='testadmin', body=payload, headers={'Content-Type': 'application/json'})
+  self.assertEqual(status, 200)
+  self.assertEqual(json.loads(data), {'status': 'saved'})
+
+  # Verify admin load returns updated notes
+  status, data = self.request('GET', '/api/notes', user='testadmin')
+  self.assertEqual(status, 200)
+  self.assertEqual(json.loads(data), {'notes': 'Admin confidential note'})
+
+  # Verify family user gets isolated empty notes initially
+  status, data = self.request('GET', '/api/notes', user='testfamily')
+  self.assertEqual(status, 200)
+  self.assertEqual(json.loads(data), {'notes': ''})
+
+  # Save family notes
+  family_payload = json.dumps({'notes': 'Family grocery list'}).encode('utf-8')
+  status, data = self.request('POST', '/api/notes', user='testfamily', body=family_payload, headers={'Content-Type': 'application/json'})
+  self.assertEqual(status, 200)
+
+  # Check both retain isolated content
+  status, data = self.request('GET', '/api/notes', user='testadmin')
+  self.assertEqual(json.loads(data), {'notes': 'Admin confidential note'})
+  status, data = self.request('GET', '/api/notes', user='testfamily')
+  self.assertEqual(json.loads(data), {'notes': 'Family grocery list'})
+
+ def test_notes_api_invalid_payload(self):
+  import json
+  # Missing 'notes' key
+  status, data = self.request('POST', '/api/notes', user='testadmin', body=b'{"wrong":"key"}', headers={'Content-Type': 'application/json'})
+  self.assertEqual(status, 400)
+
+  # 'notes' not a string
+  status, data = self.request('POST', '/api/notes', user='testadmin', body=b'{"notes": 12345}', headers={'Content-Type': 'application/json'})
+  self.assertEqual(status, 400)
+
+  # Not JSON
+  status, data = self.request('POST', '/api/notes', user='testadmin', body=b'plain text', headers={'Content-Type': 'text/plain'})
+  self.assertEqual(status, 400)
