@@ -28,11 +28,15 @@ class DocumentConversionTests(unittest.TestCase):
 
     @patch("subprocess.Popen")
     def test_single_file_success(self, mock_popen):
+        batch_dir_captured = []
+
         def fake_communicate(timeout=None):
             # simulate proot/libreoffice creating doc_000.pdf in batch_dir
             batch_dirs = glob.glob(os.path.join(self.conversion_root, "batch_*"))
             self.assertTrue(len(batch_dirs) == 1)
-            pdf_path = os.path.join(batch_dirs[0], "doc_000.pdf")
+            bdir = batch_dirs[0]
+            batch_dir_captured.append(bdir)
+            pdf_path = os.path.join(bdir, "doc_000.pdf")
             with open(pdf_path, "wb") as f:
                 f.write(b"%PDF-1.4 simulated pdf")
             return "", ""
@@ -49,14 +53,38 @@ class DocumentConversionTests(unittest.TestCase):
         self.assertEqual(out_name, "report.pdf")
         self.assertEqual(mime, "application/pdf")
         self.assertEqual(out_bytes, b"%PDF-1.4 simulated pdf")
+
+        # Verify Popen call arguments and configuration
+        mock_popen.assert_called_once()
+        call_args, call_kwargs = mock_popen.call_args
+        cmd = call_args[0]
+        bdir = batch_dir_captured[0]
+        expected_cmd = [
+            "proot-distro", "login", "debian", "--",
+            "libreoffice", f"-env:UserInstallation=file://{bdir}/profile", "--headless", "--convert-to", "pdf",
+            os.path.join(bdir, "doc_000.docx"),
+            "--outdir", bdir,
+        ]
+        self.assertEqual(cmd, expected_cmd)
+        self.assertEqual(call_kwargs.get("stdout"), subprocess.PIPE)
+        self.assertEqual(call_kwargs.get("stderr"), subprocess.PIPE)
+        self.assertTrue(call_kwargs.get("text"))
+        self.assertTrue(call_kwargs.get("start_new_session"))
+
+        # Verify communicate was called with timeout 47 (35 + 1 * 12)
+        proc.communicate.assert_called_once_with(timeout=47)
+
         # Ensure temporary batch directory is removed
         self.assertEqual(glob.glob(os.path.join(self.conversion_root, "batch_*")), [])
 
     @patch("subprocess.Popen")
     def test_multiple_files_zip_success(self, mock_popen):
+        batch_dir_captured = []
+
         def fake_communicate(timeout=None):
             batch_dirs = glob.glob(os.path.join(self.conversion_root, "batch_*"))
             bdir = batch_dirs[0]
+            batch_dir_captured.append(bdir)
             with open(os.path.join(bdir, "doc_000.pdf"), "wb") as f:
                 f.write(b"PDF 0")
             with open(os.path.join(bdir, "doc_001.pdf"), "wb") as f:
@@ -75,6 +103,27 @@ class DocumentConversionTests(unittest.TestCase):
         self.assertEqual(out_name, "converted_documents.zip")
         self.assertEqual(mime, "application/zip")
         self.assertIsNotNone(out_bytes)
+
+        # Verify Popen call arguments and configuration
+        mock_popen.assert_called_once()
+        call_args, call_kwargs = mock_popen.call_args
+        cmd = call_args[0]
+        bdir = batch_dir_captured[0]
+        expected_cmd = [
+            "proot-distro", "login", "debian", "--",
+            "libreoffice", f"-env:UserInstallation=file://{bdir}/profile", "--headless", "--convert-to", "pdf",
+            os.path.join(bdir, "doc_000.docx"),
+            os.path.join(bdir, "doc_001.txt"),
+            "--outdir", bdir,
+        ]
+        self.assertEqual(cmd, expected_cmd)
+        self.assertEqual(call_kwargs.get("stdout"), subprocess.PIPE)
+        self.assertEqual(call_kwargs.get("stderr"), subprocess.PIPE)
+        self.assertTrue(call_kwargs.get("text"))
+        self.assertTrue(call_kwargs.get("start_new_session"))
+
+        # Verify communicate was called with timeout 59 (35 + 2 * 12)
+        proc.communicate.assert_called_once_with(timeout=59)
 
         with zipfile.ZipFile(io.BytesIO(out_bytes), "r") as zf:
             namelist = zf.namelist()
