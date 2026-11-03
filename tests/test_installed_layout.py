@@ -30,6 +30,7 @@ class InstalledLayoutImportTests(unittest.TestCase):
             installed_dashboard = fake_bin / "dashboard"
             shutil.copy(dashboard_src, installed_dashboard)
 
+            # Copy only helper modules to fake_lib
             # Copy all flat app/*.py except dashboard to fake_lib
             required_helpers = [
                 "notes.py",
@@ -87,6 +88,7 @@ convert_documents_batch = mod["convert_documents_batch"]
 assert NotesStore.__module__ == "notes"
 assert convert_documents_batch.__module__ == "document_conversion"
 
+# Verify imported module file locations point to installed library directory
 # Verify exact installed module directory for both extracted helpers
 import notes, document_conversion
 assert Path(notes.__file__).resolve().parent == fake_lib.resolve(), (
@@ -96,6 +98,7 @@ assert Path(document_conversion.__file__).resolve().parent == fake_lib.resolve()
     f"document_conversion.__file__ parent {{Path(document_conversion.__file__).resolve().parent}} != {{fake_lib.resolve()}}"
 )
 
+# Verify notes bindings operate on temp HOME path
 # Verify NOTES_STORE exact temporary notes path and synthetic notes roundtrip
 expected_notes_path = fake_home / ".config" / "dashboard" / "notes.json"
 notes_store = mod["NOTES_STORE"]
