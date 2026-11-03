@@ -24,7 +24,7 @@ class ServiceCatalogTests(unittest.TestCase):
         """Catalog import performs no filesystem access, subprocess calls, network, or secret reads."""
         code = (
             "import sys, os, typing\n"
-            "with open('app/service_catalog.py') as f:\n"
+            "with open(sys.argv[1]) as f:\n"
             "    source = f.read()\n"
             "def audit_hook(event, args):\n"
             "    if event in ('open', 'os.mkdir', 'os.rename', 'os.remove', 'shutil.rmtree'):\n"
@@ -37,15 +37,16 @@ class ServiceCatalogTests(unittest.TestCase):
             "        raise PermissionError(f'Denied thread start')\n"
             "sys.addaudithook(audit_hook)\n"
             "g = {}\n"
-            "exec(compile(source, 'app/service_catalog.py', 'exec'), g)\n"
+            "exec(compile(source, sys.argv[1], 'exec'), g)\n"
             "assert 'runtime_services' in g\n"
             "assert 'dashboard_services' in g\n"
             "print('EXEC_AUDIT_OK')\n"
         )
+        catalog_src = str((ROOT / 'app/service_catalog.py').resolve())
         with tempfile.TemporaryDirectory() as td:
             res = subprocess.run(
-                [sys.executable, '-I', '-c', code],
-                cwd=str(ROOT),
+                [sys.executable, '-I', '-c', code, catalog_src],
+                cwd=td,
                 capture_output=True,
                 text=True,
                 timeout=15
@@ -140,6 +141,31 @@ class ServiceCatalogTests(unittest.TestCase):
         # Fallback probe ports helper
         self.assertEqual(service_catalog.suwayomi_probe_ports(), [4569, 4567])
 
+    def test_filebrowser_single_source_endpoint_mutation(self):
+        """Controlled mutation of filebrowser port updates runtime health, argv -p, dashboard card, and gateway backend argv."""
+        orig_fb = copy.deepcopy(service_catalog.SERVICE_ENDPOINTS['filebrowser'])
+        try:
+            service_catalog.SERVICE_ENDPOINTS['filebrowser']['port'] = 18085
+            rt = service_catalog.runtime_services('/home/test', '/usr/test')
+            dash = service_catalog.dashboard_services()
+
+            # FileBrowser runtime health port
+            self.assertEqual(rt['filebrowser']['port'], 18085)
+            # FileBrowser argv -p
+            fb_cmd = rt['filebrowser']['cmd']
+            p_idx = fb_cmd.index('-p')
+            self.assertEqual(fb_cmd[p_idx + 1], '18085')
+
+            # Dashboard card port
+            self.assertEqual(dash['filebrowser']['port'], 18085)
+
+            # transfer_gateway backend argv follows filebrowser port
+            gw_cmd = rt['transfer_gateway']['cmd']
+            backend_idx = gw_cmd.index('-backend')
+            self.assertEqual(gw_cmd[backend_idx + 1], 'http://127.0.0.1:18085')
+        finally:
+            service_catalog.SERVICE_ENDPOINTS['filebrowser'] = orig_fb
+
     def test_supervisor_compatibility_wrapper(self):
         """server_supervisor.services() returns runtime_services with supervisor globals."""
         import importlib.util
@@ -168,8 +194,10 @@ class ServiceCatalogTests(unittest.TestCase):
             home_bin.mkdir(parents=True, exist_ok=True)
             prefix_bin.mkdir(parents=True, exist_ok=True)
 
-            # Copy all flat app helpers so later modules integrate without a hardcoded incomplete list
+            # Copy flat app helpers excluding dashboard.py (actual executable is PREFIX/bin/dashboard)
             for app_file in (ROOT / 'app').glob('*.py'):
+                if app_file.name == 'dashboard.py':
+                    continue
                 shutil.copy(app_file, lib_dir / app_file.name)
 
             # Copy server_supervisor.py and dashboard

@@ -14,7 +14,7 @@ SERVICE_ENDPOINTS: Dict[str, Dict[str, Any]] = {
     'dashboard': {'port': 8001, 'path': '/healthz'},
     'caddy': {'port': 8000, 'path': '/healthz'},
     'filebrowser': {'port': 8085, 'path': '/drive/'},
-    'transfer_gateway': {'port': 8081, 'path': '/healthz', 'backend_port': 8085},
+    'transfer_gateway': {'port': 8081, 'path': '/healthz'},
     'adguard': {'port': 3000, 'path': '/'},
     'syncthing': {'port': 8384, 'path': '/rest/noauth/health'},
     'vaultwarden': {'port': 8082, 'path': '/alive'},
@@ -50,7 +50,7 @@ def runtime_services(home: str, prefix: str) -> Dict[str, Dict[str, Any]]:
     """
     h, p = str(home), str(prefix)
     fb_port = str(SERVICE_ENDPOINTS['filebrowser']['port'])
-    gw_backend_port = str(SERVICE_ENDPOINTS['transfer_gateway']['backend_port'])
+    gw_backend_port = fb_port
     vw_port = str(SERVICE_ENDPOINTS['vaultwarden']['port'])
 
     return {
