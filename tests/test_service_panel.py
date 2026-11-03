@@ -25,6 +25,13 @@ from service_panel import (
 class ServicePanelBaseTestCase(unittest.TestCase):
     """Base class enforcing strict system call isolation across all test cases."""
 
+    def tearDown(self):
+        # Probe helpers catch exceptions, so guards must also check their counters.
+        self.assertEqual(self.unmocked_check_output_calls, 0)
+        self.assertEqual(self.unmocked_socket_calls, 0)
+        self.assertEqual(self.unmocked_proc_open_calls, 0)
+        super().tearDown()
+
     def setUp(self):
         super().setUp()
         # Default counters for trapped unmocked calls
@@ -438,3 +445,11 @@ class TestIsolationTripwireCheck(ServicePanelBaseTestCase):
             socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         with self.assertRaises(AssertionError):
             open("/proc/1/status")
+        self.assertEqual(
+            (self.unmocked_check_output_calls, self.unmocked_socket_calls, self.unmocked_proc_open_calls),
+            (1, 1, 1),
+        )
+        # These intentional guard checks are verified above; shared teardown checks accidental calls.
+        self.unmocked_check_output_calls = 0
+        self.unmocked_socket_calls = 0
+        self.unmocked_proc_open_calls = 0
