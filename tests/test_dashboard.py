@@ -1,8 +1,10 @@
 """Run the real handler with isolated, disposable HOME and test credentials."""
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import threading
@@ -11,11 +13,19 @@ from unittest.mock import patch, Mock
 from http.client import HTTPConnection
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'app'))
 from auth import hash_password, save_users
+import telemetry
+telemetry.Telemetry.start = lambda self: None
 
 class DashboardTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
+  cls.repo_root=Path(__file__).resolve().parents[1]
+  cls.web_dir=cls.repo_root/'web'
   cls.temp=tempfile.TemporaryDirectory();cls.oldhome=os.environ.get('HOME');os.environ['HOME']=cls.temp.name
+  cls.static_dir=Path(cls.temp.name)/'.config/dashboard/static'
+  cls.static_dir.mkdir(parents=True, exist_ok=True)
+  for page in ['admin.html', 'family.html', 'login.html']:
+   shutil.copy2(cls.web_dir / page, cls.static_dir / page)
   save_users(Path(cls.temp.name)/'.config/dashboard/users.json', {'testadmin':{'password_hash':hash_password('test-password-long'), 'role':'admin'},'testfamily':{'password_hash':hash_password('family-password-long'),'role':'family'}})
   spec=importlib.util.spec_from_file_location('isolated_dashboard',Path(__file__).resolve().parents[1]/'app/dashboard.py');cls.mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(cls.mod)
   cls.server=cls.mod.ThreadingHTTPServer(('127.0.0.1',0),cls.mod.DashboardHandler)
@@ -32,6 +42,10 @@ class DashboardTests(unittest.TestCase):
   c=HTTPConnection('127.0.0.1',self.server.server_port,timeout=5);h=headers or {}
   if user:h['Cookie']='session_token='+self.mod.sign_session_token(user)
   c.request(method,path,body=body,headers=h);r=c.getresponse();result=(r.status,r.read(),{k.lower(): v for k, v in r.getheaders()});c.close();return result
+ def request_full(self,method,path,user=None,body=None,headers=None):
+  c=HTTPConnection('127.0.0.1',self.server.server_port,timeout=5);h=headers or {}
+  if user:h['Cookie']='session_token='+self.mod.sign_session_token(user)
+  c.request(method,path,body=body,headers=h);r=c.getresponse();result=(r.status,r.read(),{k.lower(): v for k, v in r.getheaders()},r.msg.get_all('Set-Cookie') or []);c.close();return result
  def _make_multipart(self, files, boundary="----WebKitFormBoundaryTest123"):
   parts = []
   for field_name, filename, data, ctype in files:
@@ -187,3 +201,116 @@ class DashboardTests(unittest.TestCase):
   # Not JSON
   status, data = self.request('POST', '/api/notes', user='testadmin', body=b'plain text', headers={'Content-Type': 'text/plain'})
   self.assertEqual(status, 400)
+
+ def test_role_template_byte_exactness_and_isolation(self):
+  # 1. /login matches web/login.html byte-for-byte
+  status, data, headers = self.request_resp('GET', '/login')
+  self.assertEqual(status, 200)
+  self.assertEqual(headers.get('content-type'), 'text/html; charset=utf-8')
+  self.assertEqual(data, (self.web_dir / 'login.html').read_bytes())
+
+  # 2. Authenticated admin root/index matches web/admin.html byte-for-byte
+  for path in ['/', '/index', '/index.html']:
+   status, data, headers = self.request_resp('GET', path, user='testadmin')
+   self.assertEqual(status, 200)
+   self.assertEqual(headers.get('content-type'), 'text/html; charset=utf-8')
+   self.assertEqual(data, (self.web_dir / 'admin.html').read_bytes())
+   self.assertNotEqual(data, (self.web_dir / 'family.html').read_bytes())
+
+  # 3. Authenticated family root/index matches web/family.html byte-for-byte
+  for path in ['/', '/index', '/index.html']:
+   status, data, headers = self.request_resp('GET', path, user='testfamily')
+   self.assertEqual(status, 200)
+   self.assertEqual(headers.get('content-type'), 'text/html; charset=utf-8')
+   self.assertEqual(data, (self.web_dir / 'family.html').read_bytes())
+   self.assertNotEqual(data, (self.web_dir / 'admin.html').read_bytes())
+
+ def test_role_template_missing_file_returns_503(self):
+  admin_target = self.static_dir / 'admin.html'
+  admin_backup = admin_target.read_bytes()
+  try:
+   admin_target.unlink()
+   status, data, headers = self.request_resp('GET', '/', user='testadmin')
+   self.assertEqual(status, 503)
+   self.assertEqual(headers.get('content-type'), 'text/plain; charset=utf-8')
+   self.assertIn(b"Service Unavailable", data)
+   # Assert no filesystem/internal path leak in response body
+   self.assertNotIn(str(self.static_dir).encode(), data)
+  finally:
+   admin_target.write_bytes(admin_backup)
+
+  login_target = self.static_dir / 'login.html'
+  login_backup = login_target.read_bytes()
+  try:
+   login_target.unlink()
+   status, data, headers = self.request_resp('GET', '/login')
+   self.assertEqual(status, 503)
+   self.assertEqual(headers.get('content-type'), 'text/plain; charset=utf-8')
+   self.assertIn(b"Service Unavailable", data)
+   self.assertNotIn(str(self.static_dir).encode(), data)
+  finally:
+   login_target.write_bytes(login_backup)
+
+ def test_synthetic_login_cookie_and_logout_flow(self):
+  with patch.object(self.mod, 'get_filebrowser_jwt', return_value='synthetic-jwt-token'):
+   # Real temporary password verification over HTTP
+   login_payload = json.dumps({'username': 'testadmin', 'password': 'test-password-long'}).encode('utf-8')
+   status, data, headers, cookies = self.request_full('POST', '/api/login', body=login_payload, headers={'Content-Type': 'application/json'})
+   self.assertEqual(status, 200)
+   self.assertEqual(len(cookies), 3)
+
+   cookie_dict = {}
+   for ck in cookies:
+    name = ck.split(';')[0].split('=')[0]
+    cookie_dict[name] = ck
+
+   self.assertIn('session_token', cookie_dict)
+   self.assertIn('session_user', cookie_dict)
+   self.assertIn('session_token_http', cookie_dict)
+
+   self.assertIn('HttpOnly', cookie_dict['session_token'])
+   self.assertIn('SameSite=Lax', cookie_dict['session_token'])
+   self.assertIn('Max-Age=2592000', cookie_dict['session_token'])
+   self.assertNotIn('Secure', cookie_dict['session_token'])
+
+   self.assertIn('SameSite=Lax', cookie_dict['session_user'])
+   self.assertNotIn('HttpOnly', cookie_dict['session_user'])
+   self.assertNotIn('Secure', cookie_dict['session_user'])
+
+   self.assertIn('HttpOnly', cookie_dict['session_token_http'])
+   self.assertIn('SameSite=Lax', cookie_dict['session_token_http'])
+   self.assertNotIn('Secure', cookie_dict['session_token_http'])
+
+   # Repeat over HTTPS forwarded protocol
+   status_s, _, _, cookies_s = self.request_full('POST', '/api/login', body=login_payload, headers={'Content-Type': 'application/json', 'X-Forwarded-Proto': 'https'})
+   self.assertEqual(status_s, 200)
+   self.assertEqual(len(cookies_s), 2)  # session_token and session_user, no fallback http token
+   s_dict = {ck.split(';')[0].split('=')[0]: ck for ck in cookies_s}
+   self.assertIn('Secure', s_dict['session_token'])
+   self.assertIn('Secure', s_dict['session_user'])
+   self.assertNotIn('session_token_http', s_dict)
+
+   # Access role page using issued session_token cookie directly
+   token_part = cookie_dict['session_token'].split(';')[0]
+   status_page, page_data, _ = self.request_resp('GET', '/', headers={'Cookie': token_part})
+   self.assertEqual(status_page, 200)
+   self.assertEqual(page_data, (self.web_dir / 'admin.html').read_bytes())
+
+   # Verify legacy GET /logout clears all three cookies including session_token_http
+   status_l, _, headers_l, logout_cookies = self.request_full('GET', '/logout')
+   self.assertEqual(status_l, 302)
+   self.assertEqual(headers_l.get('location'), '/login')
+   self.assertEqual(len(logout_cookies), 3)
+   l_dict = {ck.split(';')[0].split('=')[0]: ck for ck in logout_cookies}
+   for k in ['session_token', 'session_user', 'session_token_http']:
+    self.assertIn(k, l_dict)
+    self.assertIn('Max-Age=0', l_dict[k])
+
+   # Verify POST /api/logout clears all three cookies as well
+   status_p, _, _, post_logout_cookies = self.request_full('POST', '/api/logout')
+   self.assertEqual(status_p, 200)
+   self.assertEqual(len(post_logout_cookies), 3)
+   p_dict = {ck.split(';')[0].split('=')[0]: ck for ck in post_logout_cookies}
+   for k in ['session_token', 'session_user', 'session_token_http']:
+    self.assertIn(k, p_dict)
+    self.assertIn('Max-Age=0', p_dict[k])

@@ -2,7 +2,8 @@
 
 ## Component Responsibilities
 
-- **`app/dashboard.py`**: Owns HTTP request composition, route dispatching, session token generation/verification, and service orchestration. It embeds fallback HTML templates but prefers external templates on disk when present.
+- **`app/dashboard.py`**: Owns HTTP request composition, route dispatching, session token generation/verification, and service orchestration. It delegates role template loading to `app/role_templates.py`.
+- **`app/role_templates.py`**: Owns single-source loading of installed role templates from disk (`web/` templates installed to static directory), enforcing raw byte loading without interpolation and raising structured unavailability errors when pages are missing.
 - **`app/notes.py`**: Owns user quick notes persistence (`NotesStore`), including thread-safe locking, JSON file encoding, 0600 file permissions, and atomic temporary replacement.
 - **`app/document_conversion.py`**: Owns batch document conversion (`convert_documents_batch`) via headless LibreOffice in proot-distro, isolated batch scratch directories, process timeout handling, safe output naming, and single PDF vs. ZIP packaging.
 - **`app/service_catalog.py`**: Pure, shared single source of truth for service identity and endpoint facts. Exposes focused builders `runtime_services(home, prefix)` and `dashboard_services()`. Free of side effects, subprocess calls, network requests, filesystem access, and background work.
@@ -14,11 +15,11 @@
 - **`gateway/`**: Owns high-performance streaming transport and proxying implemented in Go.
 - **`web/`**: Owns frontend presentation and client-side interactions (`admin.html`, `family.html`, `login.html`, `portal.css`, `laptop.js`, `interactive_player.js`, `filebrowser.js`, `agy_index.html`, `termux_index.html`).
 
-## Template Fallback Hierarchy
+## Template Authority and Availability
 
-- `app/dashboard.py` serves external template files from `~/.config/dashboard/static/{admin,family,login}.html` when available.
-- If external files are missing or unreadable, the server silently falls back to embedded HTML strings (`ADMIN_DASHBOARD_HTML`, `FAMILY_DASHBOARD_HTML`, `LOGIN_HTML`).
-- Reconciled maintained source ensures the primary web templates in `web/` reflect current deployed behavior.
+- `app/dashboard.py` serves installed role template files from `~/.config/dashboard/static/{admin,family,login}.html` via `app/role_templates.py`.
+- If an installed role template file is missing or unreadable, the server returns a controlled HTTP 503 Service Unavailable response instead of silently falling back to obsolete embedded templates.
+- Reconciled maintained source ensures the primary web templates in `web/` are the single authority for deployed role page behavior.
 
 ## Native Reader and Disabled-Service Invariants
 
