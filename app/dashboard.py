@@ -26,8 +26,6 @@ import base64
 from datetime import datetime
 import ipaddress
 import threading
-from notes import NotesStore
-from document_conversion import convert_documents_batch
 PREFIX = "/data/data/com.termux/files/usr"
 HOME = "/data/data/com.termux/files/home"
 if PREFIX + "/bin" not in os.environ.get("PATH", ""):
@@ -37,6 +35,8 @@ TMUX_BIN = f"{PREFIX}/bin/tmux"
 
 MOBILE_LIB = os.path.expanduser("~/.local/lib/mobile-server")
 sys.path.insert(0, MOBILE_LIB if os.path.isdir(MOBILE_LIB) else os.path.dirname(__file__))
+from notes import NotesStore
+from document_conversion import convert_documents_batch
 from auth import CredentialStore, LoginLimiter
 from telemetry import Telemetry
 from limits import Admission, BODY_LIMITS, CONVERSION_PATHS, canonical_post_path
