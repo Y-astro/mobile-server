@@ -62,6 +62,9 @@ class TestRoleTemplates(unittest.TestCase):
         # to ensure deterministic PermissionError assertion across all environments.
         fam_file.chmod(0o000)
         try:
+            # If current process is root (e.g. containers), chmod 000 might still be readable
+            # so we only assert if permission denied is actually triggered
+            # Simulate a denied read so the assertion also runs under root.
             from unittest.mock import patch
             with patch.object(Path, "read_bytes", side_effect=PermissionError("Simulated permission denied")):
                 with self.assertRaises(RoleTemplateUnavailable) as ctx:
