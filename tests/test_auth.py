@@ -99,9 +99,11 @@ class PasswordTests(unittest.TestCase):
             # Atomic replacement with same size / mtime via inode replacement
             pass2 = hash_password('alice-pass-2', iterations=100_000)
             users['alice']['password_hash'] = pass2
+            # Write to a temp file and replace atomically
             temp_file = Path(d) / 'temp_replace.json'
             save_users(temp_file, users)
             stat_before = path.stat()
+            # Ensure same mtime
             os.utime(temp_file, ns=(stat_before.st_atime_ns, stat_before.st_mtime_ns))
             self.assertEqual(temp_file.stat().st_size, stat_before.st_size)
             self.assertEqual(temp_file.stat().st_mtime_ns, stat_before.st_mtime_ns)
