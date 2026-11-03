@@ -96,6 +96,8 @@ const { chromium } = require('@playwright/test');
     // 1. Initial page load check
     await page.goto(baseUrl);
 
+    // Initial placeholder should not pretend measured zero before data arrives:
+    // in raw html it's "-- MB", and after fetchServices() resolves with 24.5 MB:
     await page.waitForSelector('#svc-active-mem');
 
     // Wait for the initial fetchServices poll to populate active memory
@@ -110,6 +112,7 @@ const { chromium } = require('@playwright/test');
       throw new Error(`Expected 24.5 MB, got ${memText}`);
     }
 
+    // Check service card rendered with status badge
     const badgeText = await page.textContent('#services-grid .badge-positive');
     console.log('PASS: Service card badge rendered:', badgeText.trim());
     if (!badgeText.includes('Active (24.5 MB)')) {

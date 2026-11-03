@@ -48,7 +48,7 @@ class ServiceMemoryTests(unittest.TestCase):
         self.suwayomi_unread_patcher = patch.object(
             self.mod,
             'get_suwayomi_unread_cached',
-            return_value={'unread': 0, 'unread_30d': 0, 'last_chapter_title': None, 'ts': 0}
+            return_value={'unread_count': 0, 'unread_titles': 0, 'latest_unread': 0, 'ts': 0}
         )
         self.suwayomi_unread_patcher.start()
 
