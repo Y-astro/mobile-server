@@ -198,3 +198,32 @@ func TestCanceledTransferReleasesResource(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestParseBackend(t *testing.T) {
+	tests := []struct {
+		raw     string
+		wantErr bool
+	}{
+		{"http://127.0.0.1:8085", false},
+		{"http://127.0.0.1:8080", false},
+		{"http://127.0.0.1:8085/path", false},
+		{"http://127.0.0.1:8080?query=1", false},
+		{"https://127.0.0.1:8085", true},
+		{"http://127.0.0.1:8081", true},
+		{"http://127.0.0.1:9000", true},
+		{"http://192.168.1.5:8085", true},
+		{"http://localhost:8085", true},
+		{"http://example.com:8085", true},
+		{"not-a-valid-url:%%%", true},
+		{"", true},
+	}
+	for _, tc := range tests {
+		u, err := parseBackend(tc.raw)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("parseBackend(%q) error = %v, wantErr %v", tc.raw, err, tc.wantErr)
+		}
+		if err == nil && u == nil {
+			t.Errorf("parseBackend(%q) returned nil url without error", tc.raw)
+		}
+	}
+}

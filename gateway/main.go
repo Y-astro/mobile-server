@@ -216,13 +216,21 @@ func (l *limitedListener) Accept() (net.Conn, error) {
 	return &limitedConn{Conn: c, release: func() { <-l.slots }}, nil
 }
 
+func parseBackend(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" || (u.Host != "127.0.0.1:8080" && u.Host != "127.0.0.1:8085") {
+		return nil, fmt.Errorf("backend must be http://127.0.0.1:8085 or http://127.0.0.1:8080")
+	}
+	return u, nil
+}
+
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8081", "Loopback listener")
-	backend := flag.String("backend", "http://127.0.0.1:8080", "Fixed FileBrowser backend")
+	backend := flag.String("backend", "http://127.0.0.1:8085", "Fixed FileBrowser backend")
 	flag.Parse()
-	u, err := url.Parse(*backend)
-	if err != nil || u.Scheme != "http" || u.Host != "127.0.0.1:8080" {
-		log.Fatal("Backend must be http://127.0.0.1:8080")
+	u, err := parseBackend(*backend)
+	if err != nil {
+		log.Fatal(err)
 	}
 	host, _, err := net.SplitHostPort(*listen)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
