@@ -194,14 +194,28 @@ class TestAgySessions(unittest.TestCase):
 
     def test_create_agy_session_concurrency_serialization(self):
         """Concurrent creates cannot exceed max 8 instances due to in-memory lock."""
+        # Start with seven existing sessions including primary (total 7/8 slots filled)
         shared_sessions = [{"id": "default", "name": "AGY (Primary)", "is_primary": True}]
-        barrier = threading.Barrier(4)
+        for i in range(1, 7):
+            shared_sessions.append({"id": f"existing-{i}", "name": f"agy-existing-{i}", "is_primary": False})
+        self.assertEqual(len(shared_sessions), 7)
+
+        t1_in_has_session = threading.Event()
+        t2_in_has_session = threading.Event()
+        release_has_session = threading.Event()
 
         def fake_list():
             return list(shared_sessions)
 
         def fake_run(cmd, *args, **kwargs):
             if "has-session" in cmd:
+                target = cmd[cmd.index("-t") + 1]
+                if target == "=agy-inst-1":
+                    t1_in_has_session.set()
+                    release_has_session.wait(timeout=2.0)
+                elif target == "=agy-inst-2":
+                    t2_in_has_session.set()
+                    release_has_session.wait(timeout=2.0)
                 return MagicMock(returncode=1)
             elif "new-session" in cmd:
                 # Extract session_name
@@ -211,39 +225,43 @@ class TestAgySessions(unittest.TestCase):
                 return MagicMock(returncode=0)
             return MagicMock(returncode=0)
 
+        created = []
+        errors = []
+
+        def worker(ident):
+            try:
+                res = self.manager.create_agy_session(ident)
+                created.append(res)
+            except ValueError as e:
+                errors.append(str(e))
+
         with patch.object(self.manager, "list_agy_sessions", side_effect=fake_list), \
              patch.object(self.manager, "get_tmux_cmd", return_value=["tmux"]), \
              patch("subprocess.run", side_effect=fake_run):
 
-            errors = []
-            created = []
+            t1 = threading.Thread(target=worker, args=("inst-1",))
+            t2 = threading.Thread(target=worker, args=("inst-2",))
 
-            def worker(ident):
-                barrier.wait()
-                try:
-                    res = self.manager.create_agy_session(ident)
-                    created.append(res)
-                except ValueError as e:
-                    errors.append(str(e))
+            try:
+                t1.start()
+                self.assertTrue(t1_in_has_session.wait(timeout=2.0), "Worker 1 failed to reach has-session")
 
-            # Fill up to 7 existing sessions
-            for i in range(1, 7):
-                shared_sessions.append({"id": f"existing-{i}", "name": f"agy-existing-{i}", "is_primary": False})
-            self.assertEqual(len(shared_sessions), 7)
+                t2.start()
+                # Give worker 2 a bounded opportunity to reach has-session:
+                # - Without lock: worker 2 runs concurrently while worker 1 is gated inside has-session,
+                #   observing 7 sessions and entering has-session (signaling t2_in_has_session).
+                # - With lock: worker 2 is serialized behind _create_lock and cannot enter has-session.
+                t2_in_has_session.wait(timeout=0.1)
+            finally:
+                release_has_session.set()
+                t1.join(timeout=2.0)
+                t2.join(timeout=2.0)
 
-            # 4 concurrent threads attempting to create when only 1 slot remains
-            threads = [threading.Thread(target=worker, args=(f"worker-{i}",)) for i in range(4)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            # Exactly 1 should have succeeded, bringing total to 8; 3 should have failed with ValueError
-            self.assertEqual(len(created), 1)
-            self.assertEqual(len(errors), 3)
-            self.assertEqual(len(shared_sessions), 8)
-            for err in errors:
-                self.assertIn("Maximum of 8 AGY instances reached", err)
+        # Exactly 1 should have succeeded, bringing total to 8; second must fail with ValueError
+        self.assertEqual(len(shared_sessions), 8)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Maximum of 8 AGY instances reached", errors[0])
 
     @patch.object(AgySessions, "get_tmux_cmd", return_value=["/custom/prefix/bin/tmux"])
     @patch("subprocess.run")
