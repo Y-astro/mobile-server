@@ -19,16 +19,43 @@ Tailscale negotiates encrypted peer connections; its coordination service is not
 
 Caddy serves the website and authenticates each protected route. FileBrowser trusts a proxy identity header, so its backend and the admission gateway must stay bound to loopback. Privileged routes use a dedicated admin authorization endpoint, including encoded/mixed-case URL variants. Keep the dashboard, ttyd, Tor, and backend listeners private. Port 8000 is HTTP; Tailscale encrypts it on the tailnet, while a local LAN connection needs HTTPS for transport protection. Caddy's internal CA needs to be trusted by browsers for :8443; no public CA certificate is provisioned here.
 
-## Update and credentials
+## Update, release manifests, and credentials
 
-On the development machine:
+### Release manifest generation and offline validation
+
+Candidate releases must be generated and validated offline before deployment:
 
 ```sh
+# On development host:
 cd gateway
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o ../.work/mobile-gateway .
+cd ..
+
+# Generate candidate release manifest with machine-computed SHA-256 and byte sizes:
+python3 scripts/release-manifest.py generate --include-gateway --output candidate-manifest.json
+
+# Offline validation gate (validates complete assets, hashes, and safety before any writes):
+python3 scripts/release-manifest.py validate --manifest candidate-manifest.json --require-gateway
 ```
 
-Copy this checkout and `.work/mobile-gateway` to the phone, then run `bash scripts/install.sh` **inside Termux**. The installer validates Caddy, migrates the legacy dashboard credentials if necessary, updates code, reloads Caddy, restarts the dashboard/gateway/battery monitor, and preserves existing disabled-service flags. It defaults Tor off on its first installation. Existing FileBrowser databases/configuration, Debian tools, wallpaper, recovery jobs, guardian, and terminal HTML are prerequisites and are not recreated. This is a device-specific deployment: review the hardcoded Termux home, tailnet address, and LAN addresses before using another device.
+### Artifact ownership and baseline separation
+
+- **Audited Installed Baseline (`config/deployment-files.json`)**: Captures the historical audited installed state of the running server. Its baseline entries and checksums remain byte-for-byte preserved for historical comparison.
+- **Candidate Release Manifests**: Machine-generated from current maintained repository sources (`app/`, `web/`, `scripts/`, `config/`) and explicitly declared Go built artifacts (`.work/mobile-gateway`).
+- **Binary Provenance**: The Go streaming gateway executable is compiled from source in `gateway/` with `-trimpath` (provenance fix `c4b7791`). Binary patching is strictly prohibited. The compiled binary must be declared and checksummed in the candidate manifest before installation.
+- **External and Manual Prerequisites**:
+  - `scripts/agy-runner-loop` is maintained in source and mapped to Debian proot `/usr/local/bin/agy-runner-loop`.
+  - Android-shell guardian (`scripts/phone-server-guardian.sh`) runs outside Termux under Android shell UID (e.g. via ADB); it is not running and is not an automatic Termux install.
+  - Runtime secrets (`~/.config/dashboard/users.json`, private keys, certificates, session keys), databases (`~/.config/filebrowser/filebrowser.db`), disabled-service flags (`~/.config/services_disabled`), and user files are excluded from source control and release manifests.
+
+### Legacy installer and activation limitations
+
+Copy this checkout and `.work/mobile-gateway` to the phone, then run `bash scripts/install.sh` **inside Termux**.
+
+The installer validates Caddy and enforces preflight release manifest completeness before any source writes. It updates code, static role templates (`admin.html`, `family.html`, `login.html`), `portal.css`, ttyd terminal assets, integration scripts, reloads Caddy, restarts supervised daemons, and preserves existing credentials and disabled-service flags.
+
+> [!WARNING]
+> **Activation & Rollback Limitations**: Direct deployment is withheld until transactional atomic activation and live-drift refusal are implemented and verified. The legacy `scripts/install.sh` performs in-place synchronization; it does not provide atomic release switching or rollback. Coherent release activation/rollback remains a separate reviewed subproject.
 
 Password records live only in `~/.config/dashboard/users.json` (mode 600). PBKDF2-HMAC-SHA256 uses a random salt and 600,000 iterations. The migration verifies that existing passwords still match. Change a password from an interactive Termux shell:
 

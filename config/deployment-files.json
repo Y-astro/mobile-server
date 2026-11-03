@@ -196,5 +196,11 @@
     "remote": "/data/data/com.termux/files/home/.config/ttyd/termux_index.html",
     "sha256": "03bc121fa9f0cf1635260225e5089c9f0a3958cb3a79aa6d5004b3dadf2de7b2",
     "bytes": 753817
+  },
+  {
+    "local": "scripts/agy-runner-loop",
+    "remote": "/data/data/com.termux/files/usr/var/lib/proot-distro/containers/debian/rootfs/usr/local/bin/agy-runner-loop",
+    "sha256": "fe4148a9a6e92680c94748d7637b5cffeddedf95d5bb6e66e59489f4cdbe9d2c",
+    "bytes": 1193
   }
 ]

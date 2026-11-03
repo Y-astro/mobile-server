@@ -1,5 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Update an already provisioned K20 Pro. Run inside Termux, from this checkout.
+# NOTE: This legacy installer performs preflight manifest validation and file synchronization.
+# It does not provide atomic release activation or rollback. Atomic release switching and live-drift refusal are deferred to a later reviewed stage.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PREFIX=/data/data/com.termux/files/usr
@@ -10,6 +12,23 @@ for tool in python3 caddy filebrowser tor tmux; do command -v "$tool" >/dev/null
 test -f "$HOME/.config/filebrowser/filebrowser.db"
 test -x .work/mobile-gateway || { echo 'Build gateway first: cd gateway && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ../.work/mobile-gateway .' >&2; exit 1; }
 caddy validate --config config/Caddyfile --adapter caddyfile
+
+# --- Candidate release manifest validation (PREFLIGHT BEFORE ANY WRITES) ---
+MANIFEST="${RELEASE_MANIFEST:-${1:-}}"
+CLEANUP_MANIFEST=0
+if [ -z "$MANIFEST" ]; then
+    MANIFEST="$(mktemp "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/release-manifest.XXXXXX.json" 2>/dev/null || mktemp -t release-manifest.XXXXXX.json)"
+    CLEANUP_MANIFEST=1
+    python3 scripts/release-manifest.py generate --root . --include-gateway --output "$MANIFEST"
+fi
+if ! python3 scripts/release-manifest.py validate --root . --manifest "$MANIFEST" --require-gateway; then
+    echo "Preflight release manifest validation failed! Aborting before any source writes." >&2
+    if [ "$CLEANUP_MANIFEST" -eq 1 ]; then rm -f "$MANIFEST"; fi
+    exit 1
+fi
+if [ "$CLEANUP_MANIFEST" -eq 1 ]; then rm -f "$MANIFEST"; fi
+# ---------------------------------------------------------------------------
+
 mkdir -p "$lib" "$HOME/bin" "$state" "$HOME/.config/dashboard/static" "$HOME/.config/ttyd" "$HOME/.config/tor" "$HOME/.local/share/mobile-server-tor" "$HOME/.config/services_disabled"
 chmod 700 "$HOME/.local/share/mobile-server-tor" "$HOME/.config/tor"
 install -m 600 app/auth.py "$lib/auth.py"
@@ -28,11 +47,23 @@ install -m 700 app/dashboard.py "$PREFIX/bin/dashboard.new"
 mv "$PREFIX/bin/dashboard.new" "$PREFIX/bin/dashboard"
 install -m 700 .work/mobile-gateway "$HOME/bin/mobile-gateway.new"
 mv "$HOME/bin/mobile-gateway.new" "$HOME/bin/mobile-gateway"
-for script in server_supervisor.py agy_session.sh battery_guard.sh laptop_session.py; do install -m 700 "scripts/$script" "$HOME/bin/$script.new"; mv "$HOME/bin/$script.new" "$HOME/bin/$script"; done
+for script in server_supervisor.py agy_session.sh battery_guard.sh laptop_session.py termux_session.sh start_suwayomi.sh suwayomi_daily_update.py suwayomi_graphql_filter.py suwayomi_update.sh; do
+    install -m 700 "scripts/$script" "$HOME/bin/$script.new"
+    mv "$HOME/bin/$script.new" "$HOME/bin/$script"
+done
+install -m 700 scripts/start-services.sh "$HOME/start_services.sh"
+if [ -d "$PREFIX/var/lib/proot-distro/containers/debian/rootfs/usr/local/bin" ]; then
+    install -m 755 scripts/agy-runner-loop "$PREFIX/var/lib/proot-distro/containers/debian/rootfs/usr/local/bin/agy-runner-loop"
+fi
 for command in server-user server-status server-health server-up server-down server-restart agy-resume; do
     install -m 700 "scripts/$command" "$PREFIX/bin/$command"
 done
+install -m 600 web/admin.html "$HOME/.config/dashboard/static/admin.html"
+install -m 600 web/family.html "$HOME/.config/dashboard/static/family.html"
+install -m 600 web/login.html "$HOME/.config/dashboard/static/login.html"
+install -m 600 web/portal.css "$HOME/.config/dashboard/static/portal.css"
 install -m 600 web/agy_index.html "$HOME/.config/ttyd/agy_index.html"
+install -m 600 web/termux_index.html "$HOME/.config/ttyd/termux_index.html"
 install -m 600 web/filebrowser.js "$HOME/.config/dashboard/static/patched_index.js"
 install -m 600 web/laptop.js "$HOME/.config/dashboard/static/laptop.js"
 install -m 600 web/interactive_player.js "$HOME/.config/dashboard/static/interactive_player.js"
