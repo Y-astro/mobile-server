@@ -28,6 +28,9 @@ ALLOWED_TOP_DIRS: Tuple[str, ...] = ("app", "web", "scripts", "config", ".work")
 # Authorized remote destination prefix
 ALLOWED_REMOTE_PREFIX = "/data/data/com.termux/files/"
 
+# Frozen audited 35-row baseline metadata checksum (SHA-256 of config/deployment-files.json bytes)
+AUDITED_BASELINE_SHA256 = "85282ec24628491bdc25975dc4767d81f54d02e368cf5d652dc3665c47fa3cd1"
+
 # Built gateway artifact constants
 DEFAULT_GATEWAY_LOCAL = ".work/mobile-gateway"
 DEFAULT_GATEWAY_REMOTE = "/data/data/com.termux/files/home/bin/mobile-gateway"
@@ -95,39 +98,94 @@ def is_forbidden_secret_or_runtime_path(path_str: str) -> bool:
 def load_baseline_mapping(root_dir: Path) -> Dict[str, str]:
     """
     Load canonical ownership mapping from config/deployment-files.json.
-    Fails closed on invalid shape, unreadable baseline, or duplicate ownership.
+    Verifies that the baseline file resolves strictly within root_dir and matches
+    the immutable audited SHA-256 checksum before parsing. Fails closed on
+    unreadable baseline, checksum mismatch, invalid shape, or duplicate ownership.
+    Deliberate future baseline changes require an independent audit recapture
+    and updated pin.
     """
     baseline_file = root_dir / "config/deployment-files.json"
+    root_resolved = root_dir.resolve()
+
+    # Symlink escape guard before reading baseline file
+    try:
+        resolved_baseline = baseline_file.resolve()
+        if not resolved_baseline.is_relative_to(root_resolved):
+            raise ManifestError(
+                f"Refused baseline symlink escape: '{baseline_file}' points outside release root "
+                f"to {resolved_baseline}. Reviewed audit recapture is required."
+            )
+    except (ValueError, RuntimeError) as exc:
+        raise ManifestError(
+            f"Refused invalid baseline symlink '{baseline_file}': {exc}. "
+            "Reviewed audit recapture is required."
+        ) from exc
+
     if not baseline_file.exists():
-        raise ManifestError(f"Audited baseline mapping file not found at {baseline_file}")
+        raise ManifestError(
+            f"Audited baseline mapping file not found at {baseline_file}. "
+            "Reviewed audit recapture is required."
+        )
+
+    # Read raw bytes and verify immutable audited checksum before parsing
+    try:
+        baseline_bytes = baseline_file.read_bytes()
+    except Exception as exc:
+        raise ManifestError(
+            f"Failed to read baseline mapping {baseline_file}: {exc}. "
+            "Reviewed audit recapture is required."
+        ) from exc
+
+    computed_sha256 = hashlib.sha256(baseline_bytes).hexdigest()
+    if computed_sha256 != AUDITED_BASELINE_SHA256:
+        raise ManifestError(
+            f"Audited baseline mapping checksum mismatch: expected {AUDITED_BASELINE_SHA256}, "
+            f"got {computed_sha256}. Historical baseline config/deployment-files.json is immutable. "
+            "Reviewed audit recapture is required to update audited baseline."
+        )
 
     try:
-        with open(baseline_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = json.loads(baseline_bytes.decode("utf-8"))
     except Exception as exc:
-        raise ManifestError(f"Failed to parse baseline mapping {baseline_file}: {exc}") from exc
+        raise ManifestError(
+            f"Failed to parse baseline mapping {baseline_file}: {exc}. "
+            "Reviewed audit recapture is required."
+        ) from exc
 
     if not isinstance(data, list):
-        raise ManifestError(f"Baseline mapping in {baseline_file} must be a JSON array")
+        raise ManifestError(
+            f"Baseline mapping in {baseline_file} must be a JSON array. "
+            "Reviewed audit recapture is required."
+        )
 
     mapping: Dict[str, str] = {}
     seen_remotes: Dict[str, str] = {}
 
     for idx, item in enumerate(data):
         if not isinstance(item, dict):
-            raise ManifestError(f"Baseline item at index {idx} is not an object")
+            raise ManifestError(
+                f"Baseline item at index {idx} is not an object. "
+                "Reviewed audit recapture is required."
+            )
         for key in ("local", "remote"):
             if key not in item or not isinstance(item[key], str) or not item[key].strip():
-                raise ManifestError(f"Baseline item at index {idx} missing valid '{key}' field")
+                raise ManifestError(
+                    f"Baseline item at index {idx} missing valid '{key}' field. "
+                    "Reviewed audit recapture is required."
+                )
 
         local_path = item["local"].strip()
         remote_path = item["remote"].strip()
 
         if local_path in mapping:
-            raise ManifestError(f"Duplicate local entry in baseline mapping: {local_path}")
+            raise ManifestError(
+                f"Duplicate local entry in baseline mapping: {local_path}. "
+                "Reviewed audit recapture is required."
+            )
         if remote_path in seen_remotes:
             raise ManifestError(
-                f"Duplicate remote destination '{remote_path}' in baseline for '{seen_remotes[remote_path]}' and '{local_path}'"
+                f"Duplicate remote destination '{remote_path}' in baseline for '{seen_remotes[remote_path]}' and '{local_path}'. "
+                "Reviewed audit recapture is required."
             )
 
         mapping[local_path] = remote_path
@@ -218,7 +276,8 @@ def validate_path_safety(local_str: str, remote_str: str, root_dir: Path) -> Non
                         f"Refused symlink escape in path '{local_str}': component '{current.name}' "
                         f"points outside release root to {target}"
                     )
-                if is_forbidden_secret_or_runtime_path(str(target)):
+                rel_target_str = target.relative_to(root_resolved).as_posix()
+                if is_forbidden_secret_or_runtime_path(rel_target_str):
                     raise ManifestError(
                         f"Refused symlink pointing to forbidden secret: {local_str} -> {target}"
                     )
@@ -231,7 +290,8 @@ def validate_path_safety(local_str: str, remote_str: str, root_dir: Path) -> Non
             target = current.resolve()
             if not target.is_relative_to(root_resolved):
                 raise ManifestError(f"Refused symlink escape: '{local_str}' points outside release root ({target})")
-            if is_forbidden_secret_or_runtime_path(str(target)):
+            rel_target_str = target.relative_to(root_resolved).as_posix()
+            if is_forbidden_secret_or_runtime_path(rel_target_str):
                 raise ManifestError(f"Refused symlink pointing to forbidden secret: {local_str} -> {target}")
         except (ValueError, RuntimeError) as exc:
             raise ManifestError(f"Refused invalid symlink: '{local_str}': {exc}") from exc
@@ -353,10 +413,22 @@ def validate_manifest(
 
         local_str = entry["local"]
         remote_str = entry["remote"]
-        expected_sha256 = entry["sha256"].lower()
+        raw_sha256 = entry["sha256"]
         expected_bytes = entry["bytes"]
 
-        if not isinstance(expected_bytes, int) or expected_bytes < 0:
+        if not isinstance(raw_sha256, str):
+            raise ManifestError(
+                f"Invalid SHA-256 hash type {type(raw_sha256).__name__} for {local_str}: hash must be a string"
+            )
+
+        expected_sha256 = raw_sha256.lower()
+        if len(expected_sha256) != 64 or any(c not in "0123456789abcdef" for c in expected_sha256):
+            raise ManifestError(
+                f"Invalid SHA-256 hash format for {local_str}: must be a 64-character hex string"
+            )
+
+        # Reject bool (since bool is a subclass of int in Python) and non-ints
+        if isinstance(expected_bytes, bool) or not isinstance(expected_bytes, int) or expected_bytes < 0:
             raise ManifestError(f"Invalid byte size {expected_bytes} for {local_str}")
 
         validate_path_safety(local_str, remote_str, root_dir)

@@ -22,6 +22,7 @@ spec.loader.exec_module(rm)
 
 DEFAULT_GATEWAY_LOCAL = rm.DEFAULT_GATEWAY_LOCAL
 DEFAULT_GATEWAY_REMOTE = rm.DEFAULT_GATEWAY_REMOTE
+AUDITED_BASELINE_SHA256 = rm.AUDITED_BASELINE_SHA256
 FORBIDDEN_SECRET_PATTERNS = rm.FORBIDDEN_SECRET_PATTERNS
 ManifestError = rm.ManifestError
 generate_manifest = rm.generate_manifest
@@ -288,6 +289,175 @@ class TestReleaseManifest(unittest.TestCase):
         )
         self.assertEqual(res_val.returncode, 0, f"Validate failed: {res_val.stderr}")
         self.assertIn("Release manifest validation PASSED", res_val.stdout)
+
+    def test_baseline_checksum_pin_rejects_damaged_bundle_omitting_admin_html(self):
+        """
+        Damaged bundle omitting admin.html from baseline fails generation and validation
+        because baseline checksum pin detects alteration.
+        """
+        bundle_root = self._create_minimal_bundle()
+        cfg_file = bundle_root / "config/deployment-files.json"
+        data = json.loads(cfg_file.read_text(encoding="utf-8"))
+        data = [row for row in data if row.get("local") != "web/admin.html"]
+        cfg_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+        # Must fail closed on load/generate/validate with message about audit recapture
+        with self.assertRaises(ManifestError) as ctx:
+            load_baseline_mapping(bundle_root)
+        self.assertIn("Audited baseline mapping checksum mismatch", str(ctx.exception))
+        self.assertIn("Reviewed audit recapture is required", str(ctx.exception))
+
+        with self.assertRaises(ManifestError) as ctx:
+            generate_manifest(bundle_root)
+        self.assertIn("Audited baseline mapping checksum mismatch", str(ctx.exception))
+
+    def test_baseline_checksum_pin_rejects_removed_launcher_or_destination_tamper(self):
+        """
+        Baseline checksum pin rejects when arbitrary launcher row is removed or
+        baseline auth destination is tampered before installer writes.
+        """
+        bundle_root = self._create_minimal_bundle()
+        cfg_file = bundle_root / "config/deployment-files.json"
+        data = json.loads(cfg_file.read_text(encoding="utf-8"))
+
+        # Case 1: Tamper destination of auth.py
+        data_tampered = copy.deepcopy(data)
+        for row in data_tampered:
+            if row.get("local") == "app/auth.py":
+                row["remote"] = "/data/data/com.termux/files/home/.local/lib/mobile-server/benign_auth.py"
+        cfg_file.write_text(json.dumps(data_tampered, indent=2), encoding="utf-8")
+        with self.assertRaises(ManifestError) as ctx:
+            load_baseline_mapping(bundle_root)
+        self.assertIn("Audited baseline mapping checksum mismatch", str(ctx.exception))
+
+        # Case 2: Remove launcher row (scripts/agy-runner-loop)
+        data_removed = [row for row in data if row.get("local") != "scripts/agy-runner-loop"]
+        cfg_file.write_text(json.dumps(data_removed, indent=2), encoding="utf-8")
+        with self.assertRaises(ManifestError) as ctx:
+            load_baseline_mapping(bundle_root)
+        self.assertIn("Audited baseline mapping checksum mismatch", str(ctx.exception))
+
+    def test_baseline_separation_candidate_differs_from_historical_hash(self):
+        """
+        Candidate source code can differ from historical baseline hash:
+        generate fresh hash for modified app/auth.py, and candidate validation passes.
+        Proves baseline metadata pin is decoupled from candidate freshness computation.
+        """
+        bundle_root = self._create_minimal_bundle()
+        auth_file = bundle_root / "app/auth.py"
+        auth_file.write_text(auth_file.read_text(encoding="utf-8") + "\n# Deliberate update\n", encoding="utf-8")
+
+        # Candidate manifest generation computes fresh hash for modified auth.py
+        candidate_entries = generate_manifest(bundle_root)
+        candidate_auth = next(e for e in candidate_entries if e["local"] == "app/auth.py")
+        self.assertNotEqual(candidate_auth["sha256"], "1684c592f5d468713b45070755ed8f7687b94fde8853439c8b35beaf7f3773be")
+
+        # Candidate validation passes with fresh hash
+        validate_manifest(candidate_entries, bundle_root)
+
+    def test_baseline_symlink_escape_rejected_before_read(self):
+        """Symlink escaping release root on config/deployment-files.json is rejected."""
+        bundle_root = self._create_minimal_bundle()
+        outside_cfg = self.test_root / "outside_cfg.json"
+        outside_cfg.write_text(json.dumps([{"local": "app/auth.py", "remote": "/data/data/com.termux/files/home/test"}]), encoding="utf-8")
+
+        cfg_file = bundle_root / "config/deployment-files.json"
+        cfg_file.unlink()
+        try:
+            cfg_file.symlink_to(outside_cfg)
+        except OSError:
+            self.skipTest("Symlinks not supported")
+
+        with self.assertRaises(ManifestError) as ctx:
+            load_baseline_mapping(bundle_root)
+        self.assertIn("Refused baseline symlink escape", str(ctx.exception))
+        self.assertIn("Reviewed audit recapture is required", str(ctx.exception))
+
+    def test_relative_symlink_in_root_with_keyword_in_root_name(self):
+        """
+        A release root directory with 'token' in its absolute path (e.g. /tmp/token-check-xyz/)
+        must not cause false positive secret rejection on normal inside-root source files.
+        """
+        token_root = self.test_root / "token-check-test123"
+        token_root.mkdir(parents=True, exist_ok=True)
+        cfg_dir = token_root / "config"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO_ROOT / "config/deployment-files.json", cfg_dir / "deployment-files.json")
+
+        baseline_mapping = load_baseline_mapping(token_root)
+        for rel_path in baseline_mapping.keys():
+            src_file = REPO_ROOT / rel_path
+            dst_file = token_root / rel_path
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dst_file)
+
+        # Normal sources inside token_root must pass validate_path_safety
+        validate_path_safety(
+            "app/auth.py",
+            baseline_mapping["app/auth.py"],
+            token_root,
+        )
+
+        # Also an internal symlink pointing to normal file inside token_root must pass
+        symlink_file = token_root / "app/sym_auth.py"
+        try:
+            symlink_file.symlink_to(token_root / "app/auth.py")
+            validate_path_safety(
+                "app/sym_auth.py",
+                "/data/data/com.termux/files/home/.local/lib/mobile-server/sym_auth.py",
+                token_root,
+            )
+        except OSError:
+            pass
+
+        # But a symlink pointing to an actual forbidden file relative to root must still fail
+        secret_file = token_root / "app/credentials.py"
+        secret_file.write_text("SECRET=1\n", encoding="utf-8")
+        symlink_secret = token_root / "app/sym_secret.py"
+        try:
+            symlink_secret.symlink_to(secret_file)
+            with self.assertRaises(ManifestError) as ctx:
+                validate_path_safety(
+                    "app/sym_secret.py",
+                    "/data/data/com.termux/files/home/.local/lib/mobile-server/sym_secret.py",
+                    token_root,
+                )
+            self.assertIn("Refused symlink pointing to forbidden secret", str(ctx.exception))
+        except OSError:
+            pass
+
+    def test_sha256_type_and_format_validation(self):
+        """Candidate manifest with non-string, malformed, or bool fields raises clean ManifestError."""
+        bundle_root = self._create_minimal_bundle()
+        manifest_entries = generate_manifest(bundle_root)
+
+        # Non-string sha256 (e.g. integer or dict)
+        bad_entries1 = copy.deepcopy(manifest_entries)
+        bad_entries1[0]["sha256"] = 123456
+        with self.assertRaises(ManifestError) as ctx:
+            validate_manifest(bad_entries1, bundle_root)
+        self.assertIn("must be a string", str(ctx.exception))
+
+        # Malformed sha256 (not 64 hex characters)
+        bad_entries2 = copy.deepcopy(manifest_entries)
+        bad_entries2[0]["sha256"] = "invalid_hash"
+        with self.assertRaises(ManifestError) as ctx:
+            validate_manifest(bad_entries2, bundle_root)
+        self.assertIn("must be a 64-character hex string", str(ctx.exception))
+
+        # Non-hex characters
+        bad_entries3 = copy.deepcopy(manifest_entries)
+        bad_entries3[0]["sha256"] = "z" * 64
+        with self.assertRaises(ManifestError) as ctx:
+            validate_manifest(bad_entries3, bundle_root)
+        self.assertIn("must be a 64-character hex string", str(ctx.exception))
+
+        # Bool byte size (bool is subclass of int in python)
+        bad_entries4 = copy.deepcopy(manifest_entries)
+        bad_entries4[0]["bytes"] = True
+        with self.assertRaises(ManifestError) as ctx:
+            validate_manifest(bad_entries4, bundle_root)
+        self.assertIn("Invalid byte size", str(ctx.exception))
 
 
 if __name__ == "__main__":
