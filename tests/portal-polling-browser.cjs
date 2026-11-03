@@ -39,6 +39,11 @@ const assert = require('assert');
 
   let notesPosts = 0;
   let convertPosts = 0;
+  let servicesMemoryMb = 32;
+  const waitForGate = (promise, label) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 6000);
+    promise.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
+  });
 
   const server = http.createServer(async (req, res) => {
     const url = req.url;
@@ -104,7 +109,7 @@ const assert = require('assert');
       res.end(JSON.stringify({
         services: snapshot,
         total_active_mem_mb: 32,
-        active_memory_mb: 32
+        active_memory_mb: servicesMemoryMb
       }));
     } else if (url === '/api/agy/sessions') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -191,15 +196,22 @@ const assert = require('assert');
 
     const activeClientRequests = new Map();
     const maxActiveClientRequests = new Map();
+    const totalClientRequests = new Map();
+    const mutationFailures = [];
+    const mutationCompletions = new Map();
+    let downloads = 0;
+    page.on('download', () => { downloads++; });
     for (const ep of managedEndpoints) {
       activeClientRequests.set(ep, 0);
       maxActiveClientRequests.set(ep, 0);
+      totalClientRequests.set(ep, 0);
     }
 
     page.on('request', req => {
       if (req.method() !== 'GET') return;
       const pathname = new URL(req.url()).pathname;
       if (activeClientRequests.has(pathname)) {
+        totalClientRequests.set(pathname, totalClientRequests.get(pathname) + 1);
         const cur = activeClientRequests.get(pathname) + 1;
         activeClientRequests.set(pathname, cur);
         if (cur > maxActiveClientRequests.get(pathname)) {
@@ -218,6 +230,17 @@ const assert = require('assert');
     };
     page.on('requestfinished', onReqEnd);
     page.on('requestfailed', onReqEnd);
+    page.on('requestfailed', req => {
+      if (req.method() === 'POST' && ['/api/notes', '/api/convert/pdf'].includes(new URL(req.url()).pathname)) {
+        mutationFailures.push(req.url());
+      }
+    });
+    page.on('requestfinished', req => {
+      const pathname = new URL(req.url()).pathname;
+      if (req.method() === 'POST' && ['/api/notes', '/api/convert/pdf'].includes(pathname)) {
+        mutationCompletions.set(pathname, (mutationCompletions.get(pathname) || 0) + 1);
+      }
+    });
 
     // Install Playwright clock before page navigation/timers
     await page.clock.install();
@@ -225,9 +248,11 @@ const assert = require('assert');
     // 1. Initial page load
     await page.goto(`${baseUrl}/`);
     await page.waitForSelector('#telemetry-state');
+    await page.waitForFunction(() => document.getElementById('telemetry-state').textContent === 'Active sample');
     assert.strictEqual(recordedErrors.length, 0, 'No uncaught errors on page load');
 
     for (const ep of managedEndpoints) {
+      assert.ok(totalClientRequests.get(ep) >= 1, `Initial managed GET reached ${ep}`);
       assert.ok(maxActiveClientRequests.get(ep) <= 1, `Max client active requests for ${ep} <= 1`);
     }
 
@@ -236,23 +261,28 @@ const assert = require('assert');
     servicesArrivedPromise = new Promise(r => { servicesArrivedResolve = r; });
     // Trigger background read
     const bgRead = page.evaluate(() => servicesLoop.refresh());
-    await servicesArrivedPromise; // Wait until GET reaches server
+    await waitForGate(servicesArrivedPromise, 'old services snapshot'); // Wait until GET reaches server
 
     // Now click first service toggle (filebrowser) via visible switch slider
+    const firstToggleResponse = page.waitForResponse(res => res.url().endsWith('/api/services/toggle') && res.request().method() === 'POST');
     await page.locator('.switch .slider').first().click();
+    await (await firstToggleResponse).json();
     // Click second service toggle (converter) via visible switch slider
+    const secondToggleResponse = page.waitForResponse(res => res.url().endsWith('/api/services/toggle') && res.request().method() === 'POST');
     await page.locator('.switch .slider').nth(1).click();
+    await (await secondToggleResponse).json();
+    assert.strictEqual(serverServicesRev, 2, 'Both actual action requests committed');
+    await page.evaluate(() => Promise.resolve());
 
     // Release old gated services GET
     servicesGated = false;
     servicesRelease();
     await bgRead;
 
-    // Await all started refresh promises
-    await page.evaluate(() => servicesLoop.refreshAfterMutation());
+    // Observe the actual action refreshes without injecting another fresh read from the test.
 
     // Assert that the latest synthetic revision marker ('Rev 2') appears in DOM
-    await page.waitForFunction(() => document.body.innerText.includes('Rev 2'), { timeout: 3000 });
+    await page.waitForFunction(() => document.body.innerText.includes('Rev 2'), null, { timeout: 3000 });
     assert.ok(await page.locator('input[type="checkbox"]').first().isChecked(), 'Filebrowser checkbox checked');
     assert.ok(await page.locator('input[type="checkbox"]').nth(1).isChecked(), 'Converter checkbox checked');
     assert.ok(maxActiveClientRequests.get('/api/services') <= 1, 'Client active requests for /api/services <= 1');
@@ -260,12 +290,16 @@ const assert = require('assert');
     // C. Hold real stats GET beyond 10-second deadline. Observe requestfailed/abort and Unavailable panel.
     statsGated = true;
     statsArrivedPromise = new Promise(r => { statsArrivedResolve = r; });
-    const statsAbortPromise = page.waitForRequest(req => req.url().includes('/api/stats'));
+    const servicesBeforeDeadline = totalClientRequests.get('/api/services');
+    servicesMemoryMb = 64;
+    const statsAbortPromise = page.waitForEvent('requestfailed', { predicate: req => new URL(req.url()).pathname === '/api/stats' });
     const statsPollRun = page.evaluate(() => statsLoop.refresh());
-    await statsArrivedPromise; // Wait until stats arrives at server
+    await waitForGate(statsArrivedPromise, 'stats deadline request'); // Wait until stats arrives at server
 
     // Advance clock past the 10-second deadline
     await page.clock.fastForward(10500);
+    const abortedStats = await statsAbortPromise;
+    assert.ok(abortedStats.failure(), 'Held stats request failed on the client before releasing the server gate');
 
     // Release server gate so server socket finishes cleanly
     statsGated = false;
@@ -273,15 +307,16 @@ const assert = require('assert');
     await statsPollRun;
 
     // Verify stats panel displays Unavailable
-    await page.waitForFunction(() => document.getElementById('telemetry-state').textContent === 'Unavailable', { timeout: 3000 });
+    await page.waitForFunction(() => document.getElementById('telemetry-state').textContent === 'Unavailable', null, { timeout: 3000 });
     assert.strictEqual(await page.locator('#telemetry-state').textContent(), 'Unavailable', 'Stats marked Unavailable on deadline abort');
 
     // Demonstrate continued requests and changed rendered data in another panel (services active memory)
-    assert.ok(await page.locator('#svc-active-mem').textContent() !== '', 'Services panel rendered and active');
+    await page.waitForFunction(() => document.getElementById('svc-active-mem').textContent === '64 MB', null, { timeout: 3000 });
+    assert.ok(totalClientRequests.get('/api/services') > servicesBeforeDeadline, 'Healthy services kept requesting and rendered changed data');
 
     // Advance clock past normal 3s stats interval and allow successful recovery
     await page.clock.fastForward(3000);
-    await page.waitForFunction(() => document.getElementById('telemetry-state').textContent === 'Active sample', { timeout: 3000 });
+    await page.waitForFunction(() => document.getElementById('telemetry-state').textContent === 'Active sample', null, { timeout: 3000 });
     assert.strictEqual(await page.locator('#telemetry-state').textContent(), 'Active sample', 'Stats recovered to Active sample');
     assert.ok(maxActiveClientRequests.get('/api/stats') <= 1, 'Stats client concurrency remained <= 1 through deadline abort and recovery');
 
@@ -295,7 +330,7 @@ const assert = require('assert');
     const notesInput = page.locator('#user-notes-input');
     await notesInput.fill('Gated draft notes that must survive lifecycle');
     await page.clock.fastForward(800); // trigger notes POST
-    await notesArrivedPromise; // wait until notes POST arrives at server
+    await waitForGate(notesArrivedPromise, 'notes POST'); // wait until notes POST arrives at server
 
     // Open converter modal and start conversion
     await page.locator('a[href="javascript:openConverterModal()"]').click();
@@ -306,12 +341,12 @@ const assert = require('assert');
     // Register download listener before clicking convert
     const downloadPromise = page.waitForEvent('download');
     await page.locator('#convert-btn').click();
-    await convertArrivedPromise; // wait until conversion POST arrives at server
+    await waitForGate(convertArrivedPromise, 'conversion POST'); // wait until conversion POST arrives at server
 
     // Now both POSTs are held at the server. Hide the page!
     const activeReqsBeforeHide = new Map();
     for (const ep of managedEndpoints) {
-      activeReqsBeforeHide.set(ep, activeClientRequests.get(ep));
+      activeReqsBeforeHide.set(ep, totalClientRequests.get(ep));
     }
 
     await page.evaluate(() => {
@@ -326,6 +361,7 @@ const assert = require('assert');
     // Assert zero new managed GETs occurred while hidden
     for (const ep of managedEndpoints) {
       assert.strictEqual(activeClientRequests.get(ep), 0, `No active background GET for ${ep} while hidden`);
+      assert.strictEqual(totalClientRequests.get(ep), activeReqsBeforeHide.get(ep), `No new background GET for ${ep} while hidden`);
     }
 
     // Resume while both POST responses are still held
@@ -340,6 +376,12 @@ const assert = require('assert');
     assert.ok(await page.locator('#convert-file-summary').textContent(), 'File summary remains visible');
 
     // Release both held POST responses
+    const notesFinished = page.waitForEvent('requestfinished', {
+      predicate: req => req.method() === 'POST' && new URL(req.url()).pathname === '/api/notes',
+    });
+    const conversionFinished = page.waitForEvent('requestfinished', {
+      predicate: req => req.method() === 'POST' && new URL(req.url()).pathname === '/api/convert/pdf',
+    });
     notesGated = false;
     if (notesRelease) notesRelease();
     convertGated = false;
@@ -348,9 +390,15 @@ const assert = require('assert');
     // Verify download completes and notes saves settles
     const download = await downloadPromise;
     assert.strictEqual(download.suggestedFilename(), 'converted.pdf', 'Download completed with expected filename');
-    await page.waitForFunction(() => document.getElementById('notes-status').textContent.includes('Saved'), { timeout: 3000 });
+    assert.strictEqual(await download.failure(), null, 'PDF download finished successfully');
+    await page.waitForFunction(() => document.getElementById('notes-status').textContent.includes('Saved'), null, { timeout: 3000 });
+    await waitForGate(Promise.all([notesFinished, conversionFinished]), 'both mutation response bodies to finish');
     assert.strictEqual(notesPosts, 1, 'Notes POST sent exactly once');
     assert.strictEqual(convertPosts, 1, 'Conversion POST sent exactly once');
+    assert.deepStrictEqual(mutationFailures, [], 'Held notes and conversion requests were never canceled');
+    assert.strictEqual(mutationCompletions.get('/api/notes'), 1, 'Notes POST completed once');
+    assert.strictEqual(mutationCompletions.get('/api/convert/pdf'), 1, 'Conversion POST completed once');
+    assert.strictEqual(downloads, 1, 'One conversion produced one completed download');
 
     // E. Exercise rapid hide/show with active GET and pageshow persisted=true
     await page.evaluate(() => {
@@ -379,6 +427,13 @@ const assert = require('assert');
     await page.close();
 
     assert.strictEqual(recordedErrors.length, 0, 'No uncaught page errors occurred throughout full run');
+    console.log('Polling measurements:', JSON.stringify({
+      maximumActiveClientRequests: Object.fromEntries(maxActiveClientRequests),
+      deadlineFailure: abortedStats.failure(),
+      mutationCompletions: Object.fromEntries(mutationCompletions),
+      mutationFailures,
+      completedDownloads: downloads,
+    }));
     console.log('PASS: portal-polling-browser proof complete with true request gating, client-side concurrency tracking, and download verification.');
   } finally {
     if (servicesRelease) servicesRelease();
