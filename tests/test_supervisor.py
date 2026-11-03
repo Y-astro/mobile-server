@@ -1,3 +1,4 @@
+import builtins
 import contextlib
 import http.server
 import importlib.util
@@ -12,7 +13,18 @@ from unittest.mock import patch, Mock
 FILE = Path(__file__).parents[1] / 'scripts/server_supervisor.py'
 spec = importlib.util.spec_from_file_location('supervisor', FILE)
 m = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(m)
+
+_orig_open = builtins.open
+def _guarded_open(file, *args, **kwargs):
+    if str(file) == "/data/data/com.termux/files/home/parent_pid.txt":
+        raise OSError("guarded test environment")
+    return _orig_open(file, *args, **kwargs)
+
+builtins.open = _guarded_open
+try:
+    spec.loader.exec_module(m)
+finally:
+    builtins.open = _orig_open
 
 
 class RecoveryTests(unittest.TestCase):
@@ -31,6 +43,9 @@ class RecoveryTests(unittest.TestCase):
             mock = p.start()
             setattr(self, name, mock)
             self.addCleanup(p.stop)
+        popen_patcher = patch.object(m.subprocess, 'Popen')
+        self.popen = popen_patcher.start()
+        self.addCleanup(popen_patcher.stop)
 
     def test_disabled_service_is_never_probed_or_started(self):
         (m.DISABLED / 'fake').touch()
