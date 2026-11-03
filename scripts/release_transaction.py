@@ -170,6 +170,58 @@ def mode_to_octal_str(mode: int) -> str:
     return oct(mode & 0o7777)
 
 
+def validate_uid(uid_val: Any, field_name: str = "uid") -> int:
+    """Validate that UID is a non-negative integer (never bool, null, or string)."""
+    if type(uid_val) is not int or isinstance(uid_val, bool) or uid_val < 0:
+        raise PreconditionError(
+            f"Invalid {field_name}: expected non-negative integer, got {uid_val!r} ({type(uid_val).__name__})"
+        )
+    return uid_val
+
+
+def verify_boot_alias_identity(
+    alias_disk: Path,
+    expected_raw_link: str,
+    expected_dev: int,
+    expected_ino: int,
+    expected_uid: int,
+    expected_mode: Optional[int] = None,
+) -> None:
+    """
+    Verify exact identity of the known boot alias symlink.
+    Checks existence, symlink type, exact raw link text, device, inode, UID, and mode.
+    Fails closed if the symlink is missing, retargeted, unlinked, or replaced with a new inode.
+    """
+    if not path_lexists(alias_disk):
+        raise PreconditionError(f"Boot alias symlink is missing: {alias_disk}")
+    if not alias_disk.is_symlink():
+        raise PreconditionError(f"Boot alias is not a symlink: {alias_disk}")
+
+    actual_raw_link = os.readlink(alias_disk)
+    if actual_raw_link != expected_raw_link:
+        raise PreconditionError(
+            f"Boot alias raw link mismatch: expected '{expected_raw_link}', got '{actual_raw_link}'"
+        )
+
+    st = alias_disk.lstat()
+    if st.st_dev != expected_dev:
+        raise PreconditionError(
+            f"Boot alias device mismatch: expected dev {expected_dev}, got {st.st_dev}"
+        )
+    if st.st_ino != expected_ino:
+        raise PreconditionError(
+            f"Boot alias inode mismatch: expected ino {expected_ino}, got {st.st_ino}"
+        )
+    if st.st_uid != expected_uid:
+        raise PreconditionError(
+            f"Boot alias UID mismatch: expected UID {expected_uid}, got {st.st_uid}"
+        )
+    if expected_mode is not None and stat.S_IMODE(st.st_mode) != normalize_mode(expected_mode):
+        raise PreconditionError(
+            f"Boot alias mode mismatch: expected {mode_to_octal_str(expected_mode)}, got {mode_to_octal_str(stat.S_IMODE(st.st_mode))}"
+        )
+
+
 def compute_file_sha256(file_path: Path) -> Tuple[str, int]:
     """Deterministic SHA-256 and byte length using 64KB chunked reads."""
     if not file_path.exists():
@@ -190,21 +242,29 @@ def compute_file_sha256(file_path: Path) -> Tuple[str, int]:
     return hasher.hexdigest(), size
 
 
-def write_all(fd: int, payload: bytes) -> None:
+def write_all(fd: int, payload: bytes, max_blocking_retries: int = 5) -> None:
     """
     Write entire byte payload to file descriptor.
-    Handles partial writes, EINTR retries, and raises on zero-write or I/O error.
+    Handles partial writes, EINTR retries, bounded BlockingIOError retries,
+    and raises on zero-write or I/O error.
     """
     total = len(payload)
     offset = 0
+    blocking_retries = 0
     while offset < total:
         try:
             written = os.write(fd, payload[offset:])
             if written == 0:
                 raise OSError(errno.ENOSPC, "os.write wrote 0 bytes; storage full or I/O failure")
             offset += written
-        except (InterruptedError, BlockingIOError):
+            blocking_retries = 0
+        except InterruptedError:
             continue
+        except BlockingIOError:
+            blocking_retries += 1
+            if blocking_retries > max_blocking_retries:
+                raise
+            time.sleep(0.01)
         except OSError as exc:
             if exc.errno == errno.EINTR:
                 continue
@@ -229,41 +289,215 @@ def fsync_dir(path: Path) -> None:
         os.close(fd)
 
 
+def write_atomic_file(
+    dest_path: Path,
+    content: bytes,
+    mode: int,
+    expected_bytes: Optional[int] = None,
+    expected_sha256: Optional[str] = None,
+    expected_uid: Optional[int] = None,
+    prefix: str = ".tmp_",
+) -> None:
+    """
+    Atomically write content to dest_path via temporary sibling replacement.
+    Ensures temporary sibling is cleaned up on any failure (write, fsync, verify, replace).
+    """
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dest_path.parent / f"{prefix}{dest_path.name}_{os.getpid()}_{uuid.uuid4().hex}"
+    replaced = False
+    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        try:
+            write_all(fd, content)
+            os.chmod(fd, mode)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+        # Pre-replace verification
+        st = tmp_path.stat()
+        if expected_bytes is not None and st.st_size != expected_bytes:
+            raise OSError(
+                errno.EIO,
+                f"Pre-replace sibling size verification failed for {dest_path}: expected {expected_bytes}, got {st.st_size}",
+            )
+        if normalize_mode(st.st_mode) != normalize_mode(mode):
+            raise OSError(
+                errno.EIO,
+                f"Pre-replace sibling mode verification failed for {dest_path}: expected {mode_to_octal_str(mode)}, got {mode_to_octal_str(stat.S_IMODE(st.st_mode))}",
+            )
+        if expected_sha256 is not None:
+            actual_sha, _ = compute_file_sha256(tmp_path)
+            if actual_sha.lower() != expected_sha256.lower():
+                raise OSError(
+                    errno.EIO,
+                    f"Pre-replace sibling SHA-256 verification failed for {dest_path}: expected {expected_sha256}, got {actual_sha}",
+                )
+        if expected_uid is not None and st.st_uid != expected_uid:
+            raise OSError(
+                errno.EIO,
+                f"Pre-replace sibling UID verification failed for {dest_path}: expected UID {expected_uid}, got {st.st_uid}",
+            )
+
+        os.replace(tmp_path, dest_path)
+        replaced = True
+        fsync_dir(dest_path.parent)
+    finally:
+        if not replaced and path_lexists(tmp_path):
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
 def write_atomic_json(path: Path, data: Any) -> None:
     """Atomically write JSON data with sibling replacement, write_all, and fsync."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.parent / f".tmp_{path.name}_{os.getpid()}_{uuid.uuid4().hex}"
     payload = (json.dumps(data, indent=2) + "\n").encode("utf-8")
-    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        write_all(fd, payload)
-        os.fsync(fd)
-    except Exception:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        if path_lexists(tmp_path):
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
-        raise
-    else:
-        os.close(fd)
+    write_atomic_file(
+        dest_path=path,
+        content=payload,
+        mode=0o600,
+        expected_bytes=len(payload),
+        prefix=".tmp_json_",
+    )
 
-    # Validate temporary sibling byte count before atomic replacement
-    tmp_size = tmp_path.stat().st_size
-    if tmp_size != len(payload):
-        if path_lexists(tmp_path):
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
-        raise OSError(errno.EIO, f"Incomplete journal write: expected {len(payload)} bytes, wrote {tmp_size}")
 
-    os.replace(tmp_path, path)
-    fsync_dir(path.parent)
+VALID_STATES: Set[str] = {
+    STATE_PREPARED,
+    STATE_APPLYING,
+    STATE_APPLIED,
+    STATE_COMMITTED,
+    STATE_ROLLING_BACK,
+    STATE_ROLLED_BACK,
+    STATE_RECOVERY_REQUIRED,
+}
+VALID_ACTIONS: Set[str] = {ACTION_CREATE, ACTION_REPLACE, ACTION_UNTOUCHED}
+VALID_STATUSES: Set[str] = {
+    STATUS_PENDING,
+    STATUS_INTENT_WRITE,
+    STATUS_WRITTEN,
+    STATUS_UNTOUCHED,
+    STATUS_ROLLED_BACK,
+}
+
+
+def validate_journal(journal: Any, transaction_dir: Path) -> None:
+    """
+    Strictly validate journal schema, state enums, types, and 1:1 correspondences.
+    Rejects corrupted, emptied, tampered, or invalid journals fail-closed.
+    """
+    if not isinstance(journal, dict):
+        raise TransactionError(f"Invalid journal: root must be a JSON object, got {type(journal).__name__}")
+
+    version = journal.get("version")
+    if type(version) is not int or isinstance(version, bool) or version != JOURNAL_VERSION:
+        raise TransactionError(f"Invalid journal version: expected integer {JOURNAL_VERSION}, got {version!r}")
+
+    state = journal.get("state")
+    if state not in VALID_STATES:
+        raise TransactionError(f"Invalid journal state: {state!r}")
+
+    ns_root = journal.get("namespace_root")
+    if not isinstance(ns_root, str) or not ns_root.strip():
+        raise TransactionError("Invalid journal: missing or non-string 'namespace_root'")
+
+    top_uid = journal.get("top_uid")
+    if type(top_uid) is not int or isinstance(top_uid, bool) or top_uid < 0:
+        raise TransactionError(f"Invalid journal: 'top_uid' must be a non-negative integer, got {top_uid!r}")
+
+    preconds = journal.get("preconditions")
+    if not isinstance(preconds, dict):
+        raise TransactionError("Invalid journal: 'preconditions' must be a dict")
+
+    manifest = journal.get("candidate_manifest")
+    if not isinstance(manifest, list):
+        raise TransactionError("Invalid journal: 'candidate_manifest' must be a list")
+
+    entries = journal.get("entries")
+    if not isinstance(entries, list) or len(entries) == 0:
+        raise TransactionError("Invalid journal: 'entries' must be a non-empty list")
+
+    if len(entries) != len(manifest) or len(entries) != len(preconds):
+        raise TransactionError(
+            f"Journal entry count mismatch: {len(entries)} entries, {len(manifest)} manifest items, {len(preconds)} preconditions"
+        )
+
+    seen_remotes: Set[str] = set()
+    manifest_remotes = {os.path.normpath(m.get("remote", "")) for m in manifest if isinstance(m, dict)}
+
+    for idx, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise TransactionError(f"Journal entry at index {idx} is not an object")
+
+        remote = entry.get("remote")
+        if not isinstance(remote, str) or not remote.startswith(TERMUX_ROOT_PREFIX):
+            raise TransactionError(f"Journal entry at index {idx} has invalid remote path: {remote!r}")
+        norm_remote = os.path.normpath(remote)
+        if norm_remote in seen_remotes:
+            raise TransactionError(f"Duplicate journal entry destination: {norm_remote}")
+        seen_remotes.add(norm_remote)
+
+        if norm_remote not in manifest_remotes:
+            raise TransactionError(f"Journal entry destination not in candidate manifest: {norm_remote}")
+        if norm_remote not in preconds:
+            raise TransactionError(f"Journal entry destination not in preconditions: {norm_remote}")
+
+        action = entry.get("action")
+        if action not in VALID_ACTIONS:
+            raise TransactionError(f"Invalid action {action!r} in journal entry for {remote}")
+
+        status = entry.get("status")
+        if status not in VALID_STATUSES:
+            raise TransactionError(f"Invalid status {status!r} in journal entry for {remote}")
+
+        cand_sha = entry.get("candidate_sha256")
+        if not isinstance(cand_sha, str) or len(cand_sha) != 64 or not all(c in "0123456789abcdefABCDEF" for c in cand_sha):
+            raise TransactionError(f"Invalid candidate_sha256 in journal entry for {remote}")
+
+        cand_bytes = entry.get("candidate_bytes")
+        if type(cand_bytes) is not int or isinstance(cand_bytes, bool) or cand_bytes < 0:
+            raise TransactionError(f"Invalid candidate_bytes in journal entry for {remote}")
+
+        target_mode = normalize_mode(entry.get("target_mode"))
+        canonical_mode = get_canonical_target_mode(remote)
+        if target_mode != canonical_mode:
+            raise TransactionError(
+                f"Journal entry target mode {mode_to_octal_str(target_mode)} does not match canonical {mode_to_octal_str(canonical_mode)} for {remote}"
+            )
+
+        orig_uid = entry.get("original_uid")
+        if type(orig_uid) is not int or isinstance(orig_uid, bool) or orig_uid < 0:
+            raise TransactionError(f"Invalid original_uid in journal entry for {remote}")
+
+        if action in (ACTION_REPLACE, ACTION_UNTOUCHED):
+            orig_sha = entry.get("original_sha256")
+            if not isinstance(orig_sha, str) or len(orig_sha) != 64:
+                raise TransactionError(f"Invalid original_sha256 in journal entry for {remote}")
+            orig_bytes = entry.get("original_bytes")
+            if type(orig_bytes) is not int or isinstance(orig_bytes, bool) or orig_bytes < 0:
+                raise TransactionError(f"Invalid original_bytes in journal entry for {remote}")
+            normalize_mode(entry.get("original_mode"))
+
+        if action == ACTION_REPLACE:
+            bk_rel = entry.get("backup_file")
+            if not bk_rel:
+                raise TransactionError(f"Missing backup_file in REPLACE entry for {remote}")
+            validate_tx_relpath(bk_rel, transaction_dir)
+
+        if action in (ACTION_REPLACE, ACTION_CREATE):
+            stg_rel = entry.get("staged_file")
+            if not stg_rel:
+                raise TransactionError(f"Missing staged_file in {action} entry for {remote}")
+            validate_tx_relpath(stg_rel, transaction_dir)
+
+        if entry.get("is_alias"):
+            raw_link = entry.get("alias_raw_link")
+            if not isinstance(raw_link, str) or not raw_link.strip():
+                raise TransactionError(f"Missing or invalid alias_raw_link for {remote}")
+            for fld in ("alias_dev", "alias_ino", "alias_mode", "alias_uid"):
+                val = entry.get(fld)
+                if type(val) is not int or isinstance(val, bool):
+                    raise TransactionError(f"Missing or invalid {fld} for {remote}: {val!r}")
 
 
 def get_canonical_target_mode(remote_path: str) -> int:
@@ -495,7 +729,8 @@ def parse_preconditions(
     """
     Parse reviewed preconditions.
     Returns: (top_level_uid_or_None, map_of_remote_path_to_precondition_dict)
-    Detects and rejects duplicate entries.
+    Strictly validates UID types (non-negative integer, never bool/null/str).
+    Detects and rejects duplicate entries and missing UIDs.
     """
     data = preconditions_input
     if isinstance(data, (str, Path)):
@@ -513,18 +748,16 @@ def parse_preconditions(
 
     if isinstance(data, dict):
         if "uid" in data:
-            top_uid = data["uid"]
+            top_uid = validate_uid(data["uid"], "top-level 'uid'")
         if "files" in data and isinstance(data["files"], list):
             files_list = data["files"]
         else:
-            # Could be a direct map of remote_path -> dict
             files_list = []
             for path_k, val in data.items():
                 if isinstance(val, dict):
                     entry = dict(val)
                     entry.setdefault("path", path_k)
                     files_list.append(entry)
-
     elif isinstance(data, list):
         files_list = data
     else:
@@ -541,6 +774,23 @@ def parse_preconditions(
         norm_path = os.path.normpath(path_str)
         if norm_path in precond_map:
             raise PreconditionError(f"Duplicate precondition declared for destination: '{norm_path}'")
+
+        # Validate entry UID
+        item_uid = item.get("uid")
+        if item_uid is not None:
+            entry_uid = validate_uid(item_uid, f"entry 'uid' for {norm_path}")
+            if top_uid is not None and entry_uid != top_uid:
+                raise PreconditionError(
+                    f"Entry UID {entry_uid} for {norm_path} does not match top-level UID {top_uid}"
+                )
+        else:
+            if top_uid is not None:
+                item["uid"] = top_uid
+            else:
+                raise PreconditionError(
+                    f"Entry {norm_path} is missing explicit 'uid' and no valid top-level 'uid' declared"
+                )
+
         precond_map[norm_path] = item
 
     return top_uid, precond_map
@@ -583,7 +833,7 @@ def verify_live_preconditions(
         target_disk, alias_disk, is_alias = resolve_disk_path(remote_path, namespace_root)
 
         kind = precond.get("kind", "file")
-        expected_uid = precond.get("uid", top_uid)
+        expected_uid = validate_uid(precond.get("uid", top_uid), f"precondition UID for {remote_path}")
 
         if kind == "absent":
             if path_lexists(target_disk):
@@ -602,12 +852,36 @@ def verify_live_preconditions(
                     f"Precondition drift: boot alias {remote_path} must be a symlink on disk"
                 )
 
-            # Check alias lstat UID
+            # Check alias lstat identity and target
             alias_st = alias_disk.lstat()
-            if expected_uid is not None and alias_st.st_uid != expected_uid:
+            if alias_st.st_uid != expected_uid:
                 raise PreconditionError(
                     f"UID mismatch on boot alias symlink {remote_path}: expected UID {expected_uid}, live has {alias_st.st_uid}"
                 )
+
+            if "raw_link" in precond:
+                live_raw_link = os.readlink(alias_disk)
+                if live_raw_link != precond["raw_link"]:
+                    raise PreconditionError(
+                        f"Boot alias raw link drift on {remote_path}: expected '{precond['raw_link']}', live has '{live_raw_link}'"
+                    )
+
+            if "dev" in precond and alias_st.st_dev != precond["dev"]:
+                raise PreconditionError(
+                    f"Boot alias device drift on {remote_path}: expected dev {precond['dev']}, live has {alias_st.st_dev}"
+                )
+
+            if "ino" in precond and alias_st.st_ino != precond["ino"]:
+                raise PreconditionError(
+                    f"Boot alias inode drift on {remote_path}: expected ino {precond['ino']}, live has {alias_st.st_ino}"
+                )
+
+            if "mode" in precond:
+                exp_mode = normalize_mode(precond["mode"])
+                if stat.S_IMODE(alias_st.st_mode) != exp_mode:
+                    raise PreconditionError(
+                        f"Boot alias mode drift on {remote_path}: expected {mode_to_octal_str(exp_mode)}, live has {mode_to_octal_str(stat.S_IMODE(alias_st.st_mode))}"
+                    )
 
             # Check target file
             if not target_disk.exists() or target_disk.is_symlink():
@@ -616,7 +890,7 @@ def verify_live_preconditions(
                 )
 
             target_st = target_disk.stat()
-            if expected_uid is not None and target_st.st_uid != expected_uid:
+            if target_st.st_uid != expected_uid:
                 raise PreconditionError(
                     f"UID mismatch on boot target {target_disk}: expected UID {expected_uid}, live has {target_st.st_uid}"
                 )
@@ -656,7 +930,7 @@ def verify_live_preconditions(
                 )
 
             st = target_disk.stat()
-            if expected_uid is not None and st.st_uid != expected_uid:
+            if st.st_uid != expected_uid:
                 raise PreconditionError(
                     f"UID mismatch for {remote_path}: expected UID {expected_uid}, live file has {st.st_uid}"
                 )
@@ -728,6 +1002,14 @@ def verify_live_candidate_state(
         if is_alias:
             if alias_disk is None or not alias_disk.is_symlink():
                 raise TransactionError(f"Boot alias symlink missing or corrupted: {entry['remote']}")
+            verify_boot_alias_identity(
+                alias_disk=alias_disk,
+                expected_raw_link=entry["alias_raw_link"],
+                expected_dev=entry["alias_dev"],
+                expected_ino=entry["alias_ino"],
+                expected_uid=entry["alias_uid"],
+                expected_mode=entry.get("alias_mode"),
+            )
             if not target_disk.exists() or target_disk.is_symlink():
                 raise TransactionError(f"Boot target missing or not a regular file: {target_disk}")
             st = target_disk.stat()
@@ -805,6 +1087,14 @@ def verify_live_preimage_state(
         if is_alias:
             if alias_disk is None or not alias_disk.is_symlink():
                 raise TransactionError(f"Boot alias symlink missing or corrupted: {entry['remote']}")
+            verify_boot_alias_identity(
+                alias_disk=alias_disk,
+                expected_raw_link=entry["alias_raw_link"],
+                expected_dev=entry["alias_dev"],
+                expected_ino=entry["alias_ino"],
+                expected_uid=entry["alias_uid"],
+                expected_mode=entry.get("alias_mode"),
+            )
             if not target_disk.exists() or target_disk.is_symlink():
                 raise TransactionError(f"Boot target missing or not regular file: {target_disk}")
             st = target_disk.stat()
@@ -854,9 +1144,11 @@ class ReleaseTransaction:
             raise TransactionError(f"Journal not found at {self.journal_path}")
         try:
             with open(self.journal_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
         except Exception as exc:
             raise TransactionError(f"Failed to read journal {self.journal_path}: {exc}") from exc
+        validate_journal(data, self.transaction_dir)
+        return data
 
     def save_journal(self, data: Dict[str, Any]) -> None:
         data["updated_at"] = time.time()
@@ -887,8 +1179,33 @@ class ReleaseTransaction:
 
         # 2. Acquire namespace lock
         with NamespaceLock(ns_root):
-            # 3. Reload journal under lock
+            # 3. Reload journal under lock and re-verify namespace binding
             journal = self.load_journal()
+            raw_ns = journal.get("namespace_root")
+            if not raw_ns:
+                raise TransactionError("Namespace root not defined in journal")
+            reloaded_ns = Path(raw_ns).resolve()
+            if reloaded_ns != ns_root:
+                raise TransactionError(
+                    f"Namespace root changed under lock: was '{ns_root}', now '{reloaded_ns}'"
+                )
+            if namespace_root is not None and Path(namespace_root).resolve() != reloaded_ns:
+                raise TransactionError(
+                    f"Supplied namespace root '{Path(namespace_root).resolve()}' does not match journal namespace root '{reloaded_ns}'"
+                )
+
+            # Recheck runtime UID under lock
+            current_uid = os.getuid()
+            if journal.get("top_uid") != current_uid:
+                raise ApplyError(
+                    f"Transaction recorded UID {journal.get('top_uid')} does not match runtime UID {current_uid}: mode/UID drift"
+                )
+            for entry in journal.get("entries", []):
+                if entry.get("original_uid") != current_uid:
+                    raise ApplyError(
+                        f"Entry {entry.get('remote')} UID {entry.get('original_uid')} does not match runtime UID {current_uid}: mode/UID drift"
+                    )
+
             curr_state = journal.get("state")
 
             # 4. Idempotent check under lock: MUST verify live candidate files
@@ -911,8 +1228,22 @@ class ReleaseTransaction:
                 strict_match_count=True,
             )
 
-            # Verify integrity and containment of all staged files before writes
+            # Verify boot alias exact identity before ANY live writes!
             entries = journal.get("entries", [])
+            for entry in entries:
+                if entry["is_alias"]:
+                    _, alias_disk, _ = resolve_disk_path(entry["remote"], ns_root)
+                    assert alias_disk is not None
+                    verify_boot_alias_identity(
+                        alias_disk=alias_disk,
+                        expected_raw_link=entry["alias_raw_link"],
+                        expected_dev=entry["alias_dev"],
+                        expected_ino=entry["alias_ino"],
+                        expected_uid=entry["alias_uid"],
+                        expected_mode=entry.get("alias_mode"),
+                    )
+
+            # Verify integrity and containment of all staged files before writes
             for entry in entries:
                 if entry["action"] != ACTION_UNTOUCHED:
                     staged_path = validate_tx_relpath(entry["staged_file"], self.transaction_dir)
@@ -954,45 +1285,31 @@ class ReleaseTransaction:
 
                     # Destination on disk
                     target_disk, alias_disk, is_alias = resolve_disk_path(entry["remote"], ns_root)
-                    target_disk.parent.mkdir(parents=True, exist_ok=True)
+                    if is_alias:
+                        assert alias_disk is not None
+                        verify_boot_alias_identity(
+                            alias_disk=alias_disk,
+                            expected_raw_link=entry["alias_raw_link"],
+                            expected_dev=entry["alias_dev"],
+                            expected_ino=entry["alias_ino"],
+                            expected_uid=entry["alias_uid"],
+                            expected_mode=entry.get("alias_mode"),
+                        )
 
                     staged_path = validate_tx_relpath(entry["staged_file"], self.transaction_dir)
                     with open(staged_path, "rb") as sf:
                         staged_bytes_data = sf.read()
 
-                    # Atomic sibling replacement with pre-replace sibling validation
-                    tmp_sibling = target_disk.parent / f".tmp_{target_disk.name}_{os.getpid()}_{uuid.uuid4().hex}"
                     target_mode = normalize_mode(entry["target_mode"])
-                    fd = os.open(str(tmp_sibling), os.O_WRONLY | os.O_CREAT | os.O_EXCL, target_mode)
-                    try:
-                        write_all(fd, staged_bytes_data)
-                        os.chmod(fd, target_mode)
-                        os.fsync(fd)
-                    finally:
-                        os.close(fd)
-
-                    try:
-                        # Validate sibling BEFORE os.replace
-                        sib_st = tmp_sibling.stat()
-                        if sib_st.st_size != entry["candidate_bytes"]:
-                            raise ApplyError(f"Pre-replace sibling size verification failed for {entry['remote']}")
-                        if stat.S_IMODE(sib_st.st_mode) != target_mode:
-                            raise ApplyError(f"Pre-replace sibling mode verification failed for {entry['remote']}")
-                        sib_sha, _ = compute_file_sha256(tmp_sibling)
-                        if sib_sha.lower() != entry["candidate_sha256"].lower():
-                            raise ApplyError(f"Pre-replace sibling SHA-256 verification failed for {entry['remote']}")
-                        expected_uid = entry.get("original_uid", top_uid)
-                        if expected_uid is not None and sib_st.st_uid != expected_uid:
-                            raise ApplyError(f"Pre-replace sibling UID verification failed for {entry['remote']}")
-
-                        os.replace(tmp_sibling, target_disk)
-                        fsync_dir(target_disk.parent)
-                    finally:
-                        if path_lexists(tmp_sibling):
-                            try:
-                                tmp_sibling.unlink()
-                            except OSError:
-                                pass
+                    write_atomic_file(
+                        dest_path=target_disk,
+                        content=staged_bytes_data,
+                        mode=target_mode,
+                        expected_bytes=entry["candidate_bytes"],
+                        expected_sha256=entry["candidate_sha256"],
+                        expected_uid=entry.get("original_uid", top_uid),
+                        prefix=".tmp_apply_",
+                    )
 
                     # Post-apply verification on disk
                     target_st = target_disk.stat()
@@ -1055,6 +1372,30 @@ class ReleaseTransaction:
 
         with NamespaceLock(ns_root):
             journal = self.load_journal()
+            raw_ns = journal.get("namespace_root")
+            if not raw_ns:
+                raise TransactionError("Namespace root not defined in journal")
+            reloaded_ns = Path(raw_ns).resolve()
+            if reloaded_ns != ns_root:
+                raise TransactionError(
+                    f"Namespace root changed under lock: was '{ns_root}', now '{reloaded_ns}'"
+                )
+            if namespace_root is not None and Path(namespace_root).resolve() != reloaded_ns:
+                raise TransactionError(
+                    f"Supplied namespace root '{Path(namespace_root).resolve()}' does not match journal namespace root '{reloaded_ns}'"
+                )
+
+            current_uid = os.getuid()
+            if journal.get("top_uid") != current_uid:
+                raise RecoveryError(
+                    f"Transaction recorded UID {journal.get('top_uid')} does not match runtime UID {current_uid}: mode/UID drift"
+                )
+            for entry in journal.get("entries", []):
+                if entry.get("original_uid") != current_uid:
+                    raise RecoveryError(
+                        f"Entry {entry.get('remote')} UID {entry.get('original_uid')} does not match runtime UID {current_uid}: mode/UID drift"
+                    )
+
             curr_state = journal.get("state")
 
             if curr_state == STATE_COMMITTED:
@@ -1081,6 +1422,30 @@ class ReleaseTransaction:
 
         with NamespaceLock(ns_root):
             journal = self.load_journal()
+            raw_ns = journal.get("namespace_root")
+            if not raw_ns:
+                raise TransactionError("Namespace root not defined in journal")
+            reloaded_ns = Path(raw_ns).resolve()
+            if reloaded_ns != ns_root:
+                raise TransactionError(
+                    f"Namespace root changed under lock: was '{ns_root}', now '{reloaded_ns}'"
+                )
+            if namespace_root is not None and Path(namespace_root).resolve() != reloaded_ns:
+                raise TransactionError(
+                    f"Supplied namespace root '{Path(namespace_root).resolve()}' does not match journal namespace root '{reloaded_ns}'"
+                )
+
+            current_uid = os.getuid()
+            if journal.get("top_uid") != current_uid:
+                raise RecoveryError(
+                    f"Transaction recorded UID {journal.get('top_uid')} does not match runtime UID {current_uid}: mode/UID drift"
+                )
+            for entry in journal.get("entries", []):
+                if entry.get("original_uid") != current_uid:
+                    raise RecoveryError(
+                        f"Entry {entry.get('remote')} UID {entry.get('original_uid')} does not match runtime UID {current_uid}: mode/UID drift"
+                    )
+
             curr_state = journal.get("state")
 
             if curr_state == STATE_ROLLED_BACK:
@@ -1116,6 +1481,30 @@ class ReleaseTransaction:
 
         with NamespaceLock(ns_root):
             journal = self.load_journal()
+            raw_ns = journal.get("namespace_root")
+            if not raw_ns:
+                raise TransactionError("Namespace root not defined in journal")
+            reloaded_ns = Path(raw_ns).resolve()
+            if reloaded_ns != ns_root:
+                raise TransactionError(
+                    f"Namespace root changed under lock: was '{ns_root}', now '{reloaded_ns}'"
+                )
+            if namespace_root is not None and Path(namespace_root).resolve() != reloaded_ns:
+                raise TransactionError(
+                    f"Supplied namespace root '{Path(namespace_root).resolve()}' does not match journal namespace root '{reloaded_ns}'"
+                )
+
+            current_uid = os.getuid()
+            if journal.get("top_uid") != current_uid:
+                raise RecoveryError(
+                    f"Transaction recorded UID {journal.get('top_uid')} does not match runtime UID {current_uid}: mode/UID drift"
+                )
+            for entry in journal.get("entries", []):
+                if entry.get("original_uid") != current_uid:
+                    raise RecoveryError(
+                        f"Entry {entry.get('remote')} UID {entry.get('original_uid')} does not match runtime UID {current_uid}: mode/UID drift"
+                    )
+
             curr_state = journal.get("state")
 
             # Root policy: recover(COMMITTED) verifies candidate state and returns committed/no-op
@@ -1179,10 +1568,17 @@ class ReleaseTransaction:
             expected_uid = entry.get("original_uid", top_uid)
 
             if is_alias:
-                # Ensure alias symlink itself is still intact and pointing to boot target
+                # Ensure alias symlink itself is still intact and identity matches exactly
                 if alias_disk is None or not alias_disk.is_symlink():
                     raise RecoveryError(f"Boot alias {entry['remote']} is missing or not a symlink; cannot safely recover fail-closed")
-                link_target = os.readlink(alias_disk)
+                verify_boot_alias_identity(
+                    alias_disk=alias_disk,
+                    expected_raw_link=entry["alias_raw_link"],
+                    expected_dev=entry["alias_dev"],
+                    expected_ino=entry["alias_ino"],
+                    expected_uid=entry["alias_uid"],
+                    expected_mode=entry.get("alias_mode"),
+                )
                 if not target_disk.exists() or target_disk.is_symlink():
                     raise RecoveryError(f"Boot target {target_disk} for alias {entry['remote']} is missing or not a regular file")
 
@@ -1287,36 +1683,18 @@ class ReleaseTransaction:
                 with open(backup_path, "rb") as bf:
                     backup_bytes = bf.read()
 
-                tmp_sibling = target_disk.parent / f".tmp_{target_disk.name}_rb_{os.getpid()}_{uuid.uuid4().hex}"
-                fd = os.open(str(tmp_sibling), os.O_WRONLY | os.O_CREAT | os.O_EXCL, orig_mode)
                 try:
-                    write_all(fd, backup_bytes)
-                    os.chmod(fd, orig_mode)
-                    os.fsync(fd)
-                finally:
-                    os.close(fd)
-
-                try:
-                    # Validate rollback sibling before replacement
-                    sib_st = tmp_sibling.stat()
-                    if sib_st.st_size != entry["original_bytes"]:
-                        raise RecoveryError(f"Pre-replace rollback sibling size mismatch for {entry['remote']}")
-                    if stat.S_IMODE(sib_st.st_mode) != orig_mode:
-                        raise RecoveryError(f"Pre-replace rollback sibling mode mismatch for {entry['remote']}")
-                    sib_sha, _ = compute_file_sha256(tmp_sibling)
-                    if sib_sha.lower() != entry["original_sha256"].lower():
-                        raise RecoveryError(f"Pre-replace rollback sibling SHA-256 mismatch for {entry['remote']}")
-                    if expected_uid is not None and sib_st.st_uid != expected_uid:
-                        raise RecoveryError(f"Pre-replace rollback sibling UID mismatch for {entry['remote']}")
-
-                    os.replace(tmp_sibling, target_disk)
-                    fsync_dir(target_disk.parent)
-                finally:
-                    if path_lexists(tmp_sibling):
-                        try:
-                            tmp_sibling.unlink()
-                        except OSError:
-                            pass
+                    write_atomic_file(
+                        dest_path=target_disk,
+                        content=backup_bytes,
+                        mode=orig_mode,
+                        expected_bytes=entry["original_bytes"],
+                        expected_sha256=entry["original_sha256"],
+                        expected_uid=expected_uid,
+                        prefix=".tmp_rb_",
+                    )
+                except Exception as restore_err:
+                    raise RecoveryError(f"Pre-replace rollback verification or replacement failed for {entry['remote']}: {restore_err}") from restore_err
 
                 # Verify restored bytes, mode, hash, and UID on target
                 restored_st = target_disk.stat()
@@ -1344,10 +1722,14 @@ def prepare(
     """
     Prepare a release transaction.
     1. Validates candidate bundle with sibling release-manifest.py (requires gateway).
-    2. Parses and verifies caller-provided reviewed preconditions against live disk.
-    3. Stages changed candidate files and creates live backups.
-    4. Saves standalone recovery copy of this script in transaction directory.
-    5. Writes initial PREPARED atomic journal.
+    2. Parses and verifies caller-provided reviewed preconditions.
+    3. Validates canonical mode on all candidate manifest entries.
+    4. Validates runtime UID identity against declared UIDs before any disk creation.
+    5. Guards transaction directory: refuses non-empty transaction directories.
+    6. Acquires NamespaceLock on namespace root.
+    7. Stages changed candidate files and creates live backups.
+    8. Saves standalone recovery copy of this script in transaction directory.
+    9. Writes initial PREPARED atomic journal.
     """
     b_root = Path(bundle_root).resolve()
     tx_dir = Path(transaction_dir).resolve()
@@ -1378,185 +1760,208 @@ def prepare(
 
     # Parse and verify reviewed preconditions
     top_uid, precond_map = parse_preconditions(preconditions)
-    verify_live_preconditions(
-        manifest_entries=manifest_entries,
-        precond_map=precond_map,
-        top_uid=top_uid,
-        namespace_root=ns_root,
-        strict_match_count=True,
-    )
 
-    # Setup transaction directories with restricted permissions (0700)
-    tx_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(tx_dir, 0o700)
-
-    staged_dir = tx_dir / "staged"
-    staged_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(staged_dir, 0o700)
-
-    backups_dir = tx_dir / "backups"
-    backups_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(backups_dir, 0o700)
-
-    # Save standalone recovery copy of this script alongside journal
-    recovery_script_path = tx_dir / "release_transaction.py"
-    current_script_path = Path(__file__).resolve()
-    shutil.copy2(current_script_path, recovery_script_path)
-    os.chmod(recovery_script_path, 0o700)
-
-    entries_data: List[Dict[str, Any]] = []
-
+    # Validate canonical mode on all candidate manifest entries
     for entry in manifest_entries:
-        local_rel = entry["local"]
         remote_path = os.path.normpath(entry["remote"])
-        precond = precond_map[remote_path]
+        canonical_mode = get_canonical_target_mode(remote_path)
+        if "mode" in entry:
+            cand_mode = normalize_mode(entry["mode"])
+            if cand_mode != canonical_mode:
+                raise PreconditionError(
+                    f"Candidate manifest declares non-canonical mode {mode_to_octal_str(cand_mode)} "
+                    f"for {remote_path} (canonical policy requires {mode_to_octal_str(canonical_mode)})"
+                )
 
-        src_file = b_root / local_rel
-        if not src_file.exists():
-            raise PreconditionError(f"Candidate source file missing: {src_file}")
-        cand_sha256, cand_bytes = compute_file_sha256(src_file)
+    # Enforce runtime UID consistency BEFORE any disk operations
+    current_uid = os.getuid()
+    current_euid = os.geteuid()
+    if current_uid != current_euid:
+        raise PreconditionError(f"Effective UID {current_euid} does not match real UID {current_uid}")
 
-        target_disk, alias_disk, is_alias = resolve_disk_path(remote_path, ns_root)
-        target_mode = normalize_mode(entry.get("mode", get_canonical_target_mode(remote_path)))
+    if top_uid is not None and top_uid != current_uid:
+        raise PreconditionError(
+            f"UID mismatch: declared top-level UID {top_uid} does not match runtime UID {current_uid}"
+        )
 
-        kind = precond.get("kind", "file")
+    for remote_path, precond in precond_map.items():
+        entry_uid = precond["uid"]
+        if entry_uid != current_uid:
+            raise PreconditionError(
+                f"UID mismatch: precondition entry UID {entry_uid} for {remote_path} does not match runtime UID {current_uid}"
+            )
 
-        # Determine action and whether live file is untouched
-        action = ACTION_REPLACE
-        orig_sha256 = None
-        orig_bytes = None
-        orig_mode = None
-        orig_uid = precond.get("uid", top_uid)
+    # Guard transaction directory: refuse non-empty directory
+    if tx_dir.exists():
+        existing_items = list(tx_dir.iterdir())
+        if len(existing_items) > 0:
+            raise TransactionError(
+                f"Transaction directory is not empty: {tx_dir}. Refusing to overwrite existing transaction."
+            )
 
-        if kind == "absent":
-            action = ACTION_CREATE
-        elif kind == "symlink":
-            # Boot alias: live target script details
-            orig_sha256 = precond.get("target_sha256", AUDITED_BOOT_SCRIPT_SHA256)
-            orig_bytes = precond.get("target_bytes", AUDITED_BOOT_SCRIPT_BYTES)
-            orig_mode = mode_to_octal_str(normalize_mode(precond.get("target_mode", AUDITED_BOOT_SCRIPT_MODE)))
-            if (
-                cand_sha256.lower() == orig_sha256.lower()
-                and cand_bytes == orig_bytes
-                and target_mode == normalize_mode(orig_mode)
-            ):
-                action = ACTION_UNTOUCHED
-        elif kind == "file":
-            orig_sha256 = precond["sha256"]
-            orig_bytes = precond["bytes"]
-            orig_mode = mode_to_octal_str(normalize_mode(precond["mode"]))
-            if (
-                cand_sha256.lower() == orig_sha256.lower()
-                and cand_bytes == orig_bytes
-                and target_mode == normalize_mode(orig_mode)
-            ):
-                action = ACTION_UNTOUCHED
+    # Acquire namespace lock for the entire preparation phase
+    with NamespaceLock(ns_root):
+        verify_live_preconditions(
+            manifest_entries=manifest_entries,
+            precond_map=precond_map,
+            top_uid=top_uid,
+            namespace_root=ns_root,
+            strict_match_count=True,
+        )
 
-        entry_record: Dict[str, Any] = {
-            "local": local_rel,
-            "remote": remote_path,
-            "is_alias": is_alias,
-            "is_entrypoint": is_entrypoint(remote_path),
-            "action": action,
-            "candidate_sha256": cand_sha256,
-            "candidate_bytes": cand_bytes,
-            "target_mode": mode_to_octal_str(target_mode),
-            "original_sha256": orig_sha256,
-            "original_bytes": orig_bytes,
-            "original_mode": orig_mode,
-            "original_uid": orig_uid,
-            "status": STATUS_PENDING,
+        # Setup transaction directories with restricted permissions (0700)
+        tx_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(tx_dir, 0o700)
+
+        staged_dir = tx_dir / "staged"
+        staged_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(staged_dir, 0o700)
+
+        backups_dir = tx_dir / "backups"
+        backups_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(backups_dir, 0o700)
+
+        # Save standalone recovery copy of this script alongside journal
+        recovery_script_path = tx_dir / "release_transaction.py"
+        current_script_path = Path(__file__).resolve()
+        shutil.copy2(current_script_path, recovery_script_path)
+        os.chmod(recovery_script_path, 0o700)
+
+        entries_data: List[Dict[str, Any]] = []
+
+        for entry in manifest_entries:
+            local_rel = entry["local"]
+            remote_path = os.path.normpath(entry["remote"])
+            precond = precond_map[remote_path]
+
+            src_file = b_root / local_rel
+            if not src_file.exists():
+                raise PreconditionError(f"Candidate source file missing: {src_file}")
+            cand_sha256, cand_bytes = compute_file_sha256(src_file)
+
+            target_disk, alias_disk, is_alias = resolve_disk_path(remote_path, ns_root)
+            target_mode = get_canonical_target_mode(remote_path)
+
+            kind = precond.get("kind", "file")
+
+            action = ACTION_REPLACE
+            orig_sha256 = None
+            orig_bytes = None
+            orig_mode = None
+            orig_uid = precond["uid"]
+
+            alias_raw_link = None
+            alias_dev = None
+            alias_ino = None
+            alias_mode = None
+            alias_uid = None
+
+            if kind == "absent":
+                action = ACTION_CREATE
+            elif kind == "symlink":
+                orig_sha256 = precond.get("target_sha256", AUDITED_BOOT_SCRIPT_SHA256)
+                orig_bytes = precond.get("target_bytes", AUDITED_BOOT_SCRIPT_BYTES)
+                orig_mode = mode_to_octal_str(normalize_mode(precond.get("target_mode", AUDITED_BOOT_SCRIPT_MODE)))
+                if (
+                    cand_sha256.lower() == orig_sha256.lower()
+                    and cand_bytes == orig_bytes
+                    and target_mode == normalize_mode(orig_mode)
+                ):
+                    action = ACTION_UNTOUCHED
+
+                assert alias_disk is not None
+                alias_st = alias_disk.lstat()
+                alias_raw_link = os.readlink(alias_disk)
+                alias_dev = alias_st.st_dev
+                alias_ino = alias_st.st_ino
+                alias_mode = stat.S_IMODE(alias_st.st_mode)
+                alias_uid = alias_st.st_uid
+            elif kind == "file":
+                orig_sha256 = precond["sha256"]
+                orig_bytes = precond["bytes"]
+                orig_mode = mode_to_octal_str(normalize_mode(precond["mode"]))
+                if (
+                    cand_sha256.lower() == orig_sha256.lower()
+                    and cand_bytes == orig_bytes
+                    and target_mode == normalize_mode(orig_mode)
+                ):
+                    action = ACTION_UNTOUCHED
+
+            entry_record: Dict[str, Any] = {
+                "local": local_rel,
+                "remote": remote_path,
+                "is_alias": is_alias,
+                "is_entrypoint": is_entrypoint(remote_path),
+                "action": action,
+                "candidate_sha256": cand_sha256,
+                "candidate_bytes": cand_bytes,
+                "target_mode": mode_to_octal_str(target_mode),
+                "original_sha256": orig_sha256,
+                "original_bytes": orig_bytes,
+                "original_mode": orig_mode,
+                "original_uid": orig_uid,
+                "status": STATUS_PENDING,
+            }
+
+            if is_alias:
+                entry_record["alias_raw_link"] = alias_raw_link
+                entry_record["alias_dev"] = alias_dev
+                entry_record["alias_ino"] = alias_ino
+                entry_record["alias_mode"] = alias_mode
+                entry_record["alias_uid"] = alias_uid
+
+            if action != ACTION_UNTOUCHED:
+                rel_disk_path = target_disk.relative_to(ns_root)
+                staged_file_path = staged_dir / rel_disk_path
+                with open(src_file, "rb") as sf:
+                    cand_content = sf.read()
+
+                write_atomic_file(
+                    dest_path=staged_file_path,
+                    content=cand_content,
+                    mode=target_mode,
+                    expected_bytes=cand_bytes,
+                    expected_sha256=cand_sha256,
+                    prefix=".tmp_stage_",
+                )
+                entry_record["staged_file"] = str(staged_file_path.relative_to(tx_dir))
+
+            if action == ACTION_REPLACE:
+                rel_disk_path = target_disk.relative_to(ns_root)
+                backup_file_path = backups_dir / rel_disk_path
+                with open(target_disk, "rb") as tf:
+                    live_content = tf.read()
+
+                bk_mode = normalize_mode(orig_mode)
+                write_atomic_file(
+                    dest_path=backup_file_path,
+                    content=live_content,
+                    mode=bk_mode,
+                    expected_bytes=orig_bytes,
+                    expected_sha256=orig_sha256,
+                    prefix=".tmp_bk_",
+                )
+                entry_record["backup_file"] = str(backup_file_path.relative_to(tx_dir))
+
+            entries_data.append(entry_record)
+
+        entries_data.sort(key=lambda x: (1 if x["is_entrypoint"] else 0, x["remote"]))
+
+        journal_data: Dict[str, Any] = {
+            "version": JOURNAL_VERSION,
+            "state": STATE_PREPARED,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "namespace_root": str(ns_root),
+            "top_uid": top_uid,
+            "preconditions": precond_map,
+            "candidate_manifest": manifest_entries,
+            "entries": entries_data,
         }
 
-        # Stage candidate file if not untouched
-        if action != ACTION_UNTOUCHED:
-            rel_disk_path = target_disk.relative_to(ns_root)
-            staged_file_path = staged_dir / rel_disk_path
-            staged_file_path.parent.mkdir(parents=True, exist_ok=True)
-
-            tmp_stage = staged_file_path.parent / f".tmp_stage_{staged_file_path.name}_{uuid.uuid4().hex}"
-            with open(src_file, "rb") as sf:
-                cand_content = sf.read()
-
-            fd = os.open(str(tmp_stage), os.O_WRONLY | os.O_CREAT | os.O_EXCL, target_mode)
-            try:
-                write_all(fd, cand_content)
-                os.chmod(fd, target_mode)
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-
-            try:
-                # Pre-replace verification of temporary staged file
-                st_sha, st_bytes = compute_file_sha256(tmp_stage)
-                if st_bytes != cand_bytes or st_sha.lower() != cand_sha256.lower():
-                    raise PreconditionError(f"Staged file write verification failed for {remote_path}")
-                os.replace(tmp_stage, staged_file_path)
-                fsync_dir(staged_file_path.parent)
-            finally:
-                if path_lexists(tmp_stage):
-                    try:
-                        tmp_stage.unlink()
-                    except OSError:
-                        pass
-
-            entry_record["staged_file"] = str(staged_file_path.relative_to(tx_dir))
-
-        # Backup live target if replacing
-        if action == ACTION_REPLACE:
-            rel_disk_path = target_disk.relative_to(ns_root)
-            backup_file_path = backups_dir / rel_disk_path
-            backup_file_path.parent.mkdir(parents=True, exist_ok=True)
-
-            tmp_bk = backup_file_path.parent / f".tmp_bk_{backup_file_path.name}_{uuid.uuid4().hex}"
-            with open(target_disk, "rb") as tf:
-                live_content = tf.read()
-
-            bk_mode = normalize_mode(orig_mode)
-            fd = os.open(str(tmp_bk), os.O_WRONLY | os.O_CREAT | os.O_EXCL, bk_mode)
-            try:
-                write_all(fd, live_content)
-                os.chmod(fd, bk_mode)
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-
-            try:
-                # Pre-replace verification of temporary backup file
-                bk_sha, bk_bytes = compute_file_sha256(tmp_bk)
-                if bk_bytes != orig_bytes or bk_sha.lower() != orig_sha256.lower():
-                    raise PreconditionError(f"Backup file write verification failed for {remote_path}")
-                os.replace(tmp_bk, backup_file_path)
-                fsync_dir(backup_file_path.parent)
-            finally:
-                if path_lexists(tmp_bk):
-                    try:
-                        tmp_bk.unlink()
-                    except OSError:
-                        pass
-
-            entry_record["backup_file"] = str(backup_file_path.relative_to(tx_dir))
-
-        entries_data.append(entry_record)
-
-    # Sort entries: helpers and assets before entrypoints
-    entries_data.sort(key=lambda x: (1 if x["is_entrypoint"] else 0, x["remote"]))
-
-    journal_data: Dict[str, Any] = {
-        "version": JOURNAL_VERSION,
-        "state": STATE_PREPARED,
-        "created_at": time.time(),
-        "updated_at": time.time(),
-        "namespace_root": str(ns_root),
-        "top_uid": top_uid,
-        "preconditions": precond_map,
-        "candidate_manifest": manifest_entries,
-        "entries": entries_data,
-    }
-
-    tx = ReleaseTransaction(tx_dir)
-    tx.save_journal(journal_data)
-    return tx
+        tx = ReleaseTransaction(tx_dir)
+        tx.save_journal(journal_data)
+        return tx
 
 
 def apply(

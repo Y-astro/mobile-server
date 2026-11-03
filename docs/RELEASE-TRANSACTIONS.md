@@ -61,6 +61,7 @@ In production, expected file UID is `10505`. In test harnesses and fixture names
 import scripts.release_transaction as rt
 
 # 1. Prepare transaction
+# Acquires NamespaceLock; validates canonical modes and runtime UID before creating tx_dir
 tx = rt.prepare(
     bundle_root="/path/to/bundle",
     candidate_manifest=manifest_entries,
@@ -76,39 +77,51 @@ status = tx.status()
 # 3. Apply changes to live filesystem
 res = tx.apply(namespace_root="/data/data/com.termux/files")
 # Returns: {"state": "APPLIED", "applied_count": N}
-# Idempotent: repeated apply verifies candidate live state and returns {"state": "APPLIED", "applied_count": 0}
+# Idempotent: repeated apply verifies candidate live state and returns {"state": "APPLIED", "status": "idempotent_success"}
 
 # 4. Finalize transaction
-tx.commit(namespace_root="/data/data/com.termux/files")
+res_cm = tx.commit(namespace_root="/data/data/com.termux/files")
 # Returns: {"state": "COMMITTED", "status": "committed"}
+# Idempotent: repeated commit returns {"state": "COMMITTED", "status": "idempotent_success"}
 
 # 5. Recovery (for interrupted, failed, or applying transactions)
 res_rc = tx.recover(namespace_root="/data/data/com.termux/files")
 # Returns: {"state": "ROLLED_BACK", "status": "recovered"}
-# If already COMMITTED: verifies live candidate state and returns {"state": "COMMITTED", "status": "no_op"}
+# If already COMMITTED: verifies live candidate state and returns {"state": "COMMITTED", "status": "idempotent_success"}
+# If already ROLLED_BACK: verifies live preimage state and returns {"state": "ROLLED_BACK", "status": "idempotent_success"}
 
 # 6. Explicit Rollback (caller-initiated reversion of applied or committed releases)
 res_rb = tx.rollback(namespace_root="/data/data/com.termux/files")
-# Returns: {"state": "ROLLED_BACK", "status": "recovered"}
+# Returns: {"state": "ROLLED_BACK", "status": "rolled_back"}
+# Idempotent: repeated rollback returns {"state": "ROLLED_BACK", "status": "idempotent_success"}
 ```
 
 ## 4. Mode Policy & Write Safety
 
 - **Canonical Permissions**:
-  - `0755` strictly for `home/.local/bin/agy-runner-loop` (executable by runner processes across UIDs).
-  - `0700` for executable binaries and scripts (`dashboard`, `phone-gateway`, `start-services.sh`, `cloudflared`, etc.).
-  - `0600` for runtime helper modules (`auth.py`, `notes.py`, `document_conversion.py`), configs, and web assets.
-  - Staged files and backups are stored strictly with `0700` directory and file permissions.
-- **Write-All Semantics**:
-  - All file and journal payload writes utilize `write_all(fd, payload)` handling partial writes, retrying on `EINTR`, and detecting zero-write buffer saturation (`ENOSPC`).
-  - Temporary sibling files (`.tmp_*`) are validated for exact byte size, SHA-256 hash, file mode, and expected UID before invoking `os.replace` on live targets (during both apply and rollback).
-  - Unused or failed temporary sibling files are cleaned up fail-closed.
-- **Directory Durability**:
+  - `0755` strictly for `agy-runner-loop` (`/home/bin/agy-runner-loop` or `/usr/local/bin/agy-runner-loop`).
+  - `0700` for executable binaries and scripts (`dashboard`, `mobile-gateway`, `start-services.sh`, ordinary scripts in `usr/bin/` and `home/bin/`).
+  - `0600` for runtime helper modules (`home/.local/lib/mobile-server/`), configs, and web assets.
+  - Manifests declaring non-canonical target modes fail-closed in `prepare()` before any staging.
+  - Staged files follow canonical `target_mode`, backups preserve `orig_mode`, and transaction directories are created with `0700` mode.
+- **Strict UID Validation & Prepare Zero-Disk-Write Guarantee**:
+  - UID values must be non-negative integers (`type(uid) is int and not isinstance(uid, bool)`).
+  - In `prepare()`, runtime UID (`os.getuid()`) is verified against declared `top_uid` and entry UIDs before `transaction_dir` is created on disk. If UID drift is detected, zero transaction files are created.
+  - Mutating operations (`apply`, `commit`, `recover`, `rollback`) verify runtime UID under lock.
+- **Boot Alias Identity Verification**:
+  - Known raw link target text (`os.readlink`), device (`st_dev`), inode (`st_ino`), UID (`st_uid`), and mode (`st_mode`) are verified across `prepare`, `apply`, `commit`, `rollback`, `recover`, and idempotent checks.
+  - Retargeting (e.g. `./.termux` vs `.termux`) or inode replacement triggers fail-closed refusal; the symlink is never overwritten, unlinked, or automatically repaired.
+- **Write-All & Atomic File Safety**:
+  - All file and journal payload writes utilize `write_all(fd, payload)` with bounded `BlockingIOError` retries, `EINTR` retries, and zero-write detection.
+  - `write_atomic_file` encapsulates write, mode change, `os.fsync`, size/hash/mode/UID verification, and `os.replace` within a single utility. An outer `finally` block guarantees unreplaced temporary sibling files (`.tmp_*`) are unlinked on any failure or exception.
+- **Directory Durability & Non-Empty Guard**:
+  - `prepare()` acquires `NamespaceLock` to serialize candidate preparation.
+  - If `transaction_dir` already exists and is non-empty, `prepare()` refuses fail-closed to protect historical recovery evidence.
   - `fsync_dir` ensures directory metadata durability and propagates `EIO`, `ENOSPC`, and `EBADF` fail-closed. On filesystems where directory sync is unsupported, `EINVAL` and `ENOTSUP` are safely tolerated.
-- **Locked State & Idempotence**:
-  - Mutating operations (`apply`, `commit`, `recover`, `rollback`) acquire `NamespaceLock` before reading or mutating state, and reload the journal under lock to eliminate race windows.
-  - Namespace overrides that conflict with the transaction's recorded namespace are rejected fail-closed.
-  - Internal journal paths (`staged_file`, `backup_file`) are strictly validated against directory traversal and absolute path escapes.
+- **Strict Journal Schema Validation**:
+  - `load_journal()` enforces schema version == 1, valid state/action/status enums, non-empty entry list, canonical target modes, 1:1 correspondences across manifest, entries, and preconditions, duplicate remote detection, and directory traversal containment.
+- **Locked Namespace Re-Check**:
+  - Mutating operations reload the journal under `NamespaceLock` and verify that the reloaded `namespace_root` strictly matches the locked root and caller root.
 
 ## 5. CLI Commands
 

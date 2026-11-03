@@ -122,6 +122,7 @@ class TestReleaseTransaction(unittest.TestCase):
                 preconditions_files.append({
                     "path": remote,
                     "kind": "absent",
+                    "uid": current_uid,
                 })
                 continue
 
@@ -140,11 +141,15 @@ class TestReleaseTransaction(unittest.TestCase):
                 alias_path.parent.mkdir(parents=True, exist_ok=True)
                 # Relative symlink inside live root
                 alias_path.symlink_to(".termux/boot/start-services.sh")
+                alias_st = alias_path.lstat()
 
                 preconditions_files.append({
                     "path": remote,
                     "kind": "symlink",
                     "target": rt.KNOWN_BOOT_TARGET_REMOTE,
+                    "raw_link": os.readlink(alias_path),
+                    "dev": alias_st.st_dev,
+                    "ino": alias_st.st_ino,
                     "target_sha256": rt.AUDITED_BOOT_SCRIPT_SHA256,
                     "target_bytes": rt.AUDITED_BOOT_SCRIPT_BYTES,
                     "target_mode": "0o700",
@@ -1118,14 +1123,331 @@ class TestReleaseTransaction(unittest.TestCase):
         self.assertEqual(start_services_entry["remote"], "/data/data/com.termux/files/home/start_services.sh")
         self.assertEqual(start_services_entry["sha256"], rt.AUDITED_BOOT_SCRIPT_SHA256)
 
-        # If parent reference metadata file happens to exist, assert against it portably
-        opt_ref = Path("/home/astro/server-audit/2026-11-03/implementation/.superpowers/sdd/live-release-preimage-metadata.json")
-        if opt_ref.exists():
-            with open(opt_ref, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-            self.assertEqual(meta["uid"], 10505)
-            self.assertEqual(len([e for e in meta["files"] if e.get("kind") == "file"]), 35)
-            self.assertEqual(meta["boot_alias_followup"]["target_sha256"], rt.AUDITED_BOOT_SCRIPT_SHA256)
+        # Portable verification of tracked baseline properties without host filesystem dependencies
+        for entry in baseline_entries:
+            self.assertTrue(entry["remote"].startswith(rt.TERMUX_ROOT_PREFIX))
+            self.assertIn("sha256", entry)
+            self.assertEqual(len(entry["sha256"]), 64)
+            canonical_mode = rt.get_canonical_target_mode(entry["remote"])
+            self.assertIn(canonical_mode, (0o700, 0o600, 0o755))
+
+    def test_boot_alias_raw_target_drift_refused_before_live_writes(self):
+        """Proof: Boot alias raw target drift (e.g. ./.termux vs .termux) refuses before live writes."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture(
+            modify_auth_in_candidate=True
+        )
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+
+        auth_live = live_dir / "home/.local/lib/mobile-server/auth.py"
+        orig_auth_bytes = auth_live.read_bytes()
+
+        # Re-target alias symlink to ./.termux/boot/start-services.sh (reproduces root fault probe)
+        alias_path = live_dir / "home/start_services.sh"
+        alias_path.unlink()
+        alias_path.symlink_to("./.termux/boot/start-services.sh")
+
+        with self.assertRaises((rt.ApplyError, rt.PreconditionError)) as ctx:
+            tx.apply(namespace_root=live_dir)
+        self.assertIn("raw link", str(ctx.exception).lower())
+
+        # Assert no live writes occurred: auth.py unmodified, journal remains PREPARED
+        self.assertEqual(auth_live.read_bytes(), orig_auth_bytes)
+        status = tx.status()
+        self.assertEqual(status["state"], rt.STATE_PREPARED)
+
+    def test_boot_alias_recreated_new_inode_refused_before_live_writes(self):
+        """Proof: Boot alias symlink recreated with a new inode refuses before live writes."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture(
+            modify_auth_in_candidate=True
+        )
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+
+        auth_live = live_dir / "home/.local/lib/mobile-server/auth.py"
+        orig_auth_bytes = auth_live.read_bytes()
+
+        # Recreate alias symlink with same raw target text, yielding a new inode
+        alias_path = live_dir / "home/start_services.sh"
+        raw_target = os.readlink(alias_path)
+        alias_path.unlink()
+        alias_path.symlink_to(raw_target)
+
+        with self.assertRaises((rt.ApplyError, rt.PreconditionError)) as ctx:
+            tx.apply(namespace_root=live_dir)
+        self.assertIn("inode", str(ctx.exception).lower())
+
+        # Assert no live writes occurred
+        self.assertEqual(auth_live.read_bytes(), orig_auth_bytes)
+        self.assertEqual(tx.status()["state"], rt.STATE_PREPARED)
+
+    def test_runtime_uid_mismatch_creates_zero_transaction_files(self):
+        """Proof: Runtime UID mismatch refuses before any staging/backup/directory creation (0 files)."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        wrong_uid = os.getuid() + 999
+        bad_preconds = copy.deepcopy(preconds)
+        bad_preconds["uid"] = wrong_uid
+        for f in bad_preconds["files"]:
+            f["uid"] = wrong_uid
+
+        # tx_dir does not exist yet
+        clean_tx_dir = self.test_root / "fresh_tx_zero"
+        self.assertFalse(clean_tx_dir.exists())
+
+        with self.assertRaises(rt.PreconditionError) as ctx:
+            rt.prepare(
+                bundle_root=bundle_dir,
+                candidate_manifest=manifest,
+                preconditions=bad_preconds,
+                transaction_dir=clean_tx_dir,
+                namespace_root=live_dir,
+            )
+        self.assertIn("UID mismatch", str(ctx.exception))
+
+        # Assert zero transaction files or directories were created on disk
+        self.assertFalse(clean_tx_dir.exists())
+
+    def test_uid_validation_types_and_values(self):
+        """Proof: UID schema rejects booleans, negative integers, non-integers, and mismatches."""
+        # Boolean UID rejected
+        with self.assertRaises(rt.PreconditionError):
+            rt.validate_uid(True, "test_uid")
+        with self.assertRaises(rt.PreconditionError):
+            rt.validate_uid(False, "test_uid")
+
+        # Negative UID rejected
+        with self.assertRaises(rt.PreconditionError):
+            rt.validate_uid(-1, "test_uid")
+
+        # String UID rejected
+        with self.assertRaises(rt.PreconditionError):
+            rt.validate_uid("10505", "test_uid")
+
+        # None rejected
+        with self.assertRaises(rt.PreconditionError):
+            rt.validate_uid(None, "test_uid")
+
+        # Valid non-negative integer accepted
+        self.assertEqual(rt.validate_uid(0), 0)
+        self.assertEqual(rt.validate_uid(10505), 10505)
+
+        # parse_preconditions with missing UID on entry and no top_uid raises
+        raw_precond = [{"path": "/data/data/com.termux/files/foo.txt", "kind": "file"}]
+        with self.assertRaises(rt.PreconditionError):
+            rt.parse_preconditions(raw_precond)
+
+        # parse_preconditions with entry UID mismatch vs top_uid raises
+        mismatched_precond = {
+            "uid": 10505,
+            "files": [{"path": "/data/data/com.termux/files/foo.txt", "kind": "file", "uid": 10506}],
+        }
+        with self.assertRaises(rt.PreconditionError):
+            rt.parse_preconditions(mismatched_precond)
+
+    def test_journal_schema_validation_rejects_corrupted_or_invalid(self):
+        """Proof: Journal schema validation detects corrupted versions, states, modes, and counts."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+
+        orig_journal = tx.load_journal()
+
+        # 1. Invalid version (e.g. 2 or string)
+        bad_j = copy.deepcopy(orig_journal)
+        bad_j["version"] = 2
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.load_journal()
+        self.assertIn("version", str(ctx.exception).lower())
+
+        # 2. Empty entries list
+        bad_j = copy.deepcopy(orig_journal)
+        bad_j["entries"] = []
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.load_journal()
+        self.assertIn("entries", str(ctx.exception).lower())
+
+        # 3. Invalid state enum
+        bad_j = copy.deepcopy(orig_journal)
+        bad_j["state"] = "NON_EXISTENT_STATE"
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.load_journal()
+        self.assertIn("state", str(ctx.exception).lower())
+
+        # 4. Non-canonical target mode in journal
+        bad_j = copy.deepcopy(orig_journal)
+        bad_j["entries"][0]["target_mode"] = "0o777"
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.load_journal()
+        self.assertIn("target mode", str(ctx.exception).lower())
+
+        # 5. Duplicate destination in journal entries
+        bad_j = copy.deepcopy(orig_journal)
+        bad_j["entries"][1] = dict(bad_j["entries"][0])
+        bad_j["candidate_manifest"][1] = dict(bad_j["candidate_manifest"][0])
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.load_journal()
+        self.assertIn("duplicate", str(ctx.exception).lower())
+
+        # Restore valid journal
+        rt.write_atomic_json(tx.journal_path, orig_journal)
+        self.assertEqual(tx.load_journal()["version"], rt.JOURNAL_VERSION)
+
+    def test_locked_namespace_change_under_lock_rejected(self):
+        """Proof: Namespace root modification detected after acquiring lock raises TransactionError."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+
+        real_load_journal = tx.load_journal
+        call_count = [0]
+
+        def tamper_namespace_on_reload():
+            j = real_load_journal()
+            call_count[0] += 1
+            if call_count[0] > 1:
+                # Reload under lock returns drifted namespace
+                j["namespace_root"] = str(self.test_root / "tampered_namespace")
+            return j
+
+        with patch.object(tx, "load_journal", side_effect=tamper_namespace_on_reload):
+            with self.assertRaises(rt.TransactionError) as ctx:
+                tx.apply(namespace_root=live_dir)
+            self.assertIn("Namespace root changed under lock", str(ctx.exception))
+
+    def test_prepare_refuses_non_empty_tx_dir_preserving_recovery(self):
+        """Proof: prepare refuses to overwrite an existing non-empty transaction dir, preserving recovery."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture(
+            modify_auth_in_candidate=True
+        )
+
+        tx1 = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+        self.assertEqual(tx1.status()["state"], rt.STATE_PREPARED)
+
+        # Attempt to prepare again using the same non-empty tx_dir
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.prepare(
+                bundle_root=bundle_dir,
+                candidate_manifest=manifest,
+                preconditions=preconds,
+                transaction_dir=tx_dir,
+                namespace_root=live_dir,
+            )
+        self.assertIn("Transaction directory is not empty", str(ctx.exception))
+
+        # Verify initial transaction remains intact and can be applied
+        res = tx1.apply(namespace_root=live_dir)
+        self.assertEqual(res["state"], rt.STATE_APPLIED)
+
+    def test_prepare_lock_contention_raises_lock_error(self):
+        """Proof: prepare acquires NamespaceLock and fails with TransactionLockError if contended."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        clean_tx = self.test_root / "tx_contended"
+
+        # Hold namespace lock externally
+        with rt.NamespaceLock(live_dir):
+            with self.assertRaises(rt.TransactionLockError) as ctx:
+                rt.prepare(
+                    bundle_root=bundle_dir,
+                    candidate_manifest=manifest,
+                    preconditions=preconds,
+                    transaction_dir=clean_tx,
+                    namespace_root=live_dir,
+                )
+            self.assertIn("Namespace lock held by another process", str(ctx.exception))
+
+    def test_temporary_file_cleanup_on_early_write_or_fsync_failure(self):
+        """Proof: Early write or fsync failure cleans up temporary sibling without orphans."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        dest_file = live_dir / "home/test_cleanup_target.txt"
+        dest_file.write_text("original content\n", encoding="utf-8")
+
+        # Mock write_all to fail midway with EIO
+        with patch.object(rt, "write_all", side_effect=OSError(errno.EIO, "Injected write error")):
+            with self.assertRaises(OSError):
+                rt.write_atomic_file(
+                    dest_path=dest_file,
+                    content=b"new payload\n",
+                    mode=0o600,
+                    expected_bytes=12,
+                )
+
+        # Target file content must be preserved
+        self.assertEqual(dest_file.read_text(encoding="utf-8"), "original content\n")
+
+        # No temporary files (.tmp_*) left in destination directory
+        tmp_orphans = [p for p in dest_file.parent.glob(".tmp_*")]
+        self.assertEqual(tmp_orphans, [])
+
+    def test_write_all_bounded_blocking_io_retry(self):
+        """Proof: write_all bounds BlockingIOError retries and propagates error instead of infinite loop."""
+        r_fd, w_fd = os.pipe()
+        try:
+            # Mock os.write to simulate indefinite BlockingIOError
+            with patch("os.write", side_effect=BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable")):
+                with self.assertRaises(BlockingIOError):
+                    rt.write_all(w_fd, b"test", max_blocking_retries=3)
+        finally:
+            os.close(r_fd)
+            os.close(w_fd)
+
+    def test_manifest_non_canonical_mode_rejected_in_prepare(self):
+        """Proof: Manifest declaring non-canonical mode is rejected fail-closed before staging."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        # Inject non-canonical mode 0777 into candidate manifest
+        bad_manifest = copy.deepcopy(manifest)
+        bad_manifest[0]["mode"] = "0o777"
+
+        clean_tx = self.test_root / "tx_mode_fail"
+
+        with self.assertRaises(rt.PreconditionError) as ctx:
+            rt.prepare(
+                bundle_root=bundle_dir,
+                candidate_manifest=bad_manifest,
+                preconditions=preconds,
+                transaction_dir=clean_tx,
+                namespace_root=live_dir,
+            )
+        self.assertIn("non-canonical mode", str(ctx.exception))
+        self.assertFalse(clean_tx.exists())
 
 
 if __name__ == "__main__":
