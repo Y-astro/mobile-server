@@ -90,34 +90,44 @@ class PasswordTests(unittest.TestCase):
             self.assertFalse(store.exists('alice'))
             self.assertFalse(store.verify('alice', 'alice-pass'))
 
-            # Atomic replacement with same size / mtime via inode replacement
+            # Baseline reenable check before replacement
             users['alice']['disabled'] = False
-            # Write to a temp file and replace atomically
+            save_users(path, users)
+            self.assertTrue(store.exists('alice'))
+            self.assertTrue(store.verify('alice', 'alice-pass'))
+
+            # Atomic replacement with same size / mtime via inode replacement
+            pass2 = hash_password('alice-pass-2', iterations=100_000)
+            users['alice']['password_hash'] = pass2
             temp_file = Path(d) / 'temp_replace.json'
-            temp_file.write_text(json.dumps({'version': 1, 'users': users}))
+            save_users(temp_file, users)
             stat_before = path.stat()
-            # Ensure same mtime
             os.utime(temp_file, ns=(stat_before.st_atime_ns, stat_before.st_mtime_ns))
+            self.assertEqual(temp_file.stat().st_size, stat_before.st_size)
+            self.assertEqual(temp_file.stat().st_mtime_ns, stat_before.st_mtime_ns)
             os.replace(temp_file, path)
             stat_after = path.stat()
             self.assertNotEqual(stat_before.st_ino, stat_after.st_ino)
-            self.assertTrue(store.verify('alice', 'alice-pass'))
+            self.assertEqual(stat_before.st_size, stat_after.st_size)
+            self.assertEqual(stat_before.st_mtime_ns, stat_after.st_mtime_ns)
+            self.assertTrue(store.verify('alice', 'alice-pass-2'))
+            self.assertFalse(store.verify('alice', 'alice-pass'))
 
             # Corrupted store fails closed and denies stale user
             path.write_text('{ invalid json')
             self.assertFalse(store.exists('alice'))
-            self.assertFalse(store.verify('alice', 'alice-pass'))
+            self.assertFalse(store.verify('alice', 'alice-pass-2'))
             self.assertEqual(store.users, {})
 
             # Recoverable after valid replacement
             save_users(path, users)
             self.assertTrue(store.exists('alice'))
-            self.assertTrue(store.verify('alice', 'alice-pass'))
+            self.assertTrue(store.verify('alice', 'alice-pass-2'))
 
             # Missing store fails closed and denies stale user
             path.unlink()
             self.assertFalse(store.exists('alice'))
-            self.assertFalse(store.verify('alice', 'alice-pass'))
+            self.assertFalse(store.verify('alice', 'alice-pass-2'))
             self.assertEqual(store.users, {})
 
             # Recoverable again after valid replacement
