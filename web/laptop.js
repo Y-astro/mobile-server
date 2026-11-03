@@ -13,11 +13,11 @@
     if (!response.ok) throw new Error(data.message || 'Laptop operation failed');
     return data;
   }
-  async function refresh() {
+  async function refresh(signal) {
     if (refreshing || changing) return;
     refreshing = true;
     try {
-      const data = await request(endpoint);
+      const data = await request(endpoint, signal ? { signal } : {});
       status.textContent = data.online ? 'Laptop connected over Tailscale' : data.error || 'Laptop offline';
       start.disabled = !data.online || data.sessions.length >= data.max_sessions;
       list.replaceChildren();
@@ -41,13 +41,16 @@
           changing = true; close.disabled = true; start.disabled = true;
           try { await request(endpoint + '/' + session.id, {method:'DELETE'}); }
           catch (error) { status.textContent = error.message; }
-          finally { changing = false; await refresh(); }
+          finally { changing = false; await (laptopLoop ? laptopLoop.refresh() : refresh()); }
         });
         controls.append(open,close); row.append(label,controls); list.append(row);
       }
       if (data.online && !data.sessions.length) list.textContent = 'No laptop terminals open.';
-    } catch (error) { status.textContent = error.message; start.disabled = true; }
-    finally { refreshing = false; }
+    } catch (error) {
+      if (signal && signal.aborted) return;
+      status.textContent = error.message;
+      start.disabled = true;
+    } finally { refreshing = false; }
   }
   start.addEventListener('click', async () => {
     if (changing) return;
@@ -67,10 +70,17 @@
     } finally {
       changing = false;
       // Preserve the actual operation error until the next periodic status check.
-      if (!failed) await refresh();
+      if (!failed) await (laptopLoop ? laptopLoop.refresh() : refresh());
       else start.disabled = false;
     }
   });
-  refresh();
-  setInterval(() => { if (!document.hidden) refresh(); },8000);
+
+  const laptopLoop = (typeof window !== 'undefined' && window.PortalPolling && typeof window.PortalPolling.createPolling === 'function')
+    ? window.PortalPolling.createPolling((signal) => refresh(signal), 8000, { name: 'laptop' })
+    : null;
+
+  if (!laptopLoop) {
+    refresh();
+    setInterval(() => { if (!document.hidden) refresh(); }, 8000);
+  }
 })();

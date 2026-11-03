@@ -38,6 +38,11 @@ DEFAULT_GATEWAY_REMOTE = "/data/data/com.termux/files/home/bin/mobile-gateway"
 # Mobile server python helper lib destination
 MOBILE_SERVER_LIB_PREFIX = "/data/data/com.termux/files/home/.local/lib/mobile-server/"
 
+# Reviewed additional maintained source assets outside frozen historical baseline
+REVIEWED_ADDITIONAL_ASSETS: Dict[str, str] = {
+    "web/portal-polling.js": "/data/data/com.termux/files/home/.config/dashboard/static/portal-polling.js",
+}
+
 # Forbidden secret, runtime, credential, database, and history patterns.
 FORBIDDEN_SECRET_PATTERNS: Tuple[str, ...] = (
     "users.json",
@@ -202,6 +207,7 @@ def get_canonical_ownership(root_dir: Path, include_gateway: bool = False) -> Di
     3. Optional declared built gateway (.work/mobile-gateway)
     """
     ownership = load_baseline_mapping(root_dir)
+    ownership.update(REVIEWED_ADDITIONAL_ASSETS)
 
     # Dynamically discover any additional safe Python runtime helpers in app/
     app_dir = root_dir / "app"
@@ -478,6 +484,13 @@ def validate_manifest(
     if missing_baseline:
         raise ManifestError(
             f"Release manifest omits required baseline assets: {', '.join(sorted(missing_baseline))}"
+        )
+
+    # Verify all reviewed additional maintained source assets are declared in candidate manifest
+    missing_additional = set(REVIEWED_ADDITIONAL_ASSETS.keys()) - manifest_locals
+    if missing_additional:
+        raise ManifestError(
+            f"Release manifest omits required maintained assets: {', '.join(sorted(missing_additional))}"
         )
 
     # Verify all app/*.py files are declared in candidate manifest

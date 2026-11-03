@@ -11,6 +11,8 @@ const { chromium } = require('@playwright/test');
   const portalCss = fs.existsSync(portalCssPath) ? fs.readFileSync(portalCssPath, 'utf8') : '';
 
   const laptopJsPath = path.resolve(__dirname, '../web/laptop.js');
+const portalPollingJsPath = path.resolve(__dirname, '../web/portal-polling.js');
+const portalPollingJs = fs.readFileSync(portalPollingJsPath, 'utf8');
   const laptopJs = fs.existsSync(laptopJsPath) ? fs.readFileSync(laptopJsPath, 'utf8') : '';
 
   let currentServicesPayload = {
@@ -48,6 +50,9 @@ const { chromium } = require('@playwright/test');
     } else if (url === '/portal.css' || url === '/static/portal.css') {
       res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
       res.end(portalCss);
+    } else if (url === '/static/portal-polling.js') {
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
+      res.end(portalPollingJs);
     } else if (url === '/laptop.js' || url === '/static/laptop.js') {
       res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
       res.end(laptopJs);

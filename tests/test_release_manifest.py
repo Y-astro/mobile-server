@@ -28,6 +28,7 @@ ManifestError = rm.ManifestError
 generate_manifest = rm.generate_manifest
 validate_manifest = rm.validate_manifest
 validate_path_safety = rm.validate_path_safety
+REVIEWED_ADDITIONAL_ASSETS = rm.REVIEWED_ADDITIONAL_ASSETS
 compute_sha256_and_size = rm.compute_sha256_and_size
 is_forbidden_secret_or_runtime_path = rm.is_forbidden_secret_or_runtime_path
 load_baseline_mapping = rm.load_baseline_mapping
@@ -54,11 +55,12 @@ class TestReleaseManifest(unittest.TestCase):
         shutil.copy2(REPO_ROOT / "config/deployment-files.json", cfg_dir / "deployment-files.json")
 
         baseline_mapping = load_baseline_mapping(bundle_root)
-        for rel_path in baseline_mapping.keys():
+        for rel_path in list(baseline_mapping.keys()) + list(REVIEWED_ADDITIONAL_ASSETS.keys()):
             src_file = REPO_ROOT / rel_path
-            dst_file = bundle_root / rel_path
-            dst_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_file, dst_file)
+            if src_file.exists():
+                dst_file = bundle_root / rel_path
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_file, dst_file)
 
         return bundle_root
 
@@ -459,6 +461,24 @@ class TestReleaseManifest(unittest.TestCase):
             validate_manifest(bad_entries4, bundle_root)
         self.assertIn("Invalid byte size", str(ctx.exception))
 
+
+    def test_reviewed_additional_assets_required_in_manifest(self):
+        """Candidate manifest omitting mandatory reviewed additional assets must fail validation."""
+        bundle_root = self._create_minimal_bundle()
+        # Create web/portal-polling.js in bundle root so it exists on disk
+        portal_path = bundle_root / 'web/portal-polling.js'
+        portal_path.parent.mkdir(parents=True, exist_ok=True)
+        portal_path.write_text('/* portal polling */')
+
+        manifest_entries = generate_manifest(bundle_root)
+        # Should validate cleanly when included
+        validate_manifest(manifest_entries, bundle_root)
+
+        # Remove web/portal-polling.js from manifest entries
+        filtered = [e for e in manifest_entries if e['local'] != 'web/portal-polling.js']
+        with self.assertRaises(ManifestError) as ctx:
+            validate_manifest(filtered, bundle_root)
+        self.assertIn('Release manifest omits required maintained assets: web/portal-polling.js', str(ctx.exception))
 
 if __name__ == "__main__":
     unittest.main()

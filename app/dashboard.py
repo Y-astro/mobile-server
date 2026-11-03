@@ -909,6 +909,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self.path == '/api/laptop/terminals':
             self.laptop_response('list')
             return
+        if self.path == '/static/portal-polling.js':
+            if not is_admin(user):
+                self.json_error(403, 'Admin access required')
+                return
+            try:
+                with open(os.path.join(STATIC_DIR, 'portal-polling.js'), 'rb') as f:
+                    body = f.read()
+            except OSError:
+                self.json_error(503, 'Portal polling helper is not installed')
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == '/static/laptop.js':
             if not is_admin(user):
                 self.json_error(403, 'Admin access required')

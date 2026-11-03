@@ -315,6 +315,7 @@
       <div id="laptop-sessions" class="space-y-2 text-sm"></div>
       <p class="text-[11px] text-muted">Laptop must be awake and logged in to open Kitty. Closing the browser keeps commands running; Close terminates the session.</p>
     </section>
+    <script src="/static/portal-polling.js"></script>
     <script src="/static/laptop.js" defer></script>
 
     
@@ -385,9 +386,9 @@
       const el = document.getElementById(id);
       if (el) el.style.width = typeof value === 'number' ? Math.min(100, Math.max(0, value)) + '%' : '0%';
     }
-    async function fetchStats() {
+    async function fetchStats(signal) {
       try {
-        const res = await fetch('/api/stats');
+        const res = await fetch('/api/stats', signal ? { signal } : {});
         if (res.status === 401 || res.status === 403) { location.href = '/login'; return; }
         if (!res.ok) throw new Error('Telemetry unavailable');
         const data = await res.json();
@@ -426,9 +427,9 @@
       } catch (err) { setText('telemetry-state', 'Unavailable'); }
     }
     let torEnabled = false;
-    async function fetchVPN() {
+    async function fetchVPN(signal) {
       try {
-        const res = await fetch('/api/vpn/status');
+        const res = await fetch('/api/vpn/status', signal ? { signal } : {});
         if (!res.ok) throw new Error();
         updateVPNUI(await res.json());
       } catch (err) { setText('vpn-badge', 'Status unavailable'); }
@@ -570,7 +571,7 @@
           alert('Toggle failed: ' + (data.message || data.error));
           if (el) el.checked = !origChecked;
         } else {
-          await fetchServices();
+          await (servicesLoop ? servicesLoop.refresh() : fetchServices());
         }
       } catch (err) {
         alert('Network error toggling service');
@@ -580,9 +581,9 @@
       }
     }
 
-    async function fetchServices() {
+    async function fetchServices(signal) {
       try {
-        const res = await fetch('/api/services');
+        const res = await fetch('/api/services', signal ? { signal } : {});
         if (res.status === 401 || res.status === 403) { location.href = '/login'; return; }
         if (!res.ok) throw new Error();
         const data = await res.json();
@@ -958,12 +959,12 @@
     }
 
     // --- AGY Multi-Instance Session Management ---
-    async function fetchAgySessions() {
+    async function fetchAgySessions(signal) {
       const container = document.getElementById('agy-sessions-container');
       const newBtn = document.getElementById('agy-new');
       if (!container) return;
       try {
-        const res = await fetch('/api/agy/sessions');
+        const res = await fetch('/api/agy/sessions', signal ? { signal } : {});
         if (!res.ok) throw new Error('Failed to load AGY sessions');
         const data = await res.json();
         const sessions = data.sessions || [];
@@ -1023,7 +1024,7 @@
         if (safeId) {
           window.open('/agy/?arg=' + safeId, '_blank');
         }
-        await fetchAgySessions();
+        await (agyLoop ? agyLoop.refresh() : fetchAgySessions());
       } catch (e) {
         alert('Network error creating AGY session: ' + e);
       } finally {
@@ -1042,21 +1043,29 @@
           alert(err.message || 'Failed to terminate AGY session');
           return;
         }
-        await fetchAgySessions();
+        await (agyLoop ? agyLoop.refresh() : fetchAgySessions());
       } catch (e) {
         alert('Network error closing AGY session: ' + e);
       }
     }
 
     // Init & Polling
-    fetchStats();
-    fetchVPN();
-    fetchServices();
-    fetchAgySessions();
-    setInterval(fetchStats, 3000);
-    setInterval(fetchVPN, 10000);
-    setInterval(fetchServices, 4000);
-    setInterval(fetchAgySessions, 5000);
+    let statsLoop = null, vpnLoop = null, servicesLoop = null, agyLoop = null;
+    if (typeof window !== 'undefined' && window.PortalPolling && typeof window.PortalPolling.createPolling === 'function') {
+      statsLoop = window.PortalPolling.createPolling((signal) => fetchStats(signal), 3000, { name: 'stats' });
+      vpnLoop = window.PortalPolling.createPolling((signal) => fetchVPN(signal), 10000, { name: 'vpn' });
+      servicesLoop = window.PortalPolling.createPolling((signal) => fetchServices(signal), 4000, { name: 'services' });
+      agyLoop = window.PortalPolling.createPolling((signal) => fetchAgySessions(signal), 5000, { name: 'agy' });
+    } else {
+      fetchStats();
+      fetchVPN();
+      fetchServices();
+      fetchAgySessions();
+      setInterval(fetchStats, 3000);
+      setInterval(fetchVPN, 10000);
+      setInterval(fetchServices, 4000);
+      setInterval(fetchAgySessions, 5000);
+    }
 
     document.addEventListener('DOMContentLoaded', () => {
       initConverter();

@@ -28,6 +28,9 @@ const assert = require('node:assert/strict');
         if (url.endsWith('/portal.css')) {
           return route.fulfill({ body: fs.readFileSync('web/portal.css', 'utf8'), contentType: 'text/css' });
         }
+        if (url.endsWith('/static/portal-polling.js')) {
+          return route.fulfill({ body: fs.readFileSync('web/portal-polling.js', 'utf8'), contentType: 'application/javascript' });
+        }
         if (url.endsWith('/static/laptop.js')) {
           return route.fulfill({ body: fs.readFileSync('web/laptop.js', 'utf8'), contentType: 'application/javascript' });
         }
@@ -76,6 +79,9 @@ const assert = require('node:assert/strict');
         if (url.endsWith('/portal.css')) {
           return route.fulfill({ body: fs.readFileSync('web/portal.css', 'utf8'), contentType: 'text/css' });
         }
+        if (url.endsWith('/static/portal-polling.js')) {
+          return route.fulfill({ body: fs.readFileSync('web/portal-polling.js', 'utf8'), contentType: 'application/javascript' });
+        }
         if (url.endsWith('/static/laptop.js')) {
           return route.fulfill({ body: fs.readFileSync('web/laptop.js', 'utf8'), contentType: 'application/javascript' });
         }
@@ -88,7 +94,9 @@ const assert = require('node:assert/strict');
           return route.fulfill({ json: { enabled: true, verified_via_tor: false, stale: false, masked_ip: '203.0.113.99' } });
         }
         if (url.endsWith('/api/services')) {
-          return route.fulfill({ json: { services: [], total_active_mem_mb: null, sleeping_count: 0 } });
+          return route.fulfill({ json: { services: [
+            { id: 'converter', name: 'Document to PDF Converter', running: false, can_toggle: false, open_url: 'javascript:openConverterModal()', open_label: 'Convert File', desc: 'LibreOffice engine' }
+          ], total_active_mem_mb: null, sleeping_count: 0 } });
         }
         if (url.endsWith('/api/agy/sessions')) {
           return route.fulfill({ json: { sessions: [] } });
@@ -143,8 +151,8 @@ const assert = require('node:assert/strict');
       }, { timeout: 3000 });
       assert.deepEqual(capturedNotesPost, { notes: 'Updated admin notes content' });
 
-      // Check conversion: open modal and single file
-      await page.evaluate(() => openConverterModal());
+      // Check conversion: open modal and single file via actual card control
+      await page.locator('a[href="javascript:openConverterModal()"]').click();
       assert(await page.locator('#convert-btn').isDisabled(), 'Convert button must start disabled');
       await page.locator('#convert-file-input').setInputFiles([
         { name: 'admin_doc.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('docx content') }
@@ -162,9 +170,9 @@ const assert = require('node:assert/strict');
       assert(capturedConvertReq.postData.includes('name="files"'));
       assert(capturedConvertReq.postData.includes('admin_doc.docx'));
 
-      // Check conversion: multi-file zip download
+      // Check conversion: multi-file zip download via actual card control
       await page.waitForTimeout(1600);
-      await page.evaluate(() => openConverterModal());
+      await page.locator('a[href="javascript:openConverterModal()"]').click();
       await page.locator('#convert-file-input').setInputFiles([
         { name: 'first.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('docx 1') },
         { name: 'second.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('docx 2') }
@@ -199,6 +207,9 @@ const assert = require('node:assert/strict');
         }
         if (url.endsWith('/portal.css')) {
           return route.fulfill({ body: fs.readFileSync('web/portal.css', 'utf8'), contentType: 'text/css' });
+        }
+        if (url.endsWith('/static/portal-polling.js')) {
+          return route.fulfill({ body: fs.readFileSync('web/portal-polling.js', 'utf8'), contentType: 'application/javascript' });
         }
         if (url.endsWith('/static/laptop.js')) {
           return route.fulfill({ body: fs.readFileSync('web/laptop.js', 'utf8'), contentType: 'application/javascript' });
@@ -255,8 +266,8 @@ const assert = require('node:assert/strict');
       }, { timeout: 3000 });
       assert.deepEqual(capturedNotesPost, { notes: 'Updated grocery list for weekend' });
 
-      // Check conversion
-      await page.evaluate(() => openConverterModal());
+      // Check conversion via actual family button control
+      await page.locator('button[onclick="openConverterModal()"]').click();
       assert(await page.locator('#convert-btn').isDisabled(), 'Family convert button must start disabled');
       await page.locator('#convert-file-input').setInputFiles([
         { name: 'family_homework.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('homework') }

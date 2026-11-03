@@ -29,6 +29,10 @@ fi
 if [ "$CLEANUP_MANIFEST" -eq 1 ]; then rm -f "$MANIFEST"; fi
 # ---------------------------------------------------------------------------
 
+# Fail-fast guard: direct source writes via legacy installer are disabled until reviewed transactional activation adapter takes over.
+echo "Direct source writes via legacy installer are disabled: reviewed transactional activation adapter is required." >&2
+exit 1
+
 mkdir -p "$lib" "$HOME/bin" "$state" "$HOME/.config/dashboard/static" "$HOME/.config/ttyd" "$HOME/.config/tor" "$HOME/.local/share/mobile-server-tor" "$HOME/.config/services_disabled"
 chmod 700 "$HOME/.local/share/mobile-server-tor" "$HOME/.config/tor"
 install -m 600 app/auth.py "$lib/auth.py"

@@ -418,3 +418,32 @@ class DashboardTests(unittest.TestCase):
    with self.assertRaises(urllib.error.HTTPError) as ctx2:
     opener.open(f"{base_url}/api/notes", timeout=5)
    self.assertEqual(ctx2.exception.code, 401)
+
+ def test_portal_polling_asset_delivery_and_gating(self):
+  static_dir = Path(self.temp.name) / '.config/dashboard/static'
+  static_dir.mkdir(parents=True, exist_ok=True)
+  portal_file = static_dir / 'portal-polling.js'
+
+  # Missing asset -> 503
+  if portal_file.exists(): portal_file.unlink()
+  status, body, headers = self.request_resp('GET', '/static/portal-polling.js', user='testadmin')
+  self.assertEqual(status, 503)
+
+  # Unauthenticated -> 302 to /login
+  status, body, headers = self.request_resp('GET', '/static/portal-polling.js')
+  self.assertEqual(status, 302)
+  self.assertEqual(headers.get('location'), '/login')
+
+  # Family user -> 403
+  status, body, headers = self.request_resp('GET', '/static/portal-polling.js', user='testfamily')
+  self.assertEqual(status, 403)
+
+  # Installed asset for admin -> exact bytes, no-cache, Content-Length
+  sample_bytes = b'/* test portal polling helper */ console.log("polling");'
+  portal_file.write_bytes(sample_bytes)
+  status, body, headers = self.request_resp('GET', '/static/portal-polling.js', user='testadmin')
+  self.assertEqual(status, 200)
+  self.assertEqual(body, sample_bytes)
+  self.assertEqual(headers.get('content-length'), str(len(sample_bytes)))
+  self.assertIn('application/javascript', headers.get('content-type', ''))
+  self.assertEqual(headers.get('cache-control'), 'no-cache')

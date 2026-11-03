@@ -10,6 +10,7 @@ const assert=require('node:assert/strict');
   let online=true,failCreate=false,sessions=[],deleted=[];
   await context.route('**/*',async route=>{
    const request=route.request(),url=new URL(request.url());
+   if(url.pathname==='/static/portal-polling.js')return route.fulfill({body:fs.readFileSync('web/portal-polling.js','utf8'),contentType:'application/javascript'});
    if(url.pathname==='/static/laptop.js')return route.fulfill({body:fs.readFileSync('web/laptop.js','utf8'),contentType:'application/javascript'});
    if(url.pathname==='/api/laptop/terminals'){
     if(request.method()==='POST'){
