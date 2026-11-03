@@ -57,14 +57,17 @@ class TestRoleTemplates(unittest.TestCase):
     def test_unreadable_file_raises_unavailable(self):
         fam_file = self.static_dir / "family.html"
         fam_file.write_bytes(b"content")
+        # Note: If current process is root (e.g. containers), chmod 000 might still be readable.
+        # Preserve original chmod cleanup structure, with added simulated denied read
+        # to ensure deterministic PermissionError assertion across all environments.
         fam_file.chmod(0o000)
         try:
-            # If current process is root (e.g. containers), chmod 000 might still be readable
-            # so we only assert if permission denied is actually triggered
-            try:
-                read_role_template(str(self.static_dir), "family")
-            except RoleTemplateUnavailable:
-                pass
+            from unittest.mock import patch
+            with patch.object(Path, "read_bytes", side_effect=PermissionError("Simulated permission denied")):
+                with self.assertRaises(RoleTemplateUnavailable) as ctx:
+                    read_role_template(str(self.static_dir), "family")
+                self.assertIn("Failed to read role template", str(ctx.exception))
+                self.assertIn("Simulated permission denied", str(ctx.exception))
         finally:
             fam_file.chmod(0o644)
 

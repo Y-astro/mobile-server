@@ -1,4 +1,5 @@
 """Run the real handler with isolated, disposable HOME and test credentials."""
+import http.cookiejar
 import importlib.util
 import io
 import json
@@ -11,14 +12,20 @@ import threading
 import unittest
 from unittest.mock import patch, Mock
 from http.client import HTTPConnection
+import urllib.request
+import urllib.error
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'app'))
 from auth import hash_password, save_users
 import telemetry
-telemetry.Telemetry.start = lambda self: None
 
 class DashboardTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
+  # Scope Telemetry.start patch strictly to DashboardTests lifetime via addClassCleanup
+  telemetry_patch = patch.object(telemetry.Telemetry, 'start', return_value=None)
+  telemetry_patch.start()
+  cls.addClassCleanup(telemetry_patch.stop)
+
   cls.repo_root=Path(__file__).resolve().parents[1]
   cls.web_dir=cls.repo_root/'web'
   cls.temp=tempfile.TemporaryDirectory();cls.oldhome=os.environ.get('HOME');os.environ['HOME']=cls.temp.name
@@ -314,3 +321,62 @@ class DashboardTests(unittest.TestCase):
    for k in ['session_token', 'session_user', 'session_token_http']:
     self.assertIn(k, p_dict)
     self.assertIn('Max-Age=0', p_dict[k])
+
+   # -----------------------------------------------------------------
+   # Browser cookie jar lifecycle test (models client-side cookie expiry)
+   # -----------------------------------------------------------------
+   base_url = f"http://127.0.0.1:{self.server.server_port}"
+   cj = http.cookiejar.CookieJar()
+   opener = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(cj),
+    urllib.request.ProxyHandler({})
+   )
+
+   # 1. Login via JSON real temp password into cookie jar
+   req = urllib.request.Request(
+    f"{base_url}/api/login",
+    data=login_payload,
+    headers={"Content-Type": "application/json"}
+   )
+   resp = opener.open(req, timeout=5)
+   self.assertEqual(resp.status, 200)
+   jar_cookies = {c.name: c for c in cj}
+   self.assertIn("session_token", jar_cookies)
+   self.assertIn("session_user", jar_cookies)
+   self.assertIn("session_token_http", jar_cookies)
+
+   # 2. Cookie-authenticated root request returns exact maintained admin bytes
+   root_resp = opener.open(f"{base_url}/", timeout=5)
+   self.assertEqual(root_resp.status, 200)
+   self.assertEqual(root_resp.read(), (self.web_dir / "admin.html").read_bytes())
+
+   # 3. GET /logout follows redirect to /login and clears jar cookies
+   get_logout_resp = opener.open(f"{base_url}/logout", timeout=5)
+   self.assertTrue(get_logout_resp.geturl().endswith("/login"))
+   self.assertEqual(get_logout_resp.status, 200)
+   # Assert jar has expired and removed the session cookies
+   self.assertEqual(len(list(cj)), 0)
+
+   # 4. Subsequent root access redirects unauthenticated client to /login
+   root_after_get = opener.open(f"{base_url}/", timeout=5)
+   self.assertTrue(root_after_get.geturl().endswith("/login"))
+   # Protected API access returns 401
+   with self.assertRaises(urllib.error.HTTPError) as ctx:
+    opener.open(f"{base_url}/api/notes", timeout=5)
+   self.assertEqual(ctx.exception.code, 401)
+
+   # 5. Repeat login and test POST /api/logout jar clearance
+   resp2 = opener.open(req, timeout=5)
+   self.assertEqual(resp2.status, 200)
+   self.assertEqual(len(list(cj)), 3)
+
+   post_logout_req = urllib.request.Request(f"{base_url}/api/logout", data=b"")
+   post_logout_resp = opener.open(post_logout_req, timeout=5)
+   self.assertEqual(post_logout_resp.status, 200)
+   self.assertEqual(len(list(cj)), 0)
+
+   root_after_post = opener.open(f"{base_url}/", timeout=5)
+   self.assertTrue(root_after_post.geturl().endswith("/login"))
+   with self.assertRaises(urllib.error.HTTPError) as ctx2:
+    opener.open(f"{base_url}/api/notes", timeout=5)
+   self.assertEqual(ctx2.exception.code, 401)
