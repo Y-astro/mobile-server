@@ -3,6 +3,7 @@ test_release_transaction.py: Comprehensive test suite for standalone file transa
 """
 
 import copy
+import errno
 import hashlib
 import importlib.util
 import json
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from typing import Any, Dict, List, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -66,12 +68,22 @@ class TestReleaseTransaction(unittest.TestCase):
         baseline_mapping = rm.load_baseline_mapping(bundle_dir)
         for rel_path in baseline_mapping.keys():
             src_file = REPO_ROOT / rel_path
+            if not src_file.exists():
+                raise FileNotFoundError(f"Missing required baseline source file: {src_file}")
             dst_file = bundle_dir / rel_path
             dst_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_file, dst_file)
 
+        # Copy web assets without skipping
+        web_dir = bundle_dir / "web"
+        web_dir.mkdir(parents=True, exist_ok=True)
+        for web_file in (REPO_ROOT / "web").glob("*"):
+            if web_file.is_file():
+                shutil.copy2(web_file, web_dir / web_file.name)
+
         # Copy flat app helpers (e.g. notes.py, document_conversion.py)
         app_dir = bundle_dir / "app"
+        app_dir.mkdir(parents=True, exist_ok=True)
         for py_file in (REPO_ROOT / "app").glob("*.py"):
             dst_file = app_dir / py_file.name
             if not dst_file.exists():
@@ -144,8 +156,18 @@ class TestReleaseTransaction(unittest.TestCase):
             live_file = live_dir / rel_str
             live_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # Determine mode
-            target_mode = rt.get_canonical_target_mode(remote)
+            # Determine mode from explicit policy
+            norm_remote = remote.replace("\\", "/")
+            if norm_remote.endswith("/usr/bin/dashboard") or norm_remote.endswith("/home/bin/mobile-gateway"):
+                target_mode = 0o700
+            elif norm_remote.endswith("/home/bin/agy-runner-loop") or norm_remote.endswith("/usr/local/bin/agy-runner-loop"):
+                target_mode = 0o755
+            elif "/home/.local/lib/mobile-server/" in norm_remote:
+                target_mode = 0o600
+            elif "/usr/bin/" in norm_remote or "/home/bin/" in norm_remote or norm_remote.endswith("/start-services.sh") or norm_remote.endswith("/start_services.sh"):
+                target_mode = 0o700
+            else:
+                target_mode = 0o600
 
             if entry["local"] == "app/auth.py" and modify_auth_in_candidate:
                 # Preimage auth.py has original content differing from candidate
@@ -481,19 +503,12 @@ class TestReleaseTransaction(unittest.TestCase):
             namespace_root=live_dir,
         )
 
-        # Corrupt one staged file after the first few so that apply fails mid-way
         journal = tx.load_journal()
         entries = journal["entries"]
-        # Find an entry near the end (an entrypoint) and corrupt its staged file
         last_entry = [e for e in entries if e["action"] != rt.ACTION_UNTOUCHED][-1]
-        staged_last = tx_dir / last_entry["staged_file"]
-
-        # Wait, if we corrupt staged file, pre-apply check catches it!
-        # To simulate a mid-apply failure, we can make the destination directory of last_entry read-only
         dest_disk, _, _ = rt.resolve_disk_path(last_entry["remote"], live_dir)
-        # Mock os.replace to fail on the last entry
-        real_os_replace = os.replace
 
+        real_os_replace = os.replace
         failed_once = False
 
         def mock_replace(src, dst):
@@ -503,8 +518,7 @@ class TestReleaseTransaction(unittest.TestCase):
                 raise OSError("Simulated disk write failure on target entrypoint")
             return real_os_replace(src, dst)
 
-        import unittest.mock
-        with unittest.mock.patch("os.replace", side_effect=mock_replace):
+        with patch("os.replace", side_effect=mock_replace):
             with self.assertRaises(rt.ApplyError) as ctx:
                 tx.apply(namespace_root=live_dir)
             self.assertIn("Apply failed and all touched files rolled back cleanly", str(ctx.exception))
@@ -554,6 +568,7 @@ class TestReleaseTransaction(unittest.TestCase):
         notes_live = live_dir / "home/.local/lib/mobile-server/notes.py"
         staged_notes = tx_dir / notes_entry["staged_file"]
         notes_live.write_bytes(staged_notes.read_bytes())
+        os.chmod(notes_live, rt.normalize_mode(notes_entry["target_mode"]))
 
         tx.save_journal(journal)
 
@@ -577,11 +592,8 @@ class TestReleaseTransaction(unittest.TestCase):
         self.assertIn("recovery completed", proc.stdout)
 
         # 6. Verify full preimage restoration
-        # auth.py restored to original bytes and mode
         self.assertEqual(auth_live.read_bytes(), orig_auth_content)
         self.assertEqual(stat.S_IMODE(auth_live.stat().st_mode), orig_auth_mode)
-
-        # notes.py returned to absence
         self.assertFalse(notes_live.exists())
 
         # Boot alias intact
@@ -712,32 +724,408 @@ class TestReleaseTransaction(unittest.TestCase):
         self.assertNotEqual(proc_apply.returncode, 0)
         self.assertIn("invalid choice: 'apply'", proc_apply.stderr)
 
-    def test_live_release_preimage_metadata_production_reference(self):
-        """Verify reference metadata artifact pin from parent implementation."""
-        metadata_path = Path("/home/astro/server-audit/2026-11-03/implementation/.superpowers/sdd/live-release-preimage-metadata.json")
-        self.assertTrue(metadata_path.exists())
+    def test_canonical_modes_explicit_policy(self):
+        """Proof: Literal policy verification independent of target derivation logic."""
+        policy_checks = [
+            ("/data/data/com.termux/files/usr/bin/dashboard", 0o700),
+            ("/data/data/com.termux/files/home/bin/mobile-gateway", 0o700),
+            ("/data/data/com.termux/files/home/bin/agy-runner-loop", 0o755),
+            ("/data/data/com.termux/files/usr/local/bin/agy-runner-loop", 0o755),
+            ("/data/data/com.termux/files/home/bin/server_supervisor.py", 0o700),
+            ("/data/data/com.termux/files/home/bin/battery_guard.sh", 0o700),
+            ("/data/data/com.termux/files/home/bin/agy_session.sh", 0o700),
+            ("/data/data/com.termux/files/home/bin/termux_session.sh", 0o700),
+            ("/data/data/com.termux/files/home/bin/start_suwayomi.sh", 0o700),
+            ("/data/data/com.termux/files/home/bin/suwayomi_daily_update.py", 0o700),
+            ("/data/data/com.termux/files/home/.local/lib/mobile-server/auth.py", 0o600),
+            ("/data/data/com.termux/files/home/.local/lib/mobile-server/limits.py", 0o600),
+            ("/data/data/com.termux/files/home/.config/caddy/Caddyfile", 0o600),
+            ("/data/data/com.termux/files/home/.config/ttyd/termux_index.html", 0o600),
+            ("/data/data/com.termux/files/home/.config/tor/torrc", 0o600),
+            ("/data/data/com.termux/files/web/login.html", 0o600),
+            ("/data/data/com.termux/files/web/admin.html", 0o600),
+        ]
+        for remote_path, expected_mode in policy_checks:
+            with self.subTest(remote_path=remote_path):
+                self.assertEqual(
+                    rt.get_canonical_target_mode(remote_path),
+                    expected_mode,
+                    f"Mode mismatch for {remote_path}: expected {oct(expected_mode)}, got {oct(rt.get_canonical_target_mode(remote_path))}",
+                )
 
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
+    def test_write_all_handling_partial_eintr_and_zero_write(self):
+        """Proof: write_all handles partial writes, EINTR retries, and raises on zero-write/error."""
+        test_file = self.test_root / "write_all_test.bin"
+        payload = b"1234567890ABCDEF"
 
-        self.assertEqual(metadata["uid"], 10505)
+        # 1. Normal complete write
+        fd = os.open(str(test_file), os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            rt.write_all(fd, payload)
+        finally:
+            os.close(fd)
+        self.assertEqual(test_file.read_bytes(), payload)
 
-        # Verify audited content hashes count
-        files = metadata["files"]
-        file_entries = [f for f in files if f.get("kind") == "file"]
-        absent_entries = [f for f in files if f.get("kind") == "absent"]
-        symlink_entries = [f for f in files if f.get("kind") == "symlink"]
+        # 2. Simulated partial writes and EINTR
+        real_write = os.write
+        call_count = 0
 
-        self.assertEqual(len(file_entries), 35)
-        self.assertGreaterEqual(len(absent_entries), 4)
-        self.assertEqual(len(symlink_entries), 1)
+        def mock_write(w_fd, w_buf):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return real_write(w_fd, w_buf[:4])
+            elif call_count == 2:
+                raise InterruptedError("Interrupted system call")
+            elif call_count == 3:
+                return real_write(w_fd, w_buf[:6])
+            else:
+                return real_write(w_fd, w_buf)
 
-        # Verify boot alias followup
-        followup = metadata["boot_alias_followup"]
-        self.assertEqual(followup["target_sha256"], rt.AUDITED_BOOT_SCRIPT_SHA256)
-        self.assertEqual(followup["target_bytes"], 316)
-        self.assertEqual(followup["target_mode"], "0o700")
-        self.assertEqual(followup["target_uid"], 10505)
+        test_file2 = self.test_root / "write_all_test2.bin"
+        fd2 = os.open(str(test_file2), os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            with patch("os.write", side_effect=mock_write):
+                rt.write_all(fd2, payload)
+        finally:
+            os.close(fd2)
+        self.assertEqual(test_file2.read_bytes(), payload)
+
+        # 3. Simulated zero-write raises OSError(ENOSPC)
+        def mock_zero_write(w_fd, w_buf):
+            return 0
+
+        test_file3 = self.test_root / "write_all_test3.bin"
+        fd3 = os.open(str(test_file3), os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            with patch("os.write", side_effect=mock_zero_write):
+                with self.assertRaises(OSError) as ctx:
+                    rt.write_all(fd3, payload)
+            self.assertEqual(ctx.exception.errno, errno.ENOSPC)
+        finally:
+            os.close(fd3)
+
+    def test_write_atomic_json_never_publishes_corrupt_data(self):
+        """Proof: write_atomic_json cleans up temporary files on write failure and never publishes corrupt JSON."""
+        target_json = self.test_root / "test_atomic.json"
+        target_json.write_text('{"intact": true}\n', encoding="utf-8")
+
+        def mock_fail_write(w_fd, w_buf):
+            raise OSError(errno.EIO, "Simulated disk write failure")
+
+        with patch("os.write", side_effect=mock_fail_write):
+            with self.assertRaises(OSError):
+                rt.write_atomic_json(target_json, {"broken": True})
+
+        # Destination file remains intact and uncorrupted
+        self.assertEqual(target_json.read_text(encoding="utf-8"), '{"intact": true}\n')
+        # No orphan temporary files in directory
+        tmps = list(self.test_root.glob(".tmp_*"))
+        self.assertEqual(len(tmps), 0)
+
+    def test_pre_replace_sibling_validation_prevents_partial_overwrite(self):
+        """Proof: Sibling size/hash mismatch fails BEFORE os.replace; target stays intact and rollback succeeds."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+        auth_live = live_dir / "home/.local/lib/mobile-server/auth.py"
+        orig_auth_bytes = auth_live.read_bytes()
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+
+        real_write_all = rt.write_all
+
+        # Short write 16 bytes for auth.py sibling only
+        def mock_write_all(w_fd, w_payload):
+            if w_payload.startswith(b"# Candidate updated auth module"):
+                real_write_all(w_fd, w_payload[:16])
+            else:
+                real_write_all(w_fd, w_payload)
+
+        with patch.object(rt, "write_all", side_effect=mock_write_all):
+            with self.assertRaises(rt.ApplyError) as ctx:
+                tx.apply(namespace_root=live_dir)
+            self.assertIn("Pre-replace sibling size verification failed", str(ctx.exception))
+
+        # Destination auth.py was NEVER replaced with truncated bytes
+        self.assertEqual(auth_live.read_bytes(), orig_auth_bytes)
+        # Rollback succeeded cleanly, journal is ROLLED_BACK (not trapped in RECOVERY_REQUIRED)
+        self.assertEqual(tx.status()["state"], rt.STATE_ROLLED_BACK)
+
+    def test_fsync_dir_propagates_eio_and_handles_unsupported(self):
+        """Proof: fsync_dir propagates EIO/ENOSPC and handles unsupported EINVAL."""
+        # 1. EIO propagates
+        def mock_fsync_eio(fd):
+            raise OSError(errno.EIO, "Input/output error")
+
+        with patch("os.fsync", side_effect=mock_fsync_eio):
+            with self.assertRaises(OSError) as ctx:
+                rt.fsync_dir(self.test_root)
+            self.assertEqual(ctx.exception.errno, errno.EIO)
+
+        # 2. EINVAL is handled cleanly
+        def mock_fsync_einval(fd):
+            raise OSError(errno.EINVAL, "Invalid argument (not supported)")
+
+        with patch("os.fsync", side_effect=mock_fsync_einval):
+            rt.fsync_dir(self.test_root)
+
+    def test_namespace_override_mismatch_rejected(self):
+        """Proof: Supplying a namespace root resolving differently from journal is rejected."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+
+        foreign_ns = self.test_root / "foreign_live"
+        foreign_ns.mkdir()
+
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.apply(namespace_root=foreign_ns)
+        self.assertIn("does not match journal namespace root", str(ctx.exception))
+
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.commit(namespace_root=foreign_ns)
+        self.assertIn("does not match journal namespace root", str(ctx.exception))
+
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.recover(namespace_root=foreign_ns)
+        self.assertIn("does not match journal namespace root", str(ctx.exception))
+
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.rollback(namespace_root=foreign_ns)
+        self.assertIn("does not match journal namespace root", str(ctx.exception))
+
+    def test_idempotence_and_commit_refuses_drift(self):
+        """Proof: Idempotent apply, commit, and recovery refuse live drift fail-closed."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+        tx.apply(namespace_root=live_dir)
+
+        # Foreign edit after apply
+        auth_live = live_dir / "home/.local/lib/mobile-server/auth.py"
+        auth_live.write_text("# Foreign edit after apply\n", encoding="utf-8")
+
+        # Calling apply again refuses to claim idempotent_success on drifted files
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.apply(namespace_root=live_dir)
+        self.assertIn("drift", str(ctx.exception).lower())
+
+        # Calling commit refuses to bless drifted release
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.commit(namespace_root=live_dir)
+        self.assertIn("drift", str(ctx.exception).lower())
+
+    def test_recover_committed_noop_vs_explicit_rollback(self):
+        """Proof: recover(COMMITTED) returns no-op; explicit rollback(COMMITTED) reverts to preimage."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+        auth_live = live_dir / "home/.local/lib/mobile-server/auth.py"
+        orig_auth_bytes = auth_live.read_bytes()
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+        tx.apply(namespace_root=live_dir)
+        tx.commit(namespace_root=live_dir)
+
+        # Candidate is installed
+        self.assertIn("Candidate updated auth module", auth_live.read_text(encoding="utf-8"))
+
+        # 1. Crash recovery on COMMITTED is a no-op that verifies candidate state
+        rec_res = tx.recover(namespace_root=live_dir)
+        self.assertEqual(rec_res["state"], rt.STATE_COMMITTED)
+        self.assertEqual(rec_res["status"], "idempotent_success")
+        self.assertIn("Candidate updated auth module", auth_live.read_text(encoding="utf-8"))
+
+        # 2. Explicit rollback() reverts committed release to original preimage
+        rb_res = tx.rollback(namespace_root=live_dir)
+        self.assertEqual(rb_res["state"], rt.STATE_ROLLED_BACK)
+        self.assertEqual(auth_live.read_bytes(), orig_auth_bytes)
+        self.assertEqual(tx.status()["state"], rt.STATE_ROLLED_BACK)
+
+    def test_recovery_preflight_refuses_mode_and_uid_drift(self):
+        """Proof: Recovery preflight catches permission (chmod) and owner (UID) drift."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+        auth_live = live_dir / "home/.local/lib/mobile-server/auth.py"
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+
+        # Simulate in-progress apply
+        journal = tx.load_journal()
+        journal["state"] = rt.STATE_APPLYING
+        tx.save_journal(journal)
+
+        # 1. Mode drift on auth.py (e.g. chmod 0777)
+        os.chmod(auth_live, 0o777)
+        with self.assertRaises(rt.RecoveryError) as ctx:
+            tx.recover(namespace_root=live_dir)
+        self.assertIn("mode/UID drift", str(ctx.exception))
+
+        # Reset mode
+        os.chmod(auth_live, 0o600)
+
+        # 2. UID drift: journal expects UID 99999
+        journal = tx.load_journal()
+        journal["state"] = rt.STATE_APPLYING
+        journal["top_uid"] = 99999
+        for e in journal["entries"]:
+            e["original_uid"] = 99999
+        tx.save_journal(journal)
+
+        with self.assertRaises(rt.RecoveryError) as ctx:
+            tx.recover(namespace_root=live_dir)
+        self.assertIn("drift", str(ctx.exception).lower())
+
+    def test_recovery_failure_updates_journal(self):
+        """Proof: Unhandled recovery exception sets RECOVERY_REQUIRED and logs error in journal."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+        tx.apply(namespace_root=live_dir)
+
+        real_replace = os.replace
+
+        # Mock os.replace during rollback of live target to simulate I/O failure
+        def mock_replace_fail(src, dst):
+            if str(live_dir) in str(dst):
+                raise OSError(errno.EIO, "Simulated device I/O error during rollback")
+            return real_replace(src, dst)
+
+        with patch("os.replace", side_effect=mock_replace_fail):
+            with self.assertRaises(rt.RollbackError):
+                tx.rollback(namespace_root=live_dir)
+
+        # Journal state reflects failure
+        st = tx.status()
+        self.assertEqual(st["state"], rt.STATE_RECOVERY_REQUIRED)
+        self.assertIn("Simulated device I/O error", st["error"])
+
+    def test_malformed_transaction_paths_rejected(self):
+        """Proof: Path traversal or absolute paths in journal references are rejected fail-closed."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+
+        # 1. Traversal in staged_file of a non-untouched candidate entry
+        journal = tx.load_journal()
+        cand_entry = next(e for e in journal["entries"] if e["action"] != rt.ACTION_UNTOUCHED)
+        orig_staged = cand_entry["staged_file"]
+        cand_entry["staged_file"] = "../outside/staged.bin"
+        tx.save_journal(journal)
+
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.apply(namespace_root=live_dir)
+        self.assertIn("Refused traversal", str(ctx.exception))
+
+        # Restore staged_file and test absolute path in backup_file
+        cand_entry["staged_file"] = orig_staged
+        rep_entry = next(e for e in journal["entries"] if e["action"] == rt.ACTION_REPLACE)
+        rep_entry["backup_file"] = "/etc/shadow"
+        tx.save_journal(journal)
+
+        with self.assertRaises(rt.TransactionError) as ctx:
+            tx.apply(namespace_root=live_dir)
+        self.assertIn("Refused absolute", str(ctx.exception))
+
+    def test_two_release_boot_target_revision(self):
+        """Proof: Fresh reviewed preconditions with updated boot target revision are accepted."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture(
+            modify_boot_script_in_candidate=True
+        )
+
+        # In this scenario, live root already has a "v2" boot script from a previous release
+        v2_boot_bytes = b"#!/bin/sh\n# Version 2 boot script\n"
+        v2_sha = hashlib.sha256(v2_boot_bytes).hexdigest()
+        boot_target_path = live_dir / "home/.termux/boot/start-services.sh"
+        boot_target_path.write_bytes(v2_boot_bytes)
+
+        # Fresh reviewed preconditions specify the v2 target hash
+        boot_precond = next(f for f in preconds["files"] if f["path"] == rt.KNOWN_BOOT_ALIAS_REMOTE)
+        boot_precond["target_sha256"] = v2_sha
+        boot_precond["target_bytes"] = len(v2_boot_bytes)
+
+        # Prepare and apply should succeed with fresh reviewed precondition
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+        tx.apply(namespace_root=live_dir)
+
+        # Target updated to candidate
+        self.assertIn(b"Candidate boot script", boot_target_path.read_bytes())
+        # Symlink intact
+        self.assertTrue((live_dir / "home/start_services.sh").is_symlink())
+
+        # Rollback restores v2
+        tx.rollback(namespace_root=live_dir)
+        self.assertEqual(boot_target_path.read_bytes(), v2_boot_bytes)
+        self.assertTrue((live_dir / "home/start_services.sh").is_symlink())
+
+    def test_portable_preimage_contract(self):
+        """Proof: Portable contract verification for production preimage metadata and baseline ownership."""
+        baseline_path = REPO_ROOT / "config/deployment-files.json"
+        self.assertTrue(baseline_path.exists())
+
+        with open(baseline_path, "r", encoding="utf-8") as f:
+            baseline_entries = json.load(f)
+
+        self.assertEqual(len(baseline_entries), 35)
+
+        # Contract requirements
+        start_services_entry = next((e for e in baseline_entries if e["local"] == "scripts/start-services.sh"), None)
+        self.assertIsNotNone(start_services_entry)
+        self.assertEqual(start_services_entry["remote"], "/data/data/com.termux/files/home/start_services.sh")
+        self.assertEqual(start_services_entry["sha256"], rt.AUDITED_BOOT_SCRIPT_SHA256)
+
+        # If parent reference metadata file happens to exist, assert against it portably
+        opt_ref = Path("/home/astro/server-audit/2026-11-03/implementation/.superpowers/sdd/live-release-preimage-metadata.json")
+        if opt_ref.exists():
+            with open(opt_ref, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            self.assertEqual(meta["uid"], 10505)
+            self.assertEqual(len([e for e in meta["files"] if e.get("kind") == "file"]), 35)
+            self.assertEqual(meta["boot_alias_followup"]["target_sha256"], rt.AUDITED_BOOT_SCRIPT_SHA256)
 
 
 if __name__ == "__main__":

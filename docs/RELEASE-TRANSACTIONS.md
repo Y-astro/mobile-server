@@ -76,19 +76,43 @@ status = tx.status()
 # 3. Apply changes to live filesystem
 res = tx.apply(namespace_root="/data/data/com.termux/files")
 # Returns: {"state": "APPLIED", "applied_count": N}
+# Idempotent: repeated apply verifies candidate live state and returns {"state": "APPLIED", "applied_count": 0}
 
 # 4. Finalize transaction
 tx.commit(namespace_root="/data/data/com.termux/files")
 # Returns: {"state": "COMMITTED", "status": "committed"}
 
-# 5. Rollback or Recover (if interrupted or failed)
-res_rb = tx.recover(namespace_root="/data/data/com.termux/files")
+# 5. Recovery (for interrupted, failed, or applying transactions)
+res_rc = tx.recover(namespace_root="/data/data/com.termux/files")
+# Returns: {"state": "ROLLED_BACK", "status": "recovered"}
+# If already COMMITTED: verifies live candidate state and returns {"state": "COMMITTED", "status": "no_op"}
+
+# 6. Explicit Rollback (caller-initiated reversion of applied or committed releases)
+res_rb = tx.rollback(namespace_root="/data/data/com.termux/files")
 # Returns: {"state": "ROLLED_BACK", "status": "recovered"}
 ```
 
-## 4. CLI Commands
+## 4. Mode Policy & Write Safety
 
-The CLI tool supports only inspection and safe file rollback. It deliberately **does not** expose an `apply` subcommand; live activation requires the reviewed service adapter.
+- **Canonical Permissions**:
+  - `0755` strictly for `home/.local/bin/agy-runner-loop` (executable by runner processes across UIDs).
+  - `0700` for executable binaries and scripts (`dashboard`, `phone-gateway`, `start-services.sh`, `cloudflared`, etc.).
+  - `0600` for runtime helper modules (`auth.py`, `notes.py`, `document_conversion.py`), configs, and web assets.
+  - Staged files and backups are stored strictly with `0700` directory and file permissions.
+- **Write-All Semantics**:
+  - All file and journal payload writes utilize `write_all(fd, payload)` handling partial writes, retrying on `EINTR`, and detecting zero-write buffer saturation (`ENOSPC`).
+  - Temporary sibling files (`.tmp_*`) are validated for exact byte size, SHA-256 hash, file mode, and expected UID before invoking `os.replace` on live targets (during both apply and rollback).
+  - Unused or failed temporary sibling files are cleaned up fail-closed.
+- **Directory Durability**:
+  - `fsync_dir` ensures directory metadata durability and propagates `EIO`, `ENOSPC`, and `EBADF` fail-closed. On filesystems where directory sync is unsupported, `EINVAL` and `ENOTSUP` are safely tolerated.
+- **Locked State & Idempotence**:
+  - Mutating operations (`apply`, `commit`, `recover`, `rollback`) acquire `NamespaceLock` before reading or mutating state, and reload the journal under lock to eliminate race windows.
+  - Namespace overrides that conflict with the transaction's recorded namespace are rejected fail-closed.
+  - Internal journal paths (`staged_file`, `backup_file`) are strictly validated against directory traversal and absolute path escapes.
+
+## 5. CLI Commands
+
+The CLI tool supports only inspection and safe file recovery. It deliberately **does not** expose an `apply` subcommand; live activation requires the reviewed service adapter.
 
 ### Inspect Status
 ```bash
@@ -104,14 +128,14 @@ Even if `scripts/` is missing, the standalone copy in the transaction directory 
 python3 /path/to/tx_dir/release_transaction.py recover --transaction-dir /path/to/tx_dir
 ```
 
-## 5. Durability & Interruption Guarantees
+## 6. Durability & Interruption Guarantees
 
-- **Journal Durability**: Written to sibling temporary file, fsynced, atomically renamed via `os.replace`, and directory fsynced.
+- **Journal Durability**: Written to sibling temporary file via `write_all`, verified, fsynced, atomically renamed via `os.replace`, and directory fsynced.
 - **Write-Intent Durability**: Every destination transition (`INTENT_WRITE` -> `WRITTEN`) is recorded before the corresponding live file replacement.
-- **Unknown Concurrent Edit Refusal**: Recovery inspects all live destinations before modifying disk. If any file matches neither the original preimage nor the candidate target, recovery refuses to proceed, preventing corruption of external modifications.
+- **Unknown Concurrent Edit Refusal**: Recovery inspects all live destinations before modifying disk. If any file matches neither the original preimage nor the candidate target, recovery refuses to proceed, transitioning to `STATE_RECOVERY_REQUIRED` to prevent corruption of external modifications.
 - **Power-Loss Boundaries**: Relies on POSIX filesystem `os.fsync` and single-file `os.replace` atomicity. Does not guarantee recovery across physical flash controller failure or kernel-level filesystem corruption during sudden battery removal.
 
-## 6. Service Isolation Boundaries
+## 7. Service Isolation Boundaries
 
 This transaction engine strictly manages files on disk. It:
 - **Does NOT** inspect or manipulate processes or supervisord.
