@@ -190,5 +190,11 @@
     "remote": "/data/data/com.termux/files/home/start_services.sh",
     "sha256": "90dd7aacc85f3289ed53e35752b4dc804d48c92abd29136f4cc81b63f89d0bcc",
     "bytes": 316
+  },
+  {
+    "local": "web/termux_index.html",
+    "remote": "/data/data/com.termux/files/home/.config/ttyd/termux_index.html",
+    "sha256": "03bc121fa9f0cf1635260225e5089c9f0a3958cb3a79aa6d5004b3dadf2de7b2",
+    "bytes": 753817
   }
 ]

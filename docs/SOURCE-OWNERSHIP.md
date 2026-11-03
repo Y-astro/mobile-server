@@ -9,7 +9,7 @@
 - **`scripts/server_supervisor.py`**: Owns background process lifecycle management, periodic polling, flock-based singleton daemon and cycle locking, service failure tracking with exponential backoff, and process log rotation (2 MiB copy/truncate).
 - **`config/Caddyfile`**: Owns edge reverse-proxy routing, HTTPS/TLS termination, access authentication (`forward_auth`), compression, security headers, and static asset delivery.
 - **`gateway/`**: Owns high-performance streaming transport and proxying implemented in Go.
-- **`web/`**: Owns frontend presentation and client-side interactions (`admin.html`, `family.html`, `login.html`, `portal.css`, `laptop.js`, `interactive_player.js`, `filebrowser.js`, `agy_index.html`).
+- **`web/`**: Owns frontend presentation and client-side interactions (`admin.html`, `family.html`, `login.html`, `portal.css`, `laptop.js`, `interactive_player.js`, `filebrowser.js`, `agy_index.html`, `termux_index.html`).
 
 ## Template Fallback Hierarchy
 
