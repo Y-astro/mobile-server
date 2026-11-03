@@ -1067,11 +1067,13 @@
 
     // Init & Polling
     let statsLoop = null, vpnLoop = null, servicesLoop = null, agyLoop = null;
+    window.statsLoop = null; window.vpnLoop = null; window.servicesLoop = null; window.agyLoop = null;
     if (typeof window !== 'undefined' && window.PortalPolling && typeof window.PortalPolling.createPolling === 'function') {
       statsLoop = window.PortalPolling.createPolling((signal) => fetchStats(signal), 3000, { name: 'stats' });
       vpnLoop = window.PortalPolling.createPolling((signal) => fetchVPN(signal), 10000, { name: 'vpn' });
       servicesLoop = window.PortalPolling.createPolling((signal) => fetchServices(signal), 4000, { name: 'services' });
       agyLoop = window.PortalPolling.createPolling((signal) => fetchAgySessions(signal), 5000, { name: 'agy' });
+      window.statsLoop = statsLoop; window.vpnLoop = vpnLoop; window.servicesLoop = servicesLoop; window.agyLoop = agyLoop;
     } else {
       // Degraded static fallback: execute small bounded initial sample without unmanaged recurring intervals
       const pollText = document.querySelector('footer .mono');

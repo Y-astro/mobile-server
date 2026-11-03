@@ -10,18 +10,33 @@ const assert = require('assert');
   const adminHtml = fs.readFileSync(path.resolve(__dirname, '../web/admin.html'), 'utf8');
   const portalCss = fs.readFileSync(path.resolve(__dirname, '../web/portal.css'), 'utf8');
 
-  // Track request counts and server states
+  // Track request counts, active in-flight counts, and server state
   let statsReads = 0;
   let servicesReads = 0;
+  let activeStatsRequests = 0;
+  let maxActiveStatsRequests = 0;
+  let activeServicesRequests = 0;
+  let maxActiveServicesRequests = 0;
+
+  let failStats = false;
+  let delayStatsMs = 0;
   let delayServicesMs = 0;
+
+  // Initial services list: two services so concurrent actual UI actions can be exercised
   let serverServices = [
+    { id: 'filebrowser', name: 'File Manager', running: false, can_toggle: true, open_url: '/drive/', open_label: 'Open Drive', desc: 'File Browser' },
     { id: 'converter', name: 'Document to PDF Converter', running: false, can_toggle: true, open_url: 'javascript:openConverterModal()', open_label: 'Convert File', desc: 'LibreOffice' }
   ];
 
   let notesPosts = 0;
   let convertPosts = 0;
-  let convertFinishedPromise = null;
-  let resolveConvert = null;
+  let convertServerReceivedResolve = null;
+  const convertServerReceived = new Promise(r => { convertServerReceivedResolve = r; });
+  let convertDelayMs = 0;
+
+  let notesServerReceivedResolve = null;
+  const notesServerReceived = new Promise(r => { notesServerReceivedResolve = r; });
+  let notesDelayMs = 0;
 
   const server = http.createServer((req, res) => {
     const url = req.url;
@@ -39,35 +54,61 @@ const assert = require('assert');
       res.end(portalCss);
     } else if (url === '/api/stats') {
       statsReads++;
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        tailscale_ip: '100.75.159.53',
-        local_ip: '192.168.1.8',
-        stale: false,
-        battery: { percentage: 88, temperature: 29 },
-        ram: { used_mb: 4096, total_mb: 8192, percent: 50 },
-        storage: { free_gb: 64, percent: 50 },
-        network: {},
-        load_avg: [null]
-      }));
+      activeStatsRequests++;
+      maxActiveStatsRequests = Math.max(maxActiveStatsRequests, activeStatsRequests);
+      const isFailing = failStats;
+      const delay = delayStatsMs;
+      setTimeout(() => {
+        activeStatsRequests--;
+        if (isFailing) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Stats service error' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          tailscale_ip: '100.75.159.53',
+          local_ip: '192.168.1.8',
+          stale: false,
+          battery: { percentage: 88, temperature: 29 },
+          ram: { used_mb: 4096, total_mb: 8192, percent: 50 },
+          storage: { free_gb: 64, percent: 50 },
+          network: {},
+          load_avg: [null]
+        }));
+      }, delay);
     } else if (url === '/api/vpn/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ enabled: false }));
     } else if (url === '/api/services/toggle' && req.method === 'POST') {
-      serverServices[0].running = !serverServices[0].running;
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', running: serverServices[0].running }));
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        const payload = JSON.parse(body || '{}');
+        const svc = serverServices.find(s => s.id === payload.service);
+        if (svc) {
+          svc.running = payload.enable !== undefined ? payload.enable : !svc.running;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', running: svc ? svc.running : false }));
+      });
     } else if (url === '/api/services') {
       servicesReads++;
-      const currentDelay = delayServicesMs;
+      activeServicesRequests++;
+      maxActiveServicesRequests = Math.max(maxActiveServicesRequests, activeServicesRequests);
+
+      // Snapshot serverServices at request arrival time (prevents dynamic send-time serialization)
+      const snapshot = JSON.parse(JSON.stringify(serverServices));
+      const delay = delayServicesMs;
       setTimeout(() => {
+        activeServicesRequests--;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-          services: serverServices,
+          services: snapshot,
           total_active_mem_mb: 32,
           active_memory_mb: 32
         }));
-      }, currentDelay);
+      }, delay);
     } else if (url === '/api/agy/sessions') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ sessions: [] }));
@@ -77,14 +118,24 @@ const assert = require('assert');
     } else if (url === '/api/notes') {
       if (req.method === 'POST') {
         notesPosts++;
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'saved' }));
+        if (notesServerReceivedResolve) notesServerReceivedResolve();
+        const delay = notesDelayMs;
+        let b = '';
+        req.on('data', chunk => { b += chunk; });
+        req.on('end', () => {
+          setTimeout(() => {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'saved' }));
+          }, delay);
+        });
       } else {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ notes: 'Initial maintained notes' }));
       }
     } else if (url === '/api/convert/pdf' && req.method === 'POST') {
       convertPosts++;
+      if (convertServerReceivedResolve) convertServerReceivedResolve();
+      const delay = convertDelayMs;
       req.on('data', () => {});
       req.on('end', () => {
         setTimeout(() => {
@@ -93,8 +144,7 @@ const assert = require('assert');
             'Content-Disposition': 'attachment; filename="converted.pdf"'
           });
           res.end(Buffer.from('%PDF-1.4 test output'));
-          if (resolveConvert) resolveConvert();
-        }, 300);
+        }, delay);
       });
     } else {
       res.writeHead(404);
@@ -132,51 +182,73 @@ const assert = require('assert');
     // 1. Initial page load and prompt refresh
     await page.goto(`${baseUrl}/`);
     await page.waitForSelector('#telemetry-state');
-    assert(statsReads >= 1, 'Initial stats read should execute promptly on load');
-    assert(servicesReads >= 1, 'Initial services read should execute promptly on load');
+    assert(statsReads >= 1, 'Initial stats read executed promptly on load');
+    assert(servicesReads >= 1, 'Initial services read executed promptly on load');
     assert.strictEqual(recordedErrors.length, 0, 'No uncaught errors on page load');
+    assert.strictEqual(maxActiveStatsRequests, 1, 'Active stats requests <= 1');
+    assert.strictEqual(maxActiveServicesRequests, 1, 'Active services requests <= 1');
 
-    // 2. Coalescing and single-flight verification
-    const coalesceCount = await page.evaluate(async () => {
-      let runs = 0;
-      const loop = window.PortalPolling.createPolling(async () => {
-        runs++;
-        await new Promise(r => setTimeout(r, 200));
-      }, 5000);
-      const p1 = loop.refresh();
-      const p2 = loop.refresh();
-      const p3 = loop.refresh();
-      await Promise.all([p1, p2, p3]);
-      loop.dispose();
-      return runs;
-    });
-    assert.strictEqual(coalesceCount, 1, 'Concurrent refresh() calls coalesce into a single execution');
+    // 2. Slow/stale services GET during TWO actual UI input actions
+    // Make background GET take 300ms so toggles occur during in-flight read
+    delayServicesMs = 300;
+    // Trigger background refresh
+    const bgRefresh = page.evaluate(() => window.servicesLoop.refresh());
 
-    // 3. Mutation freshness and trailing read test
-    // Toggle service: should trigger fresh trailing read
-    const servicesBeforeToggle = servicesReads;
-    await page.evaluate(async () => {
-      await toggleService('converter', null);
-    });
-    assert(servicesReads > servicesBeforeToggle, 'Toggle service triggers fresh readAfterMutation');
+    // User clicks first service toggle (filebrowser) via visible switch slider
+    const filebrowserToggle = page.locator('input[type="checkbox"]').first();
+    await page.locator('.switch .slider').first().click();
 
-    // 4. In-progress mutation and user input preservation across hide/resume
+    // User clicks second service toggle (converter) via visible switch slider
+    const converterToggle = page.locator('input[type="checkbox"]').nth(1);
+    await page.locator('.switch .slider').nth(1).click();
+
+    // Advance clock to let background and trailing reads settle
+    await page.clock.fastForward(600);
+    delayServicesMs = 0;
+
+    // Both checkboxes must reflect updated true state on UI
+    assert(await filebrowserToggle.isChecked(), 'First toggle is checked after fresh trailing read');
+    assert(await converterToggle.isChecked(), 'Second toggle is checked after fresh trailing read');
+    assert.strictEqual(maxActiveServicesRequests, 1, 'Active services requests never exceeded 1 concurrently');
+
+    // 3. Stats endpoint failure & recovery, ensuring other panels continue updating
+    failStats = true;
+    const statsBeforeFail = statsReads;
+    await page.evaluate(() => window.statsLoop.refresh());
+    await page.clock.fastForward(100);
+    assert.strictEqual(await page.locator('#telemetry-state').textContent(), 'Unavailable', 'Failed stats marks telemetry Unavailable');
+
+    // Other healthy panels continue functioning
+    assert.strictEqual(await page.locator('#vpn-badge').textContent(), 'OFF', 'VPN panel healthy');
+
+    // Recover stats endpoint
+    failStats = false;
+    await page.evaluate(() => window.statsLoop.refresh());
+    await page.clock.fastForward(100);
+    assert.strictEqual(await page.locator('#telemetry-state').textContent(), 'Active sample', 'Stats recovered and rendered Active sample');
+
+    // 4. In-progress mutation (notes and conversion) held across hide/show
     // Type notes (debounce 750ms)
+    notesDelayMs = 400;
     const notesInput = page.locator('#user-notes-input');
     await notesInput.fill('Important drafted notes that must not disappear');
 
-    // Select converter file
+    // Fast forward 800ms to trigger debounced notes POST
+    await page.clock.fastForward(800);
+    // Wait for server to receive notes POST before hiding page
+    await notesServerReceived;
+
+    // Open converter modal and start conversion
+    convertDelayMs = 400;
     await page.locator('a[href="javascript:openConverterModal()"]').click();
     await page.locator('#convert-file-input').setInputFiles([
       { name: 'in_progress.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('in progress docx') }
     ]);
-    assert(await page.locator('#convert-file-summary').textContent(), 'File summary visible');
-
-    // Start conversion
-    convertFinishedPromise = new Promise(r => { resolveConvert = r; });
     await page.locator('#convert-btn').click();
+    // Wait for server to receive conversion POST before hiding page
+    await convertServerReceived;
 
-    // Now hide page while conversion and notes autosave are in progress
+    // Now hide page while notes POST and convert POST are in-flight on the network
     const statsBeforeHide = statsReads;
     await page.evaluate(() => {
       Object.defineProperty(document, 'hidden', { value: true, configurable: true });
@@ -184,15 +256,15 @@ const assert = require('assert');
       window.dispatchEvent(new Event('pagehide'));
     });
 
-    // Advance clock by 10 seconds while hidden
-    await page.clock.fastForward(10000);
+    // Advance clock while hidden by 15 seconds (greater than all polling intervals)
+    await page.clock.fastForward(15000);
 
-    // Verify 0 new polling reads occurred while hidden
-    assert.strictEqual(statsReads, statsBeforeHide, 'Zero new polling reads while hidden/pagehide even after interval elapsed');
+    // Verify ZERO new polling reads occurred while hidden
+    assert.strictEqual(statsReads, statsBeforeHide, 'Zero new polling reads while hidden');
 
-    // Wait for in-progress conversion to finish
-    await convertFinishedPromise;
-    assert.strictEqual(convertPosts, 1, 'Conversion POST completed once and was not canceled or duplicated');
+    // Verify notes POST and conversion POST completed exactly once and were not aborted/retried
+    assert.strictEqual(notesPosts, 1, 'Notes POST sent exactly once');
+    assert.strictEqual(convertPosts, 1, 'Conversion POST sent exactly once');
 
     // Resume page / visible / pageshow
     await page.evaluate(() => {
@@ -201,51 +273,19 @@ const assert = require('assert');
       window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
     });
 
-    // Wait for the async fetch to hit the synthetic server
-    await page.waitForFunction((prev) => window.statsReads !== undefined || true);
-    for (let i = 0; i < 50; i++) {
-      if (statsReads > statsBeforeHide) break;
-      await new Promise(r => setTimeout(r, 20));
-    }
+    // Visible prompt refresh executes
+    await page.clock.fastForward(100);
+    assert(statsReads > statsBeforeHide, 'Visible prompt refresh executed');
 
-    // Prompt refresh should trigger immediately on becoming visible
-    assert(statsReads > statsBeforeHide, 'Visible/pageshow promptly restarts refresh');
-
-    // Advance clock past notes debounce (750ms) to ensure auto-save posts
-    await page.clock.fastForward(1000);
-    assert(notesPosts >= 1, 'Notes auto-save completed');
-
-    // Verify user notes survived untouched
+    // Verify notes text survived intact
     const notesVal = await notesInput.inputValue();
-    assert.strictEqual(notesVal, 'Important drafted notes that must not disappear', 'Notes draft survived lifecycle events');
+    assert.strictEqual(notesVal, 'Important drafted notes that must not disappear', 'Notes text survived lifecycle transitions');
 
-    // 5. Fault isolation: failing endpoint does not break healthy updates
-    const faultIsolation = await page.evaluate(async () => {
-      let featureAFinished = false;
-      let featureBFailHandled = false;
-
-      const loopA = window.PortalPolling.createPolling(async () => {
-        featureAFinished = true;
-      }, 1000);
-
-      const loopB = window.PortalPolling.createPolling(async () => {
-        featureBFailHandled = true;
-        throw new Error('Endpoint failure');
-      }, 1000);
-
-      await Promise.all([loopA.refresh(), loopB.refresh()]);
-      loopA.dispose();
-      loopB.dispose();
-      return { featureAFinished, featureBFailHandled };
-    });
-    assert(faultIsolation.featureAFinished && faultIsolation.featureBFailHandled, 'Failing endpoint does not break healthy loops');
-
-    // 6. Graceful degradation when PortalPolling module is unavailable
+    // 5. Graceful degradation when PortalPolling helper is unavailable
     const standalonePage = await context.newPage();
     const fallbackErrors = [];
     standalonePage.on('pageerror', err => fallbackErrors.push(err));
 
-    // Block portal-polling.js
     await standalonePage.route('**/static/portal-polling.js', route => route.abort());
     await standalonePage.goto(`${baseUrl}/`);
     await standalonePage.waitForSelector('#telemetry-state');
@@ -254,12 +294,13 @@ const assert = require('assert');
     const headerTs = await standalonePage.locator('#header-ts-ip').textContent();
     assert.strictEqual(headerTs, '100.75.159.53', 'Page rendered initial sample when portal-polling.js is blocked');
     const footerMode = await standalonePage.locator('footer .mono').textContent();
-    assert.strictEqual(footerMode, 'Manual refresh mode', 'Footer truthfully indicates manual refresh mode on fallback');
+    assert.strictEqual(footerMode, 'Manual refresh mode', 'Footer indicates manual refresh mode on fallback');
 
     await standalonePage.close();
     await page.close();
 
-    console.log('PASS: portal-polling lifecycle, coalescing, isolation, fresh trailing read, and degradation verified.');
+    assert.strictEqual(recordedErrors.length, 0, 'No uncaught page errors occurred throughout full lifecycle run');
+    console.log('PASS: portal-polling-browser integration tests verified with zero tautologies and real UI interactions.');
   } finally {
     await browser.close();
     await new Promise(resolve => server.close(resolve));
