@@ -76,10 +76,10 @@ git commit -m "chore: reconcile maintained source with live Redmi deployment"
 
 Before committing inspect staged names and secret-sensitive patterns without dumping values. Return commit IDs, test commands/results, source hash comparison and unresolved mapping gaps in the named report file. No phone writes or restarts.
 
-### Task 2: Test actual role templates and repair conversion contract
+### Task 2: Repair actual dashboard contracts and test served pages
 
 **Files:**
-- Modify: scripts/browser-fixture.py, tests/browser.cjs, tests/laptop-browser.cjs, tests/test_dashboard.py, app/dashboard.py, app/limits.py.
+- Modify: scripts/browser-fixture.py, tests/browser.cjs, tests/laptop-browser.cjs, tests/test_dashboard.py, tests/test_auth.py, app/auth.py, app/dashboard.py, app/limits.py, web/admin.html.
 - Create: tests/dashboard-browser.cjs and update package.json test script when needed for actual admin/family coverage.
 - Preserve: web role-page appearance and existing utility/terminal behavior.
 
@@ -125,6 +125,40 @@ git diff --check
 git add app tests scripts/browser-fixture.py package.json package-lock.json
 git commit -m "fix: align dashboard conversion routes and test served pages"
 ```
+
+
+#### Task 2 additions from verified live-source defects
+
+
+The approved design allows tested bug fixes before structural refactoring. Task 1 imported live source verbatim and revealed confirmed inherited defects. Task 2 must repair the defects and make the real maintained pages testable; passing the old fixture by weakening its assertions is not acceptance.
+
+## Required changes and separate proof
+
+1. Credential freshness: preserve the existing failing test_private_store_reload_and_disable assertion. CredentialStore must stat the credential file on each authorization lookup and cache JSON only while its file identity/version is unchanged. Keep constructor and invalidate() source compatibility. Test immediate account disable, admin-to-family downgrade, store deletion and atomic replacement, and verify unchanged files do not cause repeated JSON reads. Neither TTL waiting nor manual invalidate() calls from tests is an acceptable replacement for cross-process freshness. Use no real credentials.
+
+2. Conversion contract: normalize /api/convert/pdf and /api/convert before BODY_LIMITS selection, Admission.acquire and conversion dispatch. Do not globally rewrite request paths or query handling. The aliases must share one conversion semaphore, identical existing size/input limits, role rules, multipart fields and actual response/download format. Test both URLs using tiny temporary fixtures and a mocked converter, including failure/slot release and equivalent admission behavior. Verify actual frontend multipart and response handling against backend, not only URL spellings.
+
+3. Actual-page fixtures: scripts/browser-fixture.py must copy maintained web/admin.html rather than AST-extract embedded fallback HTML. Add family/login fixture coverage where needed. Existing browser assertions should check the current visible Wi-Fi host:port link text and preserved URL, not an old version's format. Add input-driven notes and document-conversion checks using synthetic responses. Keep AGY/laptop user actions covered. No browser connection to real mutating phone APIs.
+
+4. Truthful memory: remove ESTIMATED_SERVICE_MEM/get_dynamic_service_rss fabrication. Real measured RSS stays numeric; unknown active RSS becomes null with explicit unavailable state. Active totals become unavailable/explicitly partial when any active value is unknown. Avoid treating null as 0 in web/admin.html. Preserve disabled/sleeping state and converter zero-idle behavior. Test measured/unknown/partial cases and browser rendering without changing appearance/layout. This is a semantic bug fix required by the approved truthful-telemetry objective.
+
+## Scope boundaries
+
+No module extraction, shared catalog/proxy refactor, service restarts, deployments, phone file changes, library operations or new runtime dependencies. Do not edit the historical source baseline manifest after bug fixes; generated candidate release hashes will be separate. Do not rewrite binary gateway without provenance proof. Embedded fallback removal/generation belongs to the rendering extraction stage; moving tests to actual pages does not claim the broken fallback is repaired.
+
+Read /home/astro/.agents/skills/surgical-patch/SKILL.md and /home/astro/.agents/skills/systematic-debugging/SKILL.md. Read/apply /home/astro/.agents/skills/unslop/SKILL.md for interface work and run modern-web-guidance before client JS changes. Preserve all comments and current UI appearance. Record focused failing proof, targeted fixes and passing covering checks per defect, then run existing full suites once. Keep artifacts in ignored .superpowers/sdd and return concise evidence.
+
+The existing account-disable test must pass without manual invalidation or TTL waits. Preserve JSON read caching by checking the file identity/version before reuse:
+
+```python
+version = (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+```
+
+A missing, replaced or downgraded user must not keep cached authorization. Prove unchanged content is not repeatedly parsed. Retain public constructor/invalidate compatibility.
+
+For service telemetry, tests must establish these outcomes through get_services_report and actual admin rendering: measured RSS 12.5 remains numeric 12.5; unreadable RSS for a running service is null/unavailable; a missing active reading makes aggregate completeness explicit; disabled services do not acquire fake active memory. Remove jitter generation at its source.
+
+Commit credential freshness and telemetry corrections separately from conversion/fixture changes when useful for review. Each commit must contain its covering test and pass its targeted proof. Run complete Python/browser checks once after all Task 2 fixes. Keep the baseline deployment manifest unchanged.
 
 ### Task 3: Make the source-to-deployment contract complete and verifiable
 
