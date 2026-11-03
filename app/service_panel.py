@@ -126,6 +126,7 @@ class ServicePanel:
             sup_info = sup_status.get(sid, {})
             is_healthy = sup_info.get("state") == "healthy"
 
+            # Check port listening state for network services
             port_listening = False
             if not is_disabled:
                 check_ports = []

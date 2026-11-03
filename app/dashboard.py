@@ -45,7 +45,12 @@ from laptop import LaptopClient, LaptopError
 from service_catalog import dashboard_services, suwayomi_probe_ports
 from role_templates import read_role_template, RoleTemplateUnavailable
 from agy_sessions import AgySessions
-from service_panel import ServicePanel
+from service_panel import (
+    ServicePanel,
+    probe_process_rss,
+    probe_service_pids,
+    probe_service_port_open,
+)
 AGY_SESSIONS = AgySessions(prefix=PREFIX, tmux_bin=TMUX_BIN)
 SERVICE_PANEL = ServicePanel(
     get_service_pids=lambda pattern: get_service_pids(pattern),
@@ -178,34 +183,13 @@ def get_stats():
 SERVICES_CONFIG = dashboard_services()
 
 def get_service_pids(pattern):
-    try:
-        out = subprocess.check_output(["pgrep", "-f", pattern]).decode().strip()
-        my_pid = os.getpid()
-        return [int(p) for p in out.split() if int(p) != my_pid]
-    except Exception:
-        return []
+    return probe_service_pids(pattern)
 
 def get_process_rss(pid):
-    try:
-        with open(f"/proc/{pid}/status") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    return round(int(line.split()[1]) / 1024.0, 1)
-    except Exception:
-        pass
-    return None
+    return probe_process_rss(pid)
 
 def is_service_port_open(port):
-    if not port:
-        return False
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.25)
-        res = s.connect_ex(("127.0.0.1", int(port)))
-        s.close()
-        return res == 0
-    except Exception:
-        return False
+    return probe_service_port_open(port)
 
 _SUWAYOMI_UNREAD_CACHE = {
     "unread_count": 0,
