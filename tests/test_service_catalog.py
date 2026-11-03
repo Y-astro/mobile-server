@@ -194,6 +194,7 @@ class ServiceCatalogTests(unittest.TestCase):
             home_bin.mkdir(parents=True, exist_ok=True)
             prefix_bin.mkdir(parents=True, exist_ok=True)
 
+            # Copy all flat app helpers so later modules integrate without a hardcoded incomplete list
             # Copy flat app helpers excluding dashboard.py (actual executable is PREFIX/bin/dashboard)
             for app_file in (ROOT / 'app').glob('*.py'):
                 if app_file.name == 'dashboard.py':
