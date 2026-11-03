@@ -2,7 +2,8 @@
 
 ## Component Responsibilities
 
-- **`app/dashboard.py`**: Owns HTTP request composition, route dispatching, session token generation/verification, and service orchestration. It delegates role template loading to `app/role_templates.py` and AGY tmux session management to `app/agy_sessions.py`.
+- **`app/dashboard.py`**: Owns HTTP request composition, route dispatching, session token generation/verification, and service orchestration. It delegates role template loading to `app/role_templates.py`, AGY tmux session management to `app/agy_sessions.py`, and service status reporting and lifecycle toggling to `app/service_panel.py`.
+- **`app/service_panel.py`**: Pure owner for service reporting and control (`ServicePanel`), managing process RSS/port/PID inspection, supervisor command delegation, disabled service invariants, and Suwayomi cache composition with explicit dynamic callbacks.
 - **`app/agy_sessions.py`**: Pure owner for AGY tmux instance operations (`AgySessions`), managing command discovery/fallback, session listing, locked instance creation up to 8 instances, and secondary session termination without direct HTTP coupling.
 - **`app/role_templates.py`**: Owns single-source loading of installed role templates from disk (`web/` templates installed to static directory), enforcing raw byte loading without interpolation and raising structured unavailability errors when pages are missing.
 - **`app/notes.py`**: Owns user quick notes persistence (`NotesStore`), including thread-safe locking, JSON file encoding, 0600 file permissions, and atomic temporary replacement.

@@ -45,7 +45,14 @@ from laptop import LaptopClient, LaptopError
 from service_catalog import dashboard_services, suwayomi_probe_ports
 from role_templates import read_role_template, RoleTemplateUnavailable
 from agy_sessions import AgySessions
+from service_panel import ServicePanel
 AGY_SESSIONS = AgySessions(prefix=PREFIX, tmux_bin=TMUX_BIN)
+SERVICE_PANEL = ServicePanel(
+    get_service_pids=lambda pattern: get_service_pids(pattern),
+    get_process_rss=lambda pid: get_process_rss(pid),
+    is_service_port_open=lambda port: is_service_port_open(port),
+    get_suwayomi_unread=lambda force=False: get_suwayomi_unread_cached(force=force),
+)
 LAPTOP_CLIENT = LaptopClient()
 TOR_PROXY = TorProxy()
 USER_STORE = CredentialStore()
@@ -294,153 +301,10 @@ def get_suwayomi_unread_cached(force=False):
         return _SUWAYOMI_UNREAD_CACHE
 
 def get_services_report(force=False):
-    services = []
-    total_active_mem = 0.0
-    services_sleeping = 0
-    all_active_complete = True
-    disabled_dir = Path("/data/data/com.termux/files/home/.config/services_disabled")
-    status_file = Path("/data/data/com.termux/files/home/.config/server_recovery/status.json")
-    sup_status = {}
-    if status_file.exists():
-        try:
-            with open(status_file) as f:
-                sup_status = json.load(f).get("services", {})
-        except Exception:
-            pass
-
-    for sid, cfg in SERVICES_CONFIG.items():
-        if cfg.get("is_ondemand"):
-            services.append({
-                "id": sid,
-                "name": cfg["name"],
-                "category": cfg.get("category", "General"),
-                "running": True,
-                "ondemand": True,
-                "pid": None,
-                "rss_mb": 0.0,
-                "status_badge": "Ready (0 MB Idle)",
-                "port": cfg.get("port"),
-                "open_url": cfg.get("open_url"),
-                "open_label": cfg.get("open_label"),
-                "desc": cfg["desc"],
-                "can_toggle": False,
-                "memory_complete": True
-            })
-            continue
-
-        is_disabled = (disabled_dir / sid).exists()
-        pids = get_service_pids(cfg["pattern"]) if not is_disabled else []
-        sup_info = sup_status.get(sid, {})
-        is_healthy = sup_info.get("state") == "healthy"
-
-        # Check port listening state for network services
-        port_listening = False
-        if not is_disabled:
-            check_ports = []
-            if cfg.get("port"):
-                check_ports.append(cfg["port"])
-            if sid == "suwayomi":
-                check_ports.extend(suwayomi_probe_ports())
-            for cp in check_ports:
-                if is_service_port_open(cp):
-                    port_listening = True
-                    break
-
-        running = (len(pids) > 0) or port_listening or (not is_disabled and is_healthy)
-
-        rss_mb = 0.0
-        service_memory_complete = True
-        if running:
-            if pids:
-                rss_values = [get_process_rss(pid) for pid in pids]
-                if all(v is not None for v in rss_values):
-                    rss_mb = round(sum(rss_values), 1)
-                    service_memory_complete = True
-                    total_active_mem += rss_mb
-                    badge = f"Active ({rss_mb} MB)"
-                else:
-                    rss_mb = None
-                    service_memory_complete = False
-                    all_active_complete = False
-                    badge = "Active (Memory Unavailable)"
-            else:
-                rss_mb = None
-                service_memory_complete = False
-                all_active_complete = False
-                badge = "Active (Memory Unavailable)"
-        else:
-            services_sleeping += 1
-            if is_disabled:
-                badge = "Disabled (0 MB)"
-            else:
-                badge = "Sleeping (0 MB)"
-
-        unread_updates = 0
-        unread_titles = 0
-        latest_unread = 0
-        if sid == "suwayomi" and running:
-            stats = get_suwayomi_unread_cached(force=force)
-            unread_updates = stats.get("unread_count", 0)
-            unread_titles = stats.get("unread_titles", 0)
-            latest_unread = stats.get("latest_unread", 0)
-
-        services.append({
-            "id": sid,
-            "name": cfg["name"],
-            "category": cfg.get("category", "General"),
-            "running": running,
-            "ondemand": False,
-            "pid": pids[0] if pids else None,
-            "rss_mb": rss_mb,
-            "status_badge": badge,
-            "port": cfg.get("port"),
-            "open_url": cfg.get("open_url"),
-            "open_label": cfg.get("open_label"),
-            "desc": cfg["desc"],
-            "can_toggle": cfg.get("can_toggle", True),
-            "memory_complete": service_memory_complete,
-            "unread_updates": unread_updates,
-            "unread_titles": unread_titles,
-            "latest_unread": latest_unread
-        })
-
-    tot_mem = round(total_active_mem, 1) if all_active_complete else None
-    return {
-        "services": services,
-        "active_memory_mb": tot_mem,
-        "total_active_mem_mb": tot_mem,
-        "memory_complete": all_active_complete,
-        "estimated_saved_mem_mb": None,
-        "sleeping_count": services_sleeping
-    }
+    return SERVICE_PANEL.get_services_report(force=force, services_config=SERVICES_CONFIG)
 
 def toggle_service(sid, enable=None):
-    cfg = SERVICES_CONFIG.get(sid)
-    if not cfg:
-        return {"status": "error", "message": "Unknown service"}
-    if cfg.get("is_ondemand"):
-        return get_services_report()
-    disabled_dir = Path("/data/data/com.termux/files/home/.config/services_disabled")
-    is_currently_disabled = (disabled_dir / sid).exists()
-    target = is_currently_disabled if enable is None else bool(enable)
-    try:
-        result = subprocess.run([
-            "python3", os.path.expanduser("~/bin/server_supervisor.py"),
-            "--service", sid, "--enable", str(target).lower()
-        ], capture_output=True, text=True, timeout=25)
-        if result.returncode:
-            return {"status": "error", "message": "Service control failed; see server recovery logs"}
-    except (OSError, subprocess.TimeoutExpired):
-        return {"status": "error", "message": "Service control timed out; see server recovery logs"}
-
-    if target:
-        for _ in range(15):
-            pids = get_service_pids(cfg["pattern"])
-            if pids:
-                break
-            time.sleep(0.1)
-
-    return get_services_report()
+    return SERVICE_PANEL.toggle_service(sid, enable=enable, services_config=SERVICES_CONFIG)
 
 
 # AGY MULTI-INSTANCE SESSION MANAGER
