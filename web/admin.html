@@ -594,6 +594,8 @@
           : data.total_active_mem_mb;
         if (totalMem !== undefined && totalMem !== null) {
           setText('svc-active-mem', totalMem + ' MB');
+        } else {
+          setText('svc-active-mem', 'N/A');
         }
       } catch (err) { /* silent */ }
     }

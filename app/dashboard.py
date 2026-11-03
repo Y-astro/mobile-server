@@ -370,18 +370,6 @@ def get_process_rss(pid):
         pass
     return None
 
-ESTIMATED_SERVICE_MEM = {
-    "filebrowser": 10.8,
-    "suwayomi": 158.4,
-    "vaultwarden": 28.0,
-    "adguard": 44.5,
-    "terminal": 8.5,
-    "agy": 38.2,
-    "converter": 0.0,
-    "syncthing": 42.0,
-    "battery_guard": 3.0,
-}
-
 def is_service_port_open(port):
     if not port:
         return False
@@ -393,13 +381,6 @@ def is_service_port_open(port):
         return res == 0
     except Exception:
         return False
-
-def get_dynamic_service_rss(sid, base_rss):
-    t_bucket = int(time.time() // 4)
-    h = hash((sid, t_bucket))
-    spread = base_rss * 0.035
-    jitter = ((h % 201) / 100.0 - 1.0) * spread
-    return round(max(1.0, base_rss + jitter), 1)
 
 _SUWAYOMI_UNREAD_CACHE = {
     "unread_count": 0,
@@ -498,6 +479,7 @@ def get_services_report(force=False):
     services = []
     total_active_mem = 0.0
     services_sleeping = 0
+    all_active_complete = True
     disabled_dir = Path("/data/data/com.termux/files/home/.config/services_disabled")
     status_file = Path("/data/data/com.termux/files/home/.config/server_recovery/status.json")
     sup_status = {}
@@ -523,7 +505,8 @@ def get_services_report(force=False):
                 "open_url": cfg.get("open_url"),
                 "open_label": cfg.get("open_label"),
                 "desc": cfg["desc"],
-                "can_toggle": False
+                "can_toggle": False,
+                "memory_complete": True
             })
             continue
 
@@ -548,16 +531,25 @@ def get_services_report(force=False):
         running = (len(pids) > 0) or port_listening or (not is_disabled and is_healthy)
 
         rss_mb = 0.0
+        service_memory_complete = True
         if running:
-            rss_values = [get_process_rss(pid) for pid in pids]
-            valid_rss = [v for v in rss_values if v is not None and v > 0]
-            if valid_rss:
-                rss_mb = round(sum(valid_rss), 1)
+            if pids:
+                rss_values = [get_process_rss(pid) for pid in pids]
+                if all(v is not None for v in rss_values):
+                    rss_mb = round(sum(rss_values), 1)
+                    service_memory_complete = True
+                    total_active_mem += rss_mb
+                    badge = f"Active ({rss_mb} MB)"
+                else:
+                    rss_mb = None
+                    service_memory_complete = False
+                    all_active_complete = False
+                    badge = "Active (Memory Unavailable)"
             else:
-                base_rss = ESTIMATED_SERVICE_MEM.get(sid, 20.0)
-                rss_mb = get_dynamic_service_rss(sid, base_rss)
-            total_active_mem += rss_mb
-            badge = f"Active ({rss_mb} MB)"
+                rss_mb = None
+                service_memory_complete = False
+                all_active_complete = False
+                badge = "Active (Memory Unavailable)"
         else:
             services_sleeping += 1
             if is_disabled:
@@ -588,16 +580,18 @@ def get_services_report(force=False):
             "open_label": cfg.get("open_label"),
             "desc": cfg["desc"],
             "can_toggle": cfg.get("can_toggle", True),
+            "memory_complete": service_memory_complete,
             "unread_updates": unread_updates,
             "unread_titles": unread_titles,
             "latest_unread": latest_unread
         })
 
-    tot_mem = round(total_active_mem, 1)
+    tot_mem = round(total_active_mem, 1) if all_active_complete else None
     return {
         "services": services,
         "active_memory_mb": tot_mem,
         "total_active_mem_mb": tot_mem,
+        "memory_complete": all_active_complete,
         "estimated_saved_mem_mb": None,
         "sleeping_count": services_sleeping
     }
@@ -2070,8 +2064,13 @@ ADMIN_DASHBOARD_HTML = """<!DOCTYPE html>
         if (Array.isArray(data.services)) {
           renderServices(data.services);
         }
-        if (data.active_memory_mb !== undefined) {
-          setText('svc-active-mem', data.active_memory_mb + ' MB');
+        const totalMem = (data.active_memory_mb !== undefined && data.active_memory_mb !== null)
+          ? data.active_memory_mb
+          : data.total_active_mem_mb;
+        if (totalMem !== undefined && totalMem !== null) {
+          setText('svc-active-mem', totalMem + ' MB');
+        } else {
+          setText('svc-active-mem', 'N/A');
         }
       } catch (err) { /* silent */ }
     }
