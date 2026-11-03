@@ -48,7 +48,7 @@
       }
       if (data.online && !data.sessions.length) list.textContent = 'No laptop terminals open.';
     } catch (error) {
-      if (signal && signal.aborted && signal.reason === 'lifecycle_pause') return;
+      if (signal && signal.aborted && (signal.reason === 'lifecycle_pause' || signal.reason === 'lifecycle_dispose')) return;
       status.textContent = error.message;
       start.disabled = true;
     } finally { refreshing = false; }
@@ -81,6 +81,10 @@
     : null;
 
   if (!laptopLoop) {
-    refresh();
+    const fallbackCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const fallbackTimer = fallbackCtrl ? setTimeout(() => fallbackCtrl.abort('deadline_timeout'), 10000) : null;
+    refresh(fallbackCtrl ? fallbackCtrl.signal : null).finally(() => {
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+    });
   }
 })();

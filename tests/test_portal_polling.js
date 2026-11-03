@@ -185,3 +185,111 @@ test('max 1 active callback at any time under overlapping refreshes', async () =
 
   assert.equal(maxActiveCallbacks, 1, 'At most 1 callback in flight concurrently');
 });
+
+// --- NEW DETERMINISTIC UNIT REGRESSIONS ---
+
+test('fresh read synchronous throw settles fresh waiter and avoids retry storm', async () => {
+  let runs = 0;
+  let syncErrors = 0;
+
+  const loop = createPolling((signal) => {
+    runs++;
+    syncErrors++;
+    throw new Error('Immediate sync throw on fresh read');
+  }, 60000); // 60s interval: must not retry immediately!
+
+  // Wait for initial constructor run to settle
+  await new Promise(r => setTimeout(r, 10));
+  const runsBefore = runs;
+
+  // Fresh read requested
+  const pFresh = loop.refreshAfterMutation();
+  await pFresh; // Must resolve/settle without hanging
+
+  assert.equal(runs - runsBefore, 1, 'Exactly one attempt executed for the fresh demand, no retry storm');
+  assert.equal(loop.waiters.length, 0, 'Waiters array cleared');
+  loop.dispose();
+});
+
+test('fresh read asynchronous rejection settles fresh waiter and backs off to interval', async () => {
+  let runs = 0;
+  let asyncRejections = 0;
+
+  const loop = createPolling(async (signal) => {
+    runs++;
+    if (runs === 2) {
+      asyncRejections++;
+      await new Promise(r => setTimeout(r, 20));
+      throw new Error('Async network failure');
+    }
+  }, 80); // 80ms interval
+
+  // Wait for initial run to settle
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(runs, 1, 'Initial run completed');
+
+  // Fresh read requested (will be run 2, which fails)
+  const pFresh = loop.refreshAfterMutation();
+  await pFresh; // Must settle promptly despite rejection
+
+  assert.equal(asyncRejections, 1, 'Async rejection occurred');
+  assert.equal(runs, 2, 'Did not immediately loop retry after failure');
+
+  // Wait for normal scheduled interval to fire and recover
+  await new Promise(r => setTimeout(r, 150));
+  assert.ok(runs >= 3, 'Normal interval resumed');
+  loop.dispose();
+});
+
+test('fresh read deadline abort settles fresh waiter, backs off, and newer demand triggers attempt', async () => {
+  let runs = 0;
+  let aborts = 0;
+
+  const loop = createPolling(async (signal) => {
+    runs++;
+    if (runs === 2) {
+      await new Promise((resolve) => {
+        signal.addEventListener('abort', () => {
+          aborts++;
+          resolve();
+        });
+      });
+    }
+  }, 1000, { deadlineMs: 30 });
+
+  // Wait for initial run
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(runs, 1);
+
+  // Fresh read requested (run 2, which times out)
+  const pFresh = loop.refreshAfterMutation();
+  await pFresh; // Must settle when deadline aborts
+
+  assert.equal(aborts, 1, 'Run 2 was deadline-aborted');
+  assert.equal(runs, 2, 'No immediate retry storm after deadline timeout');
+
+  // New demand arriving after the failed attempt triggers a new attempt
+  const pFresh2 = loop.refreshAfterMutation();
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(runs, 3, 'New demand triggered third attempt');
+  await pFresh2;
+  loop.dispose();
+});
+
+test('duplicate visible/pageshow events while healthy and running coalesce', async () => {
+  let runs = 0;
+  const loop = createPolling(async () => {
+    runs++;
+  }, 1000);
+
+  await new Promise(r => setTimeout(r, 10)); // initial run completed, timer active
+  assert.equal(runs, 1);
+
+  // Dispatch duplicate resume events
+  loop.resume();
+  loop.resume();
+  await new Promise(r => setTimeout(r, 10));
+
+  assert.equal(runs, 1, 'Duplicate resume calls did not trigger redundant reads');
+  loop.dispose();
+});

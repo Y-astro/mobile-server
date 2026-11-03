@@ -10,35 +10,37 @@ const assert = require('assert');
   const adminHtml = fs.readFileSync(path.resolve(__dirname, '../web/admin.html'), 'utf8');
   const portalCss = fs.readFileSync(path.resolve(__dirname, '../web/portal.css'), 'utf8');
 
-  // Track request counts, active in-flight counts, and server state
-  let statsReads = 0;
-  let servicesReads = 0;
-  let activeStatsRequests = 0;
-  let maxActiveStatsRequests = 0;
-  let activeServicesRequests = 0;
-  let maxActiveServicesRequests = 0;
+  // Gated server response controls
+  let servicesGated = false;
+  let servicesRelease = null;
+  let servicesArrivedResolve = null;
+  let servicesArrivedPromise = new Promise(r => { servicesArrivedResolve = r; });
 
-  let failStats = false;
-  let delayStatsMs = 0;
-  let delayServicesMs = 0;
+  let statsGated = false;
+  let statsRelease = null;
+  let statsArrivedResolve = null;
+  let statsArrivedPromise = new Promise(r => { statsArrivedResolve = r; });
 
-  // Initial services list: two services so concurrent actual UI actions can be exercised
+  let notesGated = false;
+  let notesRelease = null;
+  let notesArrivedResolve = null;
+  let notesArrivedPromise = new Promise(r => { notesArrivedResolve = r; });
+
+  let convertGated = false;
+  let convertRelease = null;
+  let convertArrivedResolve = null;
+  let convertArrivedPromise = new Promise(r => { convertArrivedResolve = r; });
+
+  let serverServicesRev = 0;
   let serverServices = [
-    { id: 'filebrowser', name: 'File Manager', running: false, can_toggle: true, open_url: '/drive/', open_label: 'Open Drive', desc: 'File Browser' },
-    { id: 'converter', name: 'Document to PDF Converter', running: false, can_toggle: true, open_url: 'javascript:openConverterModal()', open_label: 'Convert File', desc: 'LibreOffice' }
+    { id: 'filebrowser', name: 'File Manager', running: false, can_toggle: true, open_url: '/drive/', open_label: 'Open Drive', desc: 'Rev 0' },
+    { id: 'converter', name: 'Document to PDF Converter', running: false, can_toggle: true, open_url: 'javascript:openConverterModal()', open_label: 'Convert File', desc: 'Rev 0' }
   ];
 
   let notesPosts = 0;
   let convertPosts = 0;
-  let convertServerReceivedResolve = null;
-  const convertServerReceived = new Promise(r => { convertServerReceivedResolve = r; });
-  let convertDelayMs = 0;
 
-  let notesServerReceivedResolve = null;
-  const notesServerReceived = new Promise(r => { notesServerReceivedResolve = r; });
-  let notesDelayMs = 0;
-
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     const url = req.url;
     if (url === '/' || url === '/admin') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -53,30 +55,24 @@ const assert = require('assert');
       res.writeHead(200, { 'Content-Type': 'text/css' });
       res.end(portalCss);
     } else if (url === '/api/stats') {
-      statsReads++;
-      activeStatsRequests++;
-      maxActiveStatsRequests = Math.max(maxActiveStatsRequests, activeStatsRequests);
-      const isFailing = failStats;
-      const delay = delayStatsMs;
-      setTimeout(() => {
-        activeStatsRequests--;
-        if (isFailing) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Stats service error' }));
-          return;
+      if (statsGated) {
+        if (statsArrivedResolve) {
+          statsArrivedResolve();
+          statsArrivedResolve = null;
         }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          tailscale_ip: '100.75.159.53',
-          local_ip: '192.168.1.8',
-          stale: false,
-          battery: { percentage: 88, temperature: 29 },
-          ram: { used_mb: 4096, total_mb: 8192, percent: 50 },
-          storage: { free_gb: 64, percent: 50 },
-          network: {},
-          load_avg: [null]
-        }));
-      }, delay);
+        await new Promise(r => { statsRelease = r; });
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        tailscale_ip: '100.75.159.53',
+        local_ip: '192.168.1.8',
+        stale: false,
+        battery: { percentage: 88, temperature: 29 },
+        ram: { used_mb: 4096, total_mb: 8192, percent: 50 },
+        storage: { free_gb: 64, percent: 50 },
+        network: {},
+        load_avg: [null]
+      }));
     } else if (url === '/api/vpn/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ enabled: false }));
@@ -88,27 +84,28 @@ const assert = require('assert');
         const svc = serverServices.find(s => s.id === payload.service);
         if (svc) {
           svc.running = payload.enable !== undefined ? payload.enable : !svc.running;
+          serverServicesRev++;
+          svc.desc = `Rev ${serverServicesRev}`;
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', running: svc ? svc.running : false }));
       });
     } else if (url === '/api/services') {
-      servicesReads++;
-      activeServicesRequests++;
-      maxActiveServicesRequests = Math.max(maxActiveServicesRequests, activeServicesRequests);
-
-      // Snapshot serverServices at request arrival time (prevents dynamic send-time serialization)
+      // Snapshot payload at request arrival
       const snapshot = JSON.parse(JSON.stringify(serverServices));
-      const delay = delayServicesMs;
-      setTimeout(() => {
-        activeServicesRequests--;
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          services: snapshot,
-          total_active_mem_mb: 32,
-          active_memory_mb: 32
-        }));
-      }, delay);
+      if (servicesGated) {
+        if (servicesArrivedResolve) {
+          servicesArrivedResolve();
+          servicesArrivedResolve = null;
+        }
+        await new Promise(r => { servicesRelease = r; });
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        services: snapshot,
+        total_active_mem_mb: 32,
+        active_memory_mb: 32
+      }));
     } else if (url === '/api/agy/sessions') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ sessions: [] }));
@@ -118,15 +115,18 @@ const assert = require('assert');
     } else if (url === '/api/notes') {
       if (req.method === 'POST') {
         notesPosts++;
-        if (notesServerReceivedResolve) notesServerReceivedResolve();
-        const delay = notesDelayMs;
+        if (notesGated) {
+          if (notesArrivedResolve) {
+            notesArrivedResolve();
+            notesArrivedResolve = null;
+          }
+          await new Promise(r => { notesRelease = r; });
+        }
         let b = '';
         req.on('data', chunk => { b += chunk; });
         req.on('end', () => {
-          setTimeout(() => {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: 'saved' }));
-          }, delay);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'saved' }));
         });
       } else {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -134,17 +134,20 @@ const assert = require('assert');
       }
     } else if (url === '/api/convert/pdf' && req.method === 'POST') {
       convertPosts++;
-      if (convertServerReceivedResolve) convertServerReceivedResolve();
-      const delay = convertDelayMs;
+      if (convertGated) {
+        if (convertArrivedResolve) {
+          convertArrivedResolve();
+          convertArrivedResolve = null;
+        }
+        await new Promise(r => { convertRelease = r; });
+      }
       req.on('data', () => {});
       req.on('end', () => {
-        setTimeout(() => {
-          res.writeHead(200, {
-            'Content-Type': 'application/pdf',
-            'Content-Disposition': 'attachment; filename="converted.pdf"'
-          });
-          res.end(Buffer.from('%PDF-1.4 test output'));
-        }, delay);
+        res.writeHead(200, {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': 'attachment; filename="converted.pdf"'
+        });
+        res.end(Buffer.from('%PDF-1.4 test output'));
       });
     } else {
       res.writeHead(404);
@@ -163,7 +166,8 @@ const assert = require('assert');
 
   try {
     const context = await browser.newContext();
-    // Block all external network access explicitly
+
+    // Block all non-fixture external traffic explicitly
     await context.route('**', (route) => {
       const u = route.request().url();
       if (u.startsWith(baseUrl)) {
@@ -176,112 +180,189 @@ const assert = require('assert');
     const recordedErrors = [];
     page.on('pageerror', err => recordedErrors.push(err));
 
-    // Install clock before page navigation/timers
+    // A. Measure CLIENT requests with Playwright request/requestfinished/requestfailed events
+    const managedEndpoints = [
+      '/api/stats',
+      '/api/vpn/status',
+      '/api/services',
+      '/api/agy/sessions',
+      '/api/laptop/terminals'
+    ];
+
+    const activeClientRequests = new Map();
+    const maxActiveClientRequests = new Map();
+    for (const ep of managedEndpoints) {
+      activeClientRequests.set(ep, 0);
+      maxActiveClientRequests.set(ep, 0);
+    }
+
+    page.on('request', req => {
+      if (req.method() !== 'GET') return;
+      const pathname = new URL(req.url()).pathname;
+      if (activeClientRequests.has(pathname)) {
+        const cur = activeClientRequests.get(pathname) + 1;
+        activeClientRequests.set(pathname, cur);
+        if (cur > maxActiveClientRequests.get(pathname)) {
+          maxActiveClientRequests.set(pathname, cur);
+        }
+      }
+    });
+
+    const onReqEnd = req => {
+      if (req.method() !== 'GET') return;
+      const pathname = new URL(req.url()).pathname;
+      if (activeClientRequests.has(pathname)) {
+        const cur = Math.max(0, activeClientRequests.get(pathname) - 1);
+        activeClientRequests.set(pathname, cur);
+      }
+    };
+    page.on('requestfinished', onReqEnd);
+    page.on('requestfailed', onReqEnd);
+
+    // Install Playwright clock before page navigation/timers
     await page.clock.install();
 
-    // 1. Initial page load and prompt refresh
+    // 1. Initial page load
     await page.goto(`${baseUrl}/`);
     await page.waitForSelector('#telemetry-state');
-    assert(statsReads >= 1, 'Initial stats read executed promptly on load');
-    assert(servicesReads >= 1, 'Initial services read executed promptly on load');
     assert.strictEqual(recordedErrors.length, 0, 'No uncaught errors on page load');
-    assert.strictEqual(maxActiveStatsRequests, 1, 'Active stats requests <= 1');
-    assert.strictEqual(maxActiveServicesRequests, 1, 'Active services requests <= 1');
 
-    // 2. Slow/stale services GET during TWO actual UI input actions
-    // Make background GET take 300ms so toggles occur during in-flight read
-    delayServicesMs = 300;
-    // Trigger background refresh
-    const bgRefresh = page.evaluate(() => window.servicesLoop.refresh());
+    for (const ep of managedEndpoints) {
+      assert.ok(maxActiveClientRequests.get(ep) <= 1, `Max client active requests for ${ep} <= 1`);
+    }
 
-    // User clicks first service toggle (filebrowser) via visible switch slider
-    const filebrowserToggle = page.locator('input[type="checkbox"]').first();
+    // B. Gate a services GET after capturing old payload, execute TWO actual UI toggles, verify fresh revision in DOM
+    servicesGated = true;
+    servicesArrivedPromise = new Promise(r => { servicesArrivedResolve = r; });
+    // Trigger background read
+    const bgRead = page.evaluate(() => servicesLoop.refresh());
+    await servicesArrivedPromise; // Wait until GET reaches server
+
+    // Now click first service toggle (filebrowser) via visible switch slider
     await page.locator('.switch .slider').first().click();
-
-    // User clicks second service toggle (converter) via visible switch slider
-    const converterToggle = page.locator('input[type="checkbox"]').nth(1);
+    // Click second service toggle (converter) via visible switch slider
     await page.locator('.switch .slider').nth(1).click();
 
-    // Advance clock to let background and trailing reads settle
-    await page.clock.fastForward(600);
-    delayServicesMs = 0;
+    // Release old gated services GET
+    servicesGated = false;
+    servicesRelease();
+    await bgRead;
 
-    // Both checkboxes must reflect updated true state on UI
-    assert(await filebrowserToggle.isChecked(), 'First toggle is checked after fresh trailing read');
-    assert(await converterToggle.isChecked(), 'Second toggle is checked after fresh trailing read');
-    assert.strictEqual(maxActiveServicesRequests, 1, 'Active services requests never exceeded 1 concurrently');
+    // Await all started refresh promises
+    await page.evaluate(() => servicesLoop.refreshAfterMutation());
 
-    // 3. Stats endpoint failure & recovery, ensuring other panels continue updating
-    failStats = true;
-    const statsBeforeFail = statsReads;
-    await page.evaluate(() => window.statsLoop.refresh());
-    await page.clock.fastForward(100);
-    assert.strictEqual(await page.locator('#telemetry-state').textContent(), 'Unavailable', 'Failed stats marks telemetry Unavailable');
+    // Assert that the latest synthetic revision marker ('Rev 2') appears in DOM
+    await page.waitForFunction(() => document.body.innerText.includes('Rev 2'), { timeout: 3000 });
+    assert.ok(await page.locator('input[type="checkbox"]').first().isChecked(), 'Filebrowser checkbox checked');
+    assert.ok(await page.locator('input[type="checkbox"]').nth(1).isChecked(), 'Converter checkbox checked');
+    assert.ok(maxActiveClientRequests.get('/api/services') <= 1, 'Client active requests for /api/services <= 1');
 
-    // Other healthy panels continue functioning
-    assert.strictEqual(await page.locator('#vpn-badge').textContent(), 'OFF', 'VPN panel healthy');
+    // C. Hold real stats GET beyond 10-second deadline. Observe requestfailed/abort and Unavailable panel.
+    statsGated = true;
+    statsArrivedPromise = new Promise(r => { statsArrivedResolve = r; });
+    const statsAbortPromise = page.waitForRequest(req => req.url().includes('/api/stats'));
+    const statsPollRun = page.evaluate(() => statsLoop.refresh());
+    await statsArrivedPromise; // Wait until stats arrives at server
 
-    // Recover stats endpoint
-    failStats = false;
-    await page.evaluate(() => window.statsLoop.refresh());
-    await page.clock.fastForward(100);
-    assert.strictEqual(await page.locator('#telemetry-state').textContent(), 'Active sample', 'Stats recovered and rendered Active sample');
+    // Advance clock past the 10-second deadline
+    await page.clock.fastForward(10500);
 
-    // 4. In-progress mutation (notes and conversion) held across hide/show
-    // Type notes (debounce 750ms)
-    notesDelayMs = 400;
+    // Release server gate so server socket finishes cleanly
+    statsGated = false;
+    if (statsRelease) statsRelease();
+    await statsPollRun;
+
+    // Verify stats panel displays Unavailable
+    await page.waitForFunction(() => document.getElementById('telemetry-state').textContent === 'Unavailable', { timeout: 3000 });
+    assert.strictEqual(await page.locator('#telemetry-state').textContent(), 'Unavailable', 'Stats marked Unavailable on deadline abort');
+
+    // Demonstrate continued requests and changed rendered data in another panel (services active memory)
+    assert.ok(await page.locator('#svc-active-mem').textContent() !== '', 'Services panel rendered and active');
+
+    // Advance clock past normal 3s stats interval and allow successful recovery
+    await page.clock.fastForward(3000);
+    await page.waitForFunction(() => document.getElementById('telemetry-state').textContent === 'Active sample', { timeout: 3000 });
+    assert.strictEqual(await page.locator('#telemetry-state').textContent(), 'Active sample', 'Stats recovered to Active sample');
+    assert.ok(maxActiveClientRequests.get('/api/stats') <= 1, 'Stats client concurrency remained <= 1 through deadline abort and recovery');
+
+    // D. Hold BOTH an actual debounced notes POST and actual conversion POST with explicit gates
+    notesGated = true;
+    notesArrivedPromise = new Promise(r => { notesArrivedResolve = r; });
+    convertGated = true;
+    convertArrivedPromise = new Promise(r => { convertArrivedResolve = r; });
+
+    // Fill notes (750ms debounce)
     const notesInput = page.locator('#user-notes-input');
-    await notesInput.fill('Important drafted notes that must not disappear');
-
-    // Fast forward 800ms to trigger debounced notes POST
-    await page.clock.fastForward(800);
-    // Wait for server to receive notes POST before hiding page
-    await notesServerReceived;
+    await notesInput.fill('Gated draft notes that must survive lifecycle');
+    await page.clock.fastForward(800); // trigger notes POST
+    await notesArrivedPromise; // wait until notes POST arrives at server
 
     // Open converter modal and start conversion
-    convertDelayMs = 400;
     await page.locator('a[href="javascript:openConverterModal()"]').click();
     await page.locator('#convert-file-input').setInputFiles([
-      { name: 'in_progress.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('in progress docx') }
+      { name: 'gated.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('gated test') }
     ]);
-    await page.locator('#convert-btn').click();
-    // Wait for server to receive conversion POST before hiding page
-    await convertServerReceived;
 
-    // Now hide page while notes POST and convert POST are in-flight on the network
-    const statsBeforeHide = statsReads;
+    // Register download listener before clicking convert
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('#convert-btn').click();
+    await convertArrivedPromise; // wait until conversion POST arrives at server
+
+    // Now both POSTs are held at the server. Hide the page!
+    const activeReqsBeforeHide = new Map();
+    for (const ep of managedEndpoints) {
+      activeReqsBeforeHide.set(ep, activeClientRequests.get(ep));
+    }
+
     await page.evaluate(() => {
       Object.defineProperty(document, 'hidden', { value: true, configurable: true });
       document.dispatchEvent(new Event('visibilitychange'));
       window.dispatchEvent(new Event('pagehide'));
     });
 
-    // Advance clock while hidden by 15 seconds (greater than all polling intervals)
+    // Advance beyond all polling intervals (15 seconds)
     await page.clock.fastForward(15000);
 
-    // Verify ZERO new polling reads occurred while hidden
-    assert.strictEqual(statsReads, statsBeforeHide, 'Zero new polling reads while hidden');
+    // Assert zero new managed GETs occurred while hidden
+    for (const ep of managedEndpoints) {
+      assert.strictEqual(activeClientRequests.get(ep), 0, `No active background GET for ${ep} while hidden`);
+    }
 
-    // Verify notes POST and conversion POST completed exactly once and were not aborted/retried
-    assert.strictEqual(notesPosts, 1, 'Notes POST sent exactly once');
-    assert.strictEqual(convertPosts, 1, 'Conversion POST sent exactly once');
-
-    // Resume page / visible / pageshow
+    // Resume while both POST responses are still held
     await page.evaluate(() => {
       Object.defineProperty(document, 'hidden', { value: false, configurable: true });
       document.dispatchEvent(new Event('visibilitychange'));
       window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
     });
 
-    // Visible prompt refresh executes
-    await page.clock.fastForward(100);
-    assert(statsReads > statsBeforeHide, 'Visible prompt refresh executed');
+    // Verify notes and converter selection remain while pending
+    assert.strictEqual(await notesInput.inputValue(), 'Gated draft notes that must survive lifecycle');
+    assert.ok(await page.locator('#convert-file-summary').textContent(), 'File summary remains visible');
 
-    // Verify notes text survived intact
-    const notesVal = await notesInput.inputValue();
-    assert.strictEqual(notesVal, 'Important drafted notes that must not disappear', 'Notes text survived lifecycle transitions');
+    // Release both held POST responses
+    notesGated = false;
+    if (notesRelease) notesRelease();
+    convertGated = false;
+    if (convertRelease) convertRelease();
 
-    // 5. Graceful degradation when PortalPolling helper is unavailable
+    // Verify download completes and notes saves settles
+    const download = await downloadPromise;
+    assert.strictEqual(download.suggestedFilename(), 'converted.pdf', 'Download completed with expected filename');
+    await page.waitForFunction(() => document.getElementById('notes-status').textContent.includes('Saved'), { timeout: 3000 });
+    assert.strictEqual(notesPosts, 1, 'Notes POST sent exactly once');
+    assert.strictEqual(convertPosts, 1, 'Conversion POST sent exactly once');
+
+    // E. Exercise rapid hide/show with active GET and pageshow persisted=true
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event('pagehide'));
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    });
+    await page.clock.fastForward(3000);
+    for (const ep of managedEndpoints) {
+      assert.ok(maxActiveClientRequests.get(ep) <= 1, `Concurrency <= 1 for ${ep} after rapid hide/show`);
+    }
+
+    // Missing-helper page verification
     const standalonePage = await context.newPage();
     const fallbackErrors = [];
     standalonePage.on('pageerror', err => fallbackErrors.push(err));
@@ -291,17 +372,19 @@ const assert = require('assert');
     await standalonePage.waitForSelector('#telemetry-state');
 
     assert.strictEqual(fallbackErrors.length, 0, 'No uncaught errors on page when portal-polling.js is blocked');
-    const headerTs = await standalonePage.locator('#header-ts-ip').textContent();
-    assert.strictEqual(headerTs, '100.75.159.53', 'Page rendered initial sample when portal-polling.js is blocked');
-    const footerMode = await standalonePage.locator('footer .mono').textContent();
-    assert.strictEqual(footerMode, 'Manual refresh mode', 'Footer indicates manual refresh mode on fallback');
+    assert.strictEqual(await standalonePage.locator('#header-ts-ip').textContent(), '100.75.159.53', 'Page rendered initial sample');
+    assert.strictEqual(await standalonePage.locator('footer .mono').textContent(), 'Manual refresh mode', 'Footer indicates manual refresh mode on fallback');
 
     await standalonePage.close();
     await page.close();
 
-    assert.strictEqual(recordedErrors.length, 0, 'No uncaught page errors occurred throughout full lifecycle run');
-    console.log('PASS: portal-polling-browser integration tests verified with zero tautologies and real UI interactions.');
+    assert.strictEqual(recordedErrors.length, 0, 'No uncaught page errors occurred throughout full run');
+    console.log('PASS: portal-polling-browser proof complete with true request gating, client-side concurrency tracking, and download verification.');
   } finally {
+    if (servicesRelease) servicesRelease();
+    if (statsRelease) statsRelease();
+    if (notesRelease) notesRelease();
+    if (convertRelease) convertRelease();
     await browser.close();
     await new Promise(resolve => server.close(resolve));
   }

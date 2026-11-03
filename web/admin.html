@@ -427,7 +427,7 @@
         setText('net-wan-ping', metric(data.network?.wan_ping));
         setText('adguard-state', data.network?.dns_status);
       } catch (err) {
-        if (signal && signal.aborted && signal.reason === 'lifecycle_pause') return;
+        if (signal && signal.aborted && (signal.reason === 'lifecycle_pause' || signal.reason === 'lifecycle_dispose')) return;
         setText('telemetry-state', 'Unavailable');
       }
     }
@@ -441,7 +441,7 @@
         if (signal && signal.aborted) return;
         updateVPNUI(data);
       } catch (err) {
-        if (signal && signal.aborted && signal.reason === 'lifecycle_pause') return;
+        if (signal && signal.aborted && (signal.reason === 'lifecycle_pause' || signal.reason === 'lifecycle_dispose')) return;
         setText('vpn-badge', 'Status unavailable');
       }
     }
@@ -1020,7 +1020,7 @@
           `;
         }).join('');
       } catch (err) {
-        if (signal && signal.aborted && signal.reason === 'lifecycle_pause') return;
+        if (signal && signal.aborted && (signal.reason === 'lifecycle_pause' || signal.reason === 'lifecycle_dispose')) return;
         container.innerHTML = `<div class="p-3 rounded-lg bg-red-500/10 text-red-300 text-xs">AGY status unavailable: ${err.message}</div>`;
       }
     }
@@ -1067,21 +1067,26 @@
 
     // Init & Polling
     let statsLoop = null, vpnLoop = null, servicesLoop = null, agyLoop = null;
-    window.statsLoop = null; window.vpnLoop = null; window.servicesLoop = null; window.agyLoop = null;
     if (typeof window !== 'undefined' && window.PortalPolling && typeof window.PortalPolling.createPolling === 'function') {
       statsLoop = window.PortalPolling.createPolling((signal) => fetchStats(signal), 3000, { name: 'stats' });
       vpnLoop = window.PortalPolling.createPolling((signal) => fetchVPN(signal), 10000, { name: 'vpn' });
       servicesLoop = window.PortalPolling.createPolling((signal) => fetchServices(signal), 4000, { name: 'services' });
       agyLoop = window.PortalPolling.createPolling((signal) => fetchAgySessions(signal), 5000, { name: 'agy' });
-      window.statsLoop = statsLoop; window.vpnLoop = vpnLoop; window.servicesLoop = servicesLoop; window.agyLoop = agyLoop;
     } else {
-      // Degraded static fallback: execute small bounded initial sample without unmanaged recurring intervals
+      // Degraded static fallback: execute bounded initial sample without unmanaged recurring intervals
       const pollText = document.querySelector('footer .mono');
       if (pollText) pollText.textContent = 'Manual refresh mode';
-      fetchStats();
-      fetchVPN();
-      fetchServices();
-      fetchAgySessions();
+      const fallbackCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const fallbackTimer = fallbackCtrl ? setTimeout(() => fallbackCtrl.abort('deadline_timeout'), 10000) : null;
+      const fbSignal = fallbackCtrl ? fallbackCtrl.signal : null;
+      Promise.allSettled([
+        fetchStats(fbSignal),
+        fetchVPN(fbSignal),
+        fetchServices(fbSignal),
+        fetchAgySessions(fbSignal)
+      ]).finally(() => {
+        if (fallbackTimer) clearTimeout(fallbackTimer);
+      });
     }
 
     document.addEventListener('DOMContentLoaded', () => {

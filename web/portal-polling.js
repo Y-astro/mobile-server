@@ -4,11 +4,11 @@
  * Invariant:
  * - At most one background read executes at any given time.
  * - Ordinary refresh coalesces with active in-flight work.
- * - A fresh/mutation refresh requires completion of a read started at or after the request time.
- * - Callers awaiting a fresh refresh receive a Promise that resolves only once a read satisfying
- *   their demand revision has completed (or immediately if paused/disposed).
- * - Mutations occurring during a trailing read naturally trigger another trailing read without
- *   unbounded queue accumulation.
+ * - A fresh/mutation refresh requires completion of a read attempt started at or after the request time.
+ * - Callers awaiting a fresh refresh receive a Promise that resolves once an attempt satisfying
+ *   their demand revision has completed (regardless of whether that attempt succeeded or failed/timed out).
+ * - Completed attempts advance served demand so failed reads back off to the normal interval without retry storms.
+ * - Any new demand arriving during an attempt triggers exactly one subsequent trailing attempt.
  * - Pausing, hiding, or disposing promptly settles waiting caller promises and aborts background GETs,
  *   preserving pending-fresh intent to run on resume without starting hidden reads.
  */
@@ -114,8 +114,8 @@
 
     resume() {
       if (this.isDisposed) return;
-      if (!this.isPaused && !this.inFlightPromise && this.timerId !== null) {
-        // Duplicate visibility/pageshow event while already running normally: coalesce
+      if (!this.isPaused) {
+        // Already unpaused / healthy: coalesce duplicate events
         return;
       }
       this.isPaused = false;
@@ -181,7 +181,7 @@
 
       this._clearTimer();
 
-      // Record demand revision active at the start of this read
+      // Record demand revision active at the start of this read attempt
       const runStartRev = this.demandRev;
       this.currentRunStartRev = runStartRev;
 
@@ -204,10 +204,6 @@
         await Promise.resolve();
         try {
           await this.fn(signal);
-          // If this run completed without being aborted, mark servedRev up to runStartRev
-          if (!signal || !signal.aborted) {
-            this.servedRev = Math.max(this.servedRev, runStartRev);
-          }
         } catch (err) {
           // Lifecycle cancellations stay silent
           if (signal && signal.aborted && (signal.reason === 'lifecycle_pause' || signal.reason === 'lifecycle_dispose')) {
@@ -223,10 +219,15 @@
           }
           this.inFlightPromise = null;
 
+          // Crucial fix: Mark this attempt as having served demand up to runStartRev
+          // (whether successful, failed, or deadline aborted).
+          // This fulfills fresh callers waiting for this attempt and prevents infinite immediate retry loops.
+          this.servedRev = Math.max(this.servedRev, runStartRev);
+
           // Settle any waiters whose target revision has now been served
           this._settleWaiters();
 
-          // Check for queued resume or remaining fresh demand that arrived during execution
+          // Check for queued resume or remaining fresh demand that arrived DURING execution
           if (!this.isDisposed && !this.isPaused && (typeof document === 'undefined' || !document.hidden)) {
             if (this.hasPendingResume) {
               this.hasPendingResume = false;
@@ -235,6 +236,7 @@
               // Further fresh demand arrived during execution: run next trailing read
               this._executeRead();
             } else {
+              // No newer demand: schedule next attempt at configured normal interval
               this._scheduleNext();
             }
           }
