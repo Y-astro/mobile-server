@@ -1,112 +1,212 @@
-# Redmi server operations
+# Server Operations Reference
 
-This repository captures the running non-root Redmi K20 Pro setup. It updates an **already provisioned** Termux/Termux:API/Termux:Boot installation with Caddy, native FileBrowser v2.63.23, Tor, tmux, and a Debian proot containing AGY and LibreOffice. It does not contain user data, passwords, signing keys, databases, certificates, AGY history, or account tokens.
+Authoritative technical reference for managed services, runtime lifecycle contracts, durable data paths, health inspection, and backup boundaries. Based on maintained sources and 2026-11-03 audit findings.
 
-## Connections
+---
 
-```mermaid
-flowchart LR
-    Client[Phone or laptop] -->|Encrypted direct Tailscale connection when possible| Caddy[Caddy :8000 / :8443]
-    Caddy --> Auth[Dashboard + role authorization :8001]
-    Caddy --> Limits[Streaming transfer gateway :8081]
-    Limits --> Drive[Native FileBrowser :8080]
-    Caddy --> AGY[ttyd :7682 → persistent tmux → Debian AGY]
-    App[Proxy-configured application] -->|SSH over Tailscale :8022| SOCKS[Loopback Tor SOCKS :9050]
-    SOCKS --> Tor[Tor network → Internet]
-```
+## 1. Service Ownership and Endpoint Reference
 
-Tailscale negotiates encrypted peer connections; its coordination service is not the website host. Relays remain the automatic fallback when a network prevents direct connectivity. Do not disable that fallback and assume every future carrier/router will permit direct UDP. Direct IPv6 connectivity was verified between the laptop and Redmi on the tested mobile-data path. Files are not sent through Tor.
+The server manages 15 background services via [`scripts/server_supervisor.py`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/server_supervisor.py#L37-L73) and [`app/service_catalog.py`](file:///home/astro/server-audit/2026-11-03/server-operations/app/service_catalog.py#L12-L73), plus on-demand utilities and laptop integrations.
 
-Caddy serves the website and authenticates each protected route. FileBrowser trusts a proxy identity header, so its backend and the admission gateway must stay bound to loopback. Privileged routes use a dedicated admin authorization endpoint, including encoded/mixed-case URL variants. Keep the dashboard, ttyd, Tor, and backend listeners private. Port 8000 is HTTP; Tailscale encrypts it on the tailnet, while a local LAN connection needs HTTPS for transport protection. Caddy's internal CA needs to be trusted by browsers for :8443; no public CA certificate is provisioned here.
+### Managed Supervisor Services (15 Services)
 
-## Update, release manifests, and credentials
+| Service ID (`sid`) | Category & Purpose | Maintained Source / Owner | Runtime Launcher & Executable | Endpoint & Protocol | Health Probe (Read-Only) | Durable Data & Config Paths |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `dashboard` | Core web portal & role authorization | [`app/dashboard.py`](file:///home/astro/server-audit/2026-11-03/server-operations/app/dashboard.py), [`app/`](file:///home/astro/server-audit/2026-11-03/server-operations/app/) | `$PREFIX/bin/python3 -u $PREFIX/bin/dashboard` | `127.0.0.1:8001` (HTTP) | `GET /healthz` (200) | Creds: `$HOME/.config/dashboard/users.json` (0600)<br>Notes: `$HOME/.config/dashboard/notes.json`<br>Static: `$HOME/.config/dashboard/static/` |
+| `caddy` | Ingress reverse proxy & TLS termination | [`config/Caddyfile`](file:///home/astro/server-audit/2026-11-03/server-operations/config/Caddyfile) | `$PREFIX/bin/caddy run --config $HOME/.config/caddy/Caddyfile` | `0.0.0.0:8000` (HTTP)<br>`0.0.0.0:8443` (HTTPS) | `GET /healthz` (proxies to :8001) | Config: `$HOME/.config/caddy/Caddyfile`<br>TLS/CA keys: `$HOME/.local/share/caddy/` |
+| `filebrowser` | Cloud storage & media browser | Native FileBrowser v2.63.23 ([licenses/filebrowser.txt](file:///home/astro/server-audit/2026-11-03/server-operations/licenses/filebrowser.txt)) | `$PREFIX/bin/filebrowser -d $HOME/.config/filebrowser/filebrowser.db -a 127.0.0.1 -p 8085 -c $HOME/.config/filebrowser/fb_config.json --cacheDir $HOME/.cache/filebrowser --disableImageResolutionCalc --imageProcessors 2` | `127.0.0.1:8085` (HTTP, loopback) | `GET /drive/` (200) | DB: `$HOME/.config/filebrowser/filebrowser.db`<br>Config: `$HOME/.config/filebrowser/fb_config.json`<br>Cache: `$HOME/.cache/filebrowser`<br>Media: `/storage/emulated/0/` |
+| `transfer_gateway` | Bounded streaming admission proxy | [`gateway/`](file:///home/astro/server-audit/2026-11-03/server-operations/gateway/) (Go source) | `$HOME/bin/mobile-gateway -backend http://127.0.0.1:8085` | `127.0.0.1:8081` (HTTP, loopback) | `GET /healthz` (200) | Stateless admission proxy; no durable DB |
+| `suwayomi` | Manga server backend | [`scripts/start_suwayomi.sh`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/start_suwayomi.sh) | `$HOME/bin/start_suwayomi.sh` (`Suwayomi-Server.jar` via OpenJDK 21 or Debian PRoot fallback) | `127.0.0.1:4569` (HTTP backend)<br>`0.0.0.0:4567` (HTTP client reader) | `GET /suwayomi/` on :4569 or :4567 (200) | Base: `$HOME/suwayomi/data/`<br>H2 DB: `$HOME/suwayomi/data/database/`<br>Downloads: `$HOME/suwayomi/data/downloads/`<br>Logs: `$HOME/suwayomi/data/logs/` |
+| `suwayomi_filter` | Suwayomi GraphQL reading-feed filter | [`scripts/suwayomi_graphql_filter.py`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/suwayomi_graphql_filter.py) | `$PREFIX/bin/python3 $HOME/bin/suwayomi_graphql_filter.py` | `127.0.0.1:4566` (HTTP, loopback) | `GET /healthz` (200) | Logs: `$HOME/suwayomi/data/logs/graphql_filter.log` |
+| `ssh` | Remote administrative shell | Termux OpenSSH package | `$PREFIX/bin/sshd -D` | `0.0.0.0:8022` (TCP, SSH) | TCP probe on 8022 (banner `SSH-`) | Config: `$PREFIX/etc/ssh/`<br>Keys: `$HOME/.ssh/authorized_keys` |
+| `agy` | Autonomous AI coding agent | [`scripts/agy_session.sh`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/agy_session.sh), [`scripts/agy-runner-loop`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/agy-runner-loop), [`web/agy_index.html`](file:///home/astro/server-audit/2026-11-03/server-operations/web/agy_index.html), [`app/agy_sessions.py`](file:///home/astro/server-audit/2026-11-03/server-operations/app/agy_sessions.py) | `$PREFIX/bin/ttyd -W -a -m 8 -i 127.0.0.1 -p 7682 -b /agy -I $HOME/.config/ttyd/agy_index.html $HOME/bin/agy_session.sh` | `127.0.0.1:7682` (HTTP/WS, loopback) | `GET /agy/` (200) | Config: `$HOME/.config/ttyd/agy_index.html`<br>tmux socket: `$PREFIX/var/run/tmux-10505/agy`<br>History: PRoot Debian `/root/.local/state/` |
+| `laptop_terminal` | Restricted laptop terminal bridge | [`app/laptop.py`](file:///home/astro/server-audit/2026-11-03/server-operations/app/laptop.py), [`scripts/laptop_session.py`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/laptop_session.py), [`web/laptop.js`](file:///home/astro/server-audit/2026-11-03/server-operations/web/laptop.js), [`laptop/bridge.py`](file:///home/astro/server-audit/2026-11-03/server-operations/laptop/bridge.py) | `$PREFIX/bin/ttyd -W -a -m 8 -i 127.0.0.1 -p 7683 -b /laptop $PREFIX/bin/python3 $HOME/bin/laptop_session.py` | `127.0.0.1:7683` (HTTP/WS, loopback) | `GET /laptop/` (200) | Pairing: `$HOME/.config/mobile-server-laptop/client.json`, `id_ed25519` (0600), `known_hosts` (0600) |
+| `adguard` | Network DNS and ad-blocking | AdGuardHome binary | `$HOME/adguard/AdGuardHome/AdGuardHome -c $HOME/adguard/data/AdGuardHome.yaml -w $HOME/adguard/data --no-permcheck --no-etc-hosts` | `127.0.0.1:3000` (HTTP console)<br>`0.0.0.0:5353` (DNS) | `GET /` (200) | Config: `$HOME/adguard/data/AdGuardHome.yaml`<br>Data & query logs: `$HOME/adguard/data/` |
+| `battery_guard` | Battery & thermal monitor | [`scripts/battery_guard.sh`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/battery_guard.sh) | `$PREFIX/bin/bash $HOME/bin/battery_guard.sh --daemon` | None (daemon process) | Process match + `$HOME/.config/battery_guard/status.json` mtime < 360s | State: `$HOME/.config/battery_guard/status.json`<br>Logs: `$HOME/.config/battery_guard/` |
+| `syncthing` *(disabled)* | Continuous file synchronization | Termux Syncthing package | `$PREFIX/bin/syncthing serve --config $HOME/.local/state/syncthing --data $HOME/.local/state/syncthing --allow-newer-config --no-browser` | `127.0.0.1:8384` (HTTP, loopback) | `GET /rest/noauth/health` (200) | State & DB: `$HOME/.local/state/syncthing/` (`config.xml`, `index-*.db`, `cert.pem`, `key.pem`) |
+| `vaultwarden` *(disabled)* | Bitwarden password vault | Vaultwarden binary in Debian PRoot | `$PREFIX/bin/proot-distro login debian -- /usr/bin/env ROCKET_PORT=8082 ROCKET_ADDRESS=127.0.0.1 DATA_FOLDER=$HOME/vaultwarden/data WEB_VAULT_FOLDER=$HOME/vaultwarden/web-vault $HOME/vaultwarden/vaultwarden` | `127.0.0.1:8082` (HTTP, loopback) | `GET /alive` (200) | Vault data: `$HOME/vaultwarden/data/` (`db.sqlite3`, RSA keys)<br>Web UI: `$HOME/vaultwarden/web-vault/` |
+| `terminal` *(disabled)* | Admin Termux web shell | `ttyd` pkg + [`scripts/termux_session.sh`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/termux_session.sh), [`web/termux_index.html`](file:///home/astro/server-audit/2026-11-03/server-operations/web/termux_index.html) | `$PREFIX/bin/ttyd -W -i 127.0.0.1 -p 7681 -b /terminal -I $HOME/.config/ttyd/termux_index.html $HOME/bin/termux_session.sh` | `127.0.0.1:7681` (HTTP/WS, loopback) | `GET /terminal/` (200) | Config: `$HOME/.config/ttyd/termux_index.html` |
+| `tor` *(disabled)* | Tor SOCKS proxy | Termux Tor pkg + [`config/torrc`](file:///home/astro/server-audit/2026-11-03/server-operations/config/torrc) | `$PREFIX/bin/tor -f $HOME/.config/tor/torrc` | `127.0.0.1:9050` (SOCKS5, loopback) | SOCKS5 handshake (`\x05\x01\x00` -> `\x05\x00`) | Config: `$HOME/.config/tor/torrc`<br>Data: `$PREFIX/var/lib/tor/` |
 
-### Release manifest generation and offline validation
+### On-Demand Utility
 
-Candidate releases must be generated and validated offline before deployment:
+- **`converter`**: [`app/document_conversion.py`](file:///home/astro/server-audit/2026-11-03/server-operations/app/document_conversion.py). Invokes headless LibreOffice in Debian PRoot (`proot-distro login debian -- soffice --headless --convert-to pdf ...`). Runs on demand via dashboard `/api/convert/pdf`; 0 MB RAM idle footprint; uses scratch space under `$PREFIX/tmp/`.
 
-```sh
-# On development host:
-cd gateway
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o ../.work/mobile-gateway .
-cd ..
+### External Laptop Integration (Wealthfolio)
 
-# Generate candidate release manifest with machine-computed SHA-256 and byte sizes:
-python3 scripts/release-manifest.py generate --include-gateway --output candidate-manifest.json
+- **Ingress & Routing**: Caddy exposes port `:8444` ([`config/Caddyfile:217`](file:///home/astro/server-audit/2026-11-03/server-operations/config/Caddyfile#L217-L255)) and reverse-proxies `/wealth/*` to loopback `127.0.0.1:18930`.
+- **Laptop Ownership**: Wealthfolio does **not** execute on the phone, and no financial data or statements reside on phone storage. Port `18930` is an SSH tunnel forwarded from the user's laptop. When the laptop is asleep or disconnected, Caddy returns an offline HTTP 503 fallback page.
 
-# Offline validation gate (validates complete assets, hashes, and safety before any writes):
-python3 scripts/release-manifest.py validate --manifest candidate-manifest.json --require-gateway
-```
+### Port and Path Disambiguation
 
-### Artifact ownership and baseline separation
+- **Storage & Web Ingress**:
+  - `8085` (`filebrowser`): Native loopback backend.
+  - `8081` (`transfer_gateway`): Bounded Go streaming proxy on loopback; enforces connection/TUS chunk limits, proxying to `8085`.
+  - `8001` (`dashboard`): Python application on loopback; provides role authorization, API endpoints, notes, and telemetry.
+  - `8000` (HTTP) / `8443` (HTTPS): Public Caddy edge listeners; require `forward_auth` against `:8001` before proxying to `:8081` (`/drive/*`) or `:8001`.
+- **Suwayomi Readers & Filter**:
+  - `4569`: Internal Suwayomi backend port (loopback).
+  - `4566`: Suwayomi GraphQL filter proxy (loopback); scopes updates to category 1 and skips read chapters.
+  - `4567`: Native reader port. Intentionally runs **without** portal `forward_auth` for Mihon/Tachiyomi sync.
+  - Portal route `/suwayomi/*` on `:8000`/`:8443`: Requires admin `forward_auth` before proxying to backend `:4569`.
 
-- **Audited Installed Baseline (`config/deployment-files.json`)**: Captures the historical audited installed state of the running server (35 verified rows including `scripts/agy-runner-loop` and `config/torrc`). Its baseline entries and checksums remain byte-for-byte preserved for historical comparison. Canonical local-to-remote ownership is derived from this file. The baseline file is checksum-pinned (`85282ec24628491bdc25975dc4767d81f54d02e368cf5d652dc3665c47fa3cd1`) and verified before reading; any alteration, missing asset row, or unreviewed edit fails closed. Any future deliberate update requires an independent review and audit recapture to update the pin.
-- **Candidate Release Manifests**: Machine-generated from current maintained repository sources (`app/`, `web/`, `scripts/`, `config/`), safe dynamically discovered `app/*.py` runtime helpers, and explicitly declared Go built artifacts (`.work/mobile-gateway`). Candidate destinations must strictly match canonical ownership. Candidate source hashes are always computed fresh from on-disk source files and are never tied to historical baseline hashes.
-- **Binary Provenance**: The Go streaming gateway executable is compiled from source in `gateway/` with `-trimpath` (provenance fix `c4b7791`). Binary patching is strictly prohibited. The compiled binary must be declared and checksummed in the candidate manifest before installation.
-- **External and Manual Prerequisites**:
-  - `scripts/agy-runner-loop` is maintained in source and mapped to Debian proot `/usr/local/bin/agy-runner-loop`.
-  - Android-shell guardian (`scripts/phone-server-guardian.sh`) runs outside Termux under Android shell UID (e.g. via ADB); it is not running and is not an automatic Termux install.
-  - Runtime secrets (`~/.config/dashboard/users.json`, private keys, certificates, session keys), databases (`~/.config/filebrowser/filebrowser.db`), disabled-service flags (`~/.config/services_disabled`), and user files are excluded from source control and release manifests.
+---
 
-### Legacy installer and activation limitations
+## 2. Code vs. Durable-Data Separation
 
-Copy this checkout and `.work/mobile-gateway` to the phone, then run `bash scripts/install.sh` **inside Termux**.
+### Deployable Code and Managed Configuration
 
-The installer validates Caddy and enforces preflight release manifest completeness before any source writes. It updates code, static role templates (`admin.html`, `family.html`, `login.html`), `portal.css`, ttyd terminal assets, integration scripts, reloads Caddy, restarts supervised daemons, and preserves existing credentials and disabled-service flags.
+Tracked repository assets mapped in canonical manifest ([`config/deployment-files.json`](file:///home/astro/server-audit/2026-11-03/server-operations/config/deployment-files.json)):
+- **Source trees**: `app/`, `config/`, `gateway/`, `laptop/`, `scripts/`, `web/`.
+- **Runtime helpers**: Installed to `$HOME/.local/lib/mobile-server/` (`auth.py`, `telemetry.py`, `limits.py`, `tor_proxy.py`, `laptop.py`, `service_catalog.py`, `service_panel.py`, `agy_sessions.py`, `role_templates.py`, `notes.py`, `document_conversion.py`).
+- **Entrypoints**: `$PREFIX/bin/dashboard`, `$HOME/bin/server_supervisor.py`, `$HOME/bin/mobile-gateway`, and `$PREFIX/bin/server-*` wrappers.
+
+### Excluded Sensitive Data and Runtime State
+
+Sensitive credentials, databases, keys, user content, and session records are excluded from source tracking and release manifests (paths listed, contents omitted):
+- **Credentials**: `$HOME/.config/dashboard/users.json` (mode 0600 PBKDF2 password records).
+- **Session Keys**: `$HOME/.config/dashboard/` session signing keys.
+- **SSH Keys & Pairing**: `$HOME/.config/mobile-server-laptop/id_ed25519` (0600), `client.json` (0600), `known_hosts` (0600); host keys in `$PREFIX/etc/ssh/ssh_host_*_key`.
+- **TLS Certificates & CA Keys**: `$HOME/.local/share/caddy/pki/` (Caddy internal root/intermediate CA keys).
+- **Databases**:
+  - FileBrowser: `$HOME/.config/filebrowser/filebrowser.db` (SQLite).
+  - Suwayomi: `$HOME/suwayomi/data/database/` (H2 database).
+  - Vaultwarden: `$HOME/vaultwarden/data/db.sqlite3` and RSA signing keys.
+  - AdGuard Home: `$HOME/adguard/data/` (runtime YAML with credential hashes, query logs).
+  - Syncthing: `$HOME/.local/state/syncthing/` (`config.xml`, `index-*.db`, `cert.pem`, `key.pem`).
+- **User Content & Media**: `/storage/emulated/0/` (Android shared storage), `$HOME/suwayomi/data/downloads/`, `$HOME/.config/dashboard/notes.json`.
+- **AGY Session Logs & History**: `$HOME/.local/state/agy/`, PRoot Debian `/root/.local/state/`, active tmux sockets under `$PREFIX/var/run/tmux-10505/`.
+
+### Namespace, UID, and Environment Conventions
+
+- Standard paths: `$HOME` = `/data/data/com.termux/files/home`; `$PREFIX` = `/data/data/com.termux/files/usr`.
+- Assumed identity: User `u0_a505` (UID `10505`).
+- **Migration Boundary**: Android assigns package UIDs dynamically. An alternate UID or directory path breaks hardcoded paths and isolated socket directories (`tmux-10505`). Transferring data or software to an alternate UID or environment requires an explicit, reviewed migration rather than blind restoration.
+
+---
+
+## 3. Supervisor Authority and Lifecycle Contracts
+
+All server processes run under the control of [`scripts/server_supervisor.py`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/server_supervisor.py).
+
+### Supervisor Locks
+
+1. **`services.lock`** (`$HOME/.config/server_recovery/services.lock`): Acquired with `fcntl.flock` during health cycles, CLI commands, and pause/resume transitions ([`scripts/server_supervisor.py:63-78`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/server_supervisor.py#L63-L78)). Serializes supervisor cycles and lifecycle modifications.
+2. **`daemon.lock`** (`$HOME/.config/server_recovery/daemon.lock`): Held non-blocking exclusively by the running supervisor daemon ([`scripts/server_supervisor.py:389-410`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/server_supervisor.py#L389-L410)). Guarantees a singleton supervisor daemon.
+
+### Exact Process Matching
+
+- **Command-Line Matching**: [`matching_processes(sid)`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/server_supervisor.py#L96-L139) parses `/proc`, checks `proc.stat().st_uid == os.getuid()`, and matches explicit argv tokens. Broad `pkill` patterns and the invoking SSH session are never matched.
+- **Starttime Identity**: [`process_identity(pid)`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/server_supervisor.py#L86-L93) reads `/proc/{pid}/stat`, skips zombies (`Z`), and captures `stat[19]` (field 22, starttime). Signals and health checks require matching this exact identity to prevent PID-reuse races.
+
+### Process Termination Reality
+
+[`terminate(records)`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/server_supervisor.py#L142-L153) issues `SIGTERM` (4-second wait), then `SIGKILL` (1-second wait).
+> [!IMPORTANT]
+> `terminate()` returns implicitly once its deadline expires, even if processes survive. The release adapter must explicitly recheck that matching identities are absent before replacing files or declaring quiescence.
+
+### Per-Service Disable Markers
+
+- Presence markers stored at `$HOME/.config/services_disabled/<sid>`.
+- The supervisor cycle inspects flag existence ([`scripts/server_supervisor.py:266`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/server_supervisor.py#L266)); flagged services are skipped and marked `disabled`.
+- Touching disables; unlinking enables. File contents and permissions are preserved without truncation.
+
+### Global Pause Semantics
+
+- Invoked via `server_supervisor.py --pause` (or `server-down`).
+- Creates markers `$HOME/.config/server_recovery/paused` and `/storage/emulated/0/.phone-server-paused`.
+- Terminates all managed services **except SSH** (port 8022 stays active for recovery).
+- Calls [`stop_agy()`](file:///home/astro/server-audit/2026-11-03/server-operations/scripts/server_supervisor.py#L155-L189) to terminate AGY runner loops, PRoot descendants, and tmux panes.
+- Resumed with `server_supervisor.py --resume` (or `server-up`), which removes markers and calls `ensure()`.
+
+### Activation Adapter Status
 
 > [!WARNING]
-> **Activation & Rollback Limitations**: Direct deployment is withheld until transactional atomic activation and live-drift refusal are implemented and verified. The legacy `scripts/install.sh` performs in-place synchronization; it does not provide atomic release switching or rollback. Coherent release activation/rollback remains a separate reviewed subproject.
+> The transactional release activation adapter is currently being implemented and reviewed in a separate branch (`release-activation`); it is **not available** in maintained HEAD.
+> The legacy installer (`scripts/install.sh`) currently fails at entry due to baseline checks and lacks atomic rollback. File-only recovery requires stopping affected processes and ensuring service quiescence first.
 
-Password records live only in `~/.config/dashboard/users.json` (mode 600). PBKDF2-HMAC-SHA256 uses a random salt and 600,000 iterations. The migration verifies that existing passwords still match. Change a password from an interactive Termux shell:
+---
+
+## 4. Preserving Intentional Disabled Services & Known Limits
+
+### Dated Observed Intent (2026-11-03 Snapshot)
+
+During the 2026-11-03 server audit, four services had active markers in `$HOME/.config/services_disabled/`:
+1. `syncthing`
+2. `vaultwarden`
+3. `terminal`
+4. `tor`
+
+This snapshot records observed intent as of that date, not a permanent rule to overwrite subsequent user changes. **Do not force-start disabled services during investigations.**
+
+### Known Limits and Unverified Configurations
+
+- **Syncthing**: Configuration exists at `$HOME/.local/state/syncthing/config.xml` with one folder target. Live folder synchronization has not been verified.
+- **Vaultwarden**: Host directories `$HOME/vaultwarden/data` and `$HOME/vaultwarden/web-vault` exist. PRoot path translation and Web Vault UI compatibility under Debian PRoot remain unverified.
+- **PRoot Debian Container Layout**: Active Debian rootfs is located at `$PREFIX/var/lib/proot-distro/containers/debian/rootfs` (the observed modern layout, not legacy installed-rootfs paths).
+
+---
+
+## 5. Read-Only Health and Status Inspection
+
+### Supervisor Status CLI
+
+Inspect supervisor health and registered service status without mutating state:
 
 ```sh
-server-user astro                 # hidden input; existing role is preserved
-server-user newname --role family # also provision corresponding FileBrowser user/scope
+python3 $HOME/bin/server_supervisor.py --status
+# Or via wrappers: server-health / server-status
 ```
 
-Login throttling bounds failed attempts and concurrent password verification. The dashboard never restores a plaintext password fallback. Old source copies containing passwords must be removed/redacted separately; restoring a legacy dashboard would restore the old flaw. Session signing keys are private runtime files. Password changes do not currently revoke all issued 30-day sessions: disable the account to reject them immediately, or rotate the private dashboard session key and restart the dashboard to sign everyone out.
+Returns JSON:
+- `timestamp`: Timestamp of last supervisor cycle.
+- `supervisor_running`: Boolean indicating active `daemon.lock`.
+- `stale`: Boolean true if status age exceeds 120s or daemon is absent.
+- `services`: Map of service IDs to states (`healthy`, `recovering`, `disabled`), failure counts, and retry backoffs.
 
-## Upload limits
+*(Audited baseline on 2026-11-03 recorded 11 healthy services and 4 intentional disabled services; do not infer current real-time uptime from static audit logs).*
 
-The browser queue accepts six files at once (previously two). Each resumable TUS resource keeps a single stream. The gateway allows six writes per authenticated user, eight globally, and twelve reads globally, and rejects duplicate simultaneous PATCH writes to the same decoded TUS resource. Excess requests receive 429 with Retry-After. Existing FileBrowser TUS retries remain enabled. Maximum declared file size is 64 GiB and a TUS PATCH is limited to 16 MiB; FileBrowser currently uses 2 MiB chunks. These are admission limits, not a reserved disk quota: incomplete resumable uploads can still consume storage, so monitor free space and abandoned uploads.
+### Read-Only Probes (No Credentials Required)
 
-Files stream through bounded buffers. Caddy and the gateway use 60-second read/write idle deadlines and at most 64 accepted connections. Caddy supports full-duplex HTTP/1 responses so rejected uploads return errors promptly. Fixed five-minute whole-file deadlines were removed. The dashboard permits 32 request handlers, two screenshot uploads (25 MiB each including multipart overhead), and one conversion (32 MiB / ten inputs). Each conversion has a private LibreOffice profile and a bounded process lifetime. Conversion outputs still use memory; complex documents can need more memory than their input size.
+| Target Service | Protocol / Command | Expected Healthy Output |
+| :--- | :--- | :--- |
+| `caddy` | `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/healthz` | `200` |
+| `dashboard` | `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8001/healthz` | `200` |
+| `filebrowser` | `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8085/drive/` | `200` |
+| `transfer_gateway`| `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/healthz` | `200` |
+| `suwayomi` | `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4569/suwayomi/` | `200` |
+| `suwayomi_filter` | `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4566/healthz` | `200` |
+| `adguard` | `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/` | `200` |
+| `ssh` | TCP probe on `127.0.0.1:8022` | Banner starts with `SSH-` |
+| `tor` *(if enabled)* | Send SOCKS5 greeting `\x05\x01\x00` to `127.0.0.1:9050` | Response matches `\x05\x00` |
+| `syncthing` *(if enabled)* | `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8384/rest/noauth/health` | `200` |
+| `vaultwarden` *(if enabled)* | `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8082/alive` | `200` |
+| `battery_guard` | Check `$HOME/.config/battery_guard/status.json` | File exists and modified within 360s |
 
-## Tor proxy
+---
 
-Enable **Tor SOCKS Proxy** in the admin dashboard. A service enable is not proof of working Tor: the UI shows an exit only after a real HTTPS check reports `IsTor: true`; unavailable/stale checks cannot claim verified egress. The local proxy was tested successfully against Tor Project's exit check.
+## 6. Backup and Restore Requirements
 
-On a laptop with SSH access to the server:
+### Software Rollback vs. Data Restore
 
-```sh
-ssh -N -L 9050:127.0.0.1:9050 -p 8022 u0_a505@100.75.159.53
-curl --proxy socks5h://127.0.0.1:9050 --noproxy '' https://check.torproject.org/api/ip
-```
+- **Software Rollback**: Restores the verified set of deployable code, scripts, static web templates, and configuration files via release manifests and file journals. Software rollback **does not restore databases, user files, credentials, or session states**.
+- **Data Restore**: Replaces stateful database files and user records. Must be handled as an independent operation with distinct validation.
 
-Configure the application's SOCKS5 host as `127.0.0.1`, port `9050`, with DNS through the proxy (SOCKS5h). If that local port is occupied, choose another local forwarding port. Leave server/tailnet file transfers outside the proxy. This tunnel requires the laptop's SSH connection to stay running. Tor stays bound to loopback and is not an open relay.
+> [!CAUTION]
+> **No Live Database Copying**: Copying database files (`filebrowser.db`, Suwayomi H2 database, Vaultwarden `db.sqlite3`) while services are active risks torn writes, corrupt WAL/journal states, and data loss.
+> Configuration exports (such as `AdGuardHome.yaml` or `config.xml`) contain settings metadata, **not** database records or user content.
 
-**Full-device internet routing through the server and Tor is unavailable in this implementation.** Turning this on does not change a device's VPN, make the Redmi's own applications use Tor, or route Tailscale exit-node traffic through Tor. Tor does not carry ordinary UDP, and the installed non-root Android VPN app has no supported setting for that forwarding chain. Proxy use also does not guarantee anonymity for an application that bypasses its proxy or identifies its user.
+### Verified vs. Unverified Backup Mechanisms
 
-## Recovery and AGY persistence
-
-`server-up`, `server-down`, `server-restart`, and `server-health` control the supervisor. Deliberate service disable flags and a deliberate global stop are respected. Termux:Boot starts it; the persisted Android JobScheduler job is a recovery fallback and may be deferred by Android. Service health failures trigger bounded retries with backoff and rotated logs. AGY shutdown removes the exact runner's descendants as well as its tmux pane to avoid orphaned proot processes.
-
-The Android-shell guardian runs independently of Termux and USB after being launched. `scripts/phone-server-guardian.sh` is its source; it must be launched as Android shell (for example through ADB), not as Termux UID. It recovers missing Termux/Tailscale apps and a persistently unresponsive gateway, while respecting `/sdcard/.phone-server-paused`. The guardian itself ends on phone reboot. Always-on VPN, MIUI autostart/No restrictions, Termux:Boot, and the persisted job help reboot recovery; a non-root app cannot guarantee survival against every Android/OEM kill or power-off. A powered-off phone cannot be restarted by a program inside that phone.
-
-AGY uses one named `agy` tmux session. Browser disconnects detach only that client; they do not start a fresh CLI. Scroll wheel, touch swipes and page controls call an admin-only endpoint that enters tmux copy mode and reads response history; they do not send prompt-history arrow keys. Bottom returns live; composer Send first returns live and is serialized after scrolling. New AGY panes retain 50,000 lines. A browser and actual ttyd/tmux test confirmed old response text became visible while preserving the prompt.
-
-`agy-resume EXACT-CONVERSATION-UUID` selects a saved conversation for the **next CLI start**. A running CLI keeps its current conversation. Invalid or failed IDs do not silently create another conversation. After process/app death, tmux scrollback is lost; durable AGY conversation history is separate and requires the intended exact ID. The current runner retains its pre-existing unrestricted AGY permissions, so admin website access is effectively shell access to this server. Keep accounts, devices and tailnet permissions restricted accordingly.
-
-## Known maintenance work
-
-The dashboard still combines HTML and Python handlers in a large file; tests cover the changed interfaces, but splitting rendering from handlers would make future changes easier. Vendored frontend bundles are version-specific: a FileBrowser update changes asset hashes and requires rebuilding/reapplying the six-file queue patch and retesting SSO/TUS. The status CLI reports supervisor state instead of guessing sensor readings. The install script updates this existing device rather than provisioning every dependency from scratch. No tested software setting can guarantee carrier upload bandwidth or immunity to an actual Android reboot/power loss.
-
-References: [Tailscale connection types](https://tailscale.com/docs/reference/connection-types), [performance troubleshooting](https://tailscale.com/docs/reference/troubleshooting/poor-performance-tailnet), [Tor SOCKS limitations](https://spec.torproject.org/socks-extensions.html), [FileBrowser proxy authentication](https://github.com/filebrowser/filebrowser/blob/master/docs/authentication.md), [OWASP password storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html).
-
-## Wi-Fi website address
-
-The current home Wi-Fi URL is `http://192.168.1.8:8000/`. Devices must be on that home network to use the private LAN address. Enter the `http://` prefix and port `8000` explicitly. A mobile-data/tethered connection alone has no route to that address; use `http://100.75.159.53:8000/` through Tailscale when away.
-
-The admin dashboard's Wi-Fi address is now a clickable link populated from actual phone telemetry. It starts as “Detecting…” rather than displaying an old hardcoded address. If DHCP changes the phone's address, use the newly displayed address; a router DHCP reservation is needed to make a LAN IP permanently fixed. No router reservation was changed by this update.
-
-The Wi-Fi page serves the same admin/family dashboard and laptop-terminal controls as the Tailscale page. A real browser test from a laptop on the home Wi-Fi verified Kitty launch, browser command execution on the laptop, reconnect, terminal close, and family access denial. The phone-to-laptop terminal connection still uses Tailscale SSH; browser access from the LAN does not require a USB connection.
+- **Verified Mechanisms**:
+  - The repository release engine supports verifying and snapshotting **deployable software assets and static configurations only**.
+  - **No automated online database backup mechanisms currently exist** in local repository sources.
+- **Unverified Procedures**:
+  - Direct live copies of SQLite and H2 database files are unverified and unsafe.
+  - Consistent backup procedures require an explicitly agreed **stopped-service procedure**:
+    1. Acquire supervisor `services.lock`.
+    2. Disable the target service via `server_supervisor.py --service <sid> --enable false`.
+    3. Explicitly verify that the process identity and PID have terminated.
+    4. Copy database files together with corresponding `-wal`, `-shm`, or lock files.
+    5. Re-enable the service via `server_supervisor.py --service <sid> --enable true`.
+- **Deferred Investigations**: Deep Suwayomi backup schedules, download cache management, and Tachiyomi cloud sync ownership are deferred to subsequent investigation phases.
