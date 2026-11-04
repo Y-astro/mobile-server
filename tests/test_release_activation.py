@@ -588,6 +588,12 @@ class TestReleaseActivation(unittest.TestCase):
 
         tx.apply(namespace_root=live)
 
+        disabled_dir = live / "home/.config/services_disabled"
+        disabled_dir.mkdir(parents=True, exist_ok=True)
+        guard_file = disabled_dir / "dashboard"
+        guard_file.write_text("PRE_EXISTING_DISABLED\n", encoding="utf-8")
+        st = guard_file.stat()
+
         journal = {
             "version": 1,
             "state": ra.STATE_APPLIED,
@@ -600,7 +606,23 @@ class TestReleaseActivation(unittest.TestCase):
             "affected_services": ["dashboard"],
             "supervisor_affected": True,
             "daemon_was_running": False,
-            "flags": {},
+            "flags": {
+                "dashboard": {
+                    "pre_existing": True,
+                    "kind": "file",
+                    "raw_link": None,
+                    "dev": int(st.st_dev),
+                    "ino": int(st.st_ino),
+                    "mode": int(stat.S_IMODE(st.st_mode)),
+                    "uid": int(st.st_uid),
+                    "gid": int(st.st_gid),
+                    "size": int(st.st_size),
+                    "mtime_ns": int(st.st_mtime_ns),
+                    "ctime_ns": int(st.st_ctime_ns),
+                    "sha256": ra.compute_file_sha256(guard_file),
+                    "intent": "preserve",
+                }
+            },
             "quiescence_records": {},
             "daemon_record": None,
             "recovery_assets": recovery_hashes,
@@ -696,6 +718,250 @@ class TestReleaseActivation(unittest.TestCase):
         self.assertEqual(rec["status"], "idempotent_success")
 
 
+
+
+
+    def test_root_probe_1_missing_flag_refused_before_signal_or_restore(self):
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
+        driver = FakeLifecycleDriver()
+
+        manifest_entries = ra.rt._load_release_manifest_module().generate_manifest(bundle, require_gateway=True)
+        tx = ra.rt.prepare(bundle, manifest_entries, preconds, tx_dir, live)
+        tx.apply(live)
+
+        driver.running_processes["dashboard"] = [(2001, "proc_dashboard_cand")]
+
+        tx_id = "act_probe1"
+        disabled_dir = live / "home/.config/services_disabled"
+        disabled_dir.mkdir(parents=True, exist_ok=True)
+        token = f"release_guard:{tx_id}:dashboard"
+        guard_file = disabled_dir / "dashboard"
+        guard_file.write_text(f"RELEASE_GUARD_TOKEN={token}\nTX_ID={tx_id}\nSID=dashboard\n", encoding="utf-8")
+        os.chmod(guard_file, 0o600)
+
+        act_journal = {
+            "version": 1,
+            "state": ra.STATE_APPLIED,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "tx_id": tx_id,
+            "namespace_root": str(live),
+            "transaction_dir": str(tx_dir),
+            "top_uid": os.getuid(),
+            "affected_services": ["dashboard"],
+            "supervisor_affected": False,
+            "daemon_was_running": False,
+            "flags": {},
+            "quiescence_records": {"dashboard": [(1001, "proc_dashboard_orig")]},
+            "daemon_record": None,
+        }
+        ra.save_activation_journal(tx_dir, act_journal)
+
+        auth_cand = (live / "home/.local/lib/mobile-server/auth.py").read_text(encoding="utf-8")
+
+        with self.assertRaises(ra.ActivationError):
+            ra.recover(tx_dir, live, driver=driver)
+
+        # No terminate events occurred
+        term_events = [e for e in driver.events if e[0] == "terminate"]
+        self.assertEqual(term_events, [])
+        # Candidate file was NOT restored to preimage
+        auth_after = (live / "home/.local/lib/mobile-server/auth.py").read_text(encoding="utf-8")
+        self.assertEqual(auth_cand, auth_after)
+
+    def test_root_probe_2_post_success_explicit_rollback_recreates_guard_coherently(self):
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
+        driver = FakeLifecycleDriver()
+
+        res_apply = ra.apply(bundle, preconds, tx_dir, live, driver=driver)
+        self.assertEqual(res_apply["state"], ra.STATE_COMPLETED)
+
+        disabled_dir = live / "home/.config/services_disabled"
+        self.assertFalse((disabled_dir / "dashboard").exists())
+
+        res_rb = ra.rollback(tx_dir, live, driver=driver)
+        self.assertEqual(res_rb["state"], ra.STATE_ROLLED_BACK)
+
+        auth_path = live / "home/.local/lib/mobile-server/auth.py"
+        self.assertIn("# Original live auth preimage", auth_path.read_text(encoding="utf-8"))
+        self.assertIn("dashboard", driver.healthy_services)
+        self.assertFalse((disabled_dir / "dashboard").exists())
+
+    def test_flags_mapping_validation_and_typed_metadata_corruption(self):
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
+
+        manifest_entries = ra.rt._load_release_manifest_module().generate_manifest(bundle, require_gateway=True)
+        tx = ra.rt.prepare(bundle, manifest_entries, preconds, tx_dir, live)
+        tx_journal = tx.load_journal()
+
+        base_journal = {
+            "version": 1,
+            "state": ra.STATE_APPLIED,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "tx_id": "act_test_corrupt",
+            "namespace_root": str(live),
+            "transaction_dir": str(tx_dir),
+            "top_uid": os.getuid(),
+            "affected_services": ["dashboard"],
+            "supervisor_affected": False,
+            "daemon_was_running": False,
+            "flags": {
+                "dashboard": {
+                    "pre_existing": False,
+                    "intent": "guarded",
+                    "token": "release_guard:act_test_corrupt:dashboard",
+                    "guard_created": True,
+                    "dev": 1234,
+                    "ino": 5678,
+                    "mode": 0o600,
+                    "uid": os.getuid(),
+                }
+            },
+        }
+
+        # Extra flag
+        bad1 = dict(base_journal)
+        bad1["flags"] = dict(base_journal["flags"])
+        bad1["flags"]["caddy"] = {
+            "pre_existing": False,
+            "intent": "guarded",
+            "token": "release_guard:act_test_corrupt:caddy",
+            "guard_created": True,
+            "dev": 1234,
+            "ino": 5679,
+            "mode": 0o600,
+            "uid": os.getuid(),
+        }
+        with self.assertRaises(ra.ActivationError):
+            ra.validate_activation_journal(bad1, tx_journal, live, tx_dir, os.getuid())
+
+        # Forged token
+        bad2 = dict(base_journal)
+        bad2["flags"] = {
+            "dashboard": dict(base_journal["flags"]["dashboard"], token="forged_token_payload")
+        }
+        with self.assertRaises(ra.ActivationError):
+            ra.validate_activation_journal(bad2, tx_journal, live, tx_dir, os.getuid())
+
+        # Bad mode type
+        bad3 = dict(base_journal)
+        bad3["flags"] = {
+            "dashboard": dict(base_journal["flags"]["dashboard"], mode="0600")
+        }
+        with self.assertRaises(ra.ActivationError):
+            ra.validate_activation_journal(bad3, tx_journal, live, tx_dir, os.getuid())
+
+        # Pre-existing flip without metadata
+        bad4 = dict(base_journal)
+        bad4["flags"] = {
+            "dashboard": {"pre_existing": True}
+        }
+        with self.assertRaises(ra.ActivationError):
+            ra.validate_activation_journal(bad4, tx_journal, live, tx_dir, os.getuid())
+
+    def test_guard_removal_interruption_repeatable_recovery(self):
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
+        driver = FakeLifecycleDriver()
+
+        manifest_entries = ra.rt._load_release_manifest_module().generate_manifest(bundle, require_gateway=True)
+        tx = ra.rt.prepare(bundle, manifest_entries, preconds, tx_dir, live)
+        tx.apply(live)
+        tx.commit(live)
+
+        driver.running_processes["dashboard"] = [(3001, "proc_dashboard_cand")]
+
+        disabled_dir = live / "home/.config/services_disabled"
+        disabled_dir.mkdir(parents=True, exist_ok=True)
+        if (disabled_dir / "dashboard").exists():
+            (disabled_dir / "dashboard").unlink()
+
+        tx_id = "act_removal_interrupted"
+        act_journal = {
+            "version": 1,
+            "state": ra.STATE_HEALTHY,
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "tx_id": tx_id,
+            "namespace_root": str(live),
+            "transaction_dir": str(tx_dir),
+            "top_uid": os.getuid(),
+            "affected_services": ["dashboard"],
+            "supervisor_affected": False,
+            "daemon_was_running": False,
+            "flags": {
+                "dashboard": {
+                    "pre_existing": False,
+                    "intent": "remove_guard",
+                    "token": f"release_guard:{tx_id}:dashboard",
+                    "guard_created": False,
+                    "dev": None,
+                    "ino": None,
+                    "mode": 0o600,
+                    "uid": os.getuid(),
+                }
+            },
+        }
+        ra.save_activation_journal(tx_dir, act_journal)
+
+        res = ra.recover(tx_dir, live, driver=driver)
+        self.assertEqual(res["state"], ra.STATE_ROLLED_BACK)
+        term_events = [e for e in driver.events if e[0] == "terminate"]
+        self.assertTrue(any((3001, "proc_dashboard_cand") in e[1] for e in term_events))
+        auth_path = live / "home/.local/lib/mobile-server/auth.py"
+        self.assertIn("# Original live auth preimage", auth_path.read_text(encoding="utf-8"))
+
+        res2 = ra.recover(tx_dir, live, driver=driver)
+        self.assertEqual(res2["state"], ra.STATE_ROLLED_BACK)
+        self.assertEqual(res2["status"], "idempotent_success")
+
+    def test_guard_creation_no_clobber_concurrent_marker_and_broken_symlink(self):
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
+        driver = FakeLifecycleDriver()
+
+        res_apply = ra.apply(bundle, preconds, tx_dir, live, driver=driver)
+        self.assertEqual(res_apply["state"], ra.STATE_COMPLETED)
+
+        disabled_dir = live / "home/.config/services_disabled"
+        # Simulate concurrent foreign marker appearing before explicit rollback
+        marker = disabled_dir / "dashboard"
+        marker.write_text("FOREIGN_ACTOR_MARKER\n", encoding="utf-8")
+
+        with self.assertRaises(ra.ConcurrencyError):
+            ra.rollback(tx_dir, live, driver=driver)
+
+        self.assertEqual(marker.read_text(encoding="utf-8"), "FOREIGN_ACTOR_MARKER\n")
+
+        # Now test broken symlink
+        marker.unlink()
+        marker.symlink_to("/nonexistent/broken/target")
+        self.assertTrue(marker.is_symlink())
+        self.assertFalse(marker.exists())
+
+        with self.assertRaises(ra.ConcurrencyError):
+            ra.rollback(tx_dir, live, driver=driver)
+
+        self.assertTrue(marker.is_symlink())
+
+    def test_candidate_process_appearing_during_unlocked_daemon_stop_gap(self):
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True, modify_supervisor=True)
+
+        class InjectedCandidateDriver(FakeLifecycleDriver):
+            def stop_daemon(self, pid, identity):
+                super().stop_daemon(pid, identity)
+                self.running_processes["dashboard"] = [(4001, "rogue_candidate_proc")]
+
+        driver = InjectedCandidateDriver()
+        driver.daemon_running = True
+        driver.daemon_proc = (9999, "daemon_test_proc")
+
+        with self.assertRaises(ra.QuiescenceError):
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver)
+
+        act = ra.load_activation_journal(tx_dir)
+        self.assertEqual(act["state"], ra.STATE_RECOVERY_REQUIRED)
+
+    
 class TestTermuxLifecycleDriverUnit(unittest.TestCase):
     """Unit tests for TermuxLifecycleDriver using mocked filesystem and proc."""
 
@@ -760,7 +1026,3 @@ class TestTermuxLifecycleDriverUnit(unittest.TestCase):
         with self.assertRaises(ta.QuiescenceError) as ctx:
             driver.find_daemon_process()
         self.assertIn("Multiple matching supervisor daemon processes found", str(ctx.exception))
-
-
-if __name__ == "__main__":
-    unittest.main()
