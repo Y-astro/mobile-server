@@ -183,7 +183,10 @@ class ReadingIdCache:
             if event is not None:
                 # Wait for leader's in-flight refresh to finish
                 event.wait(timeout=self.timeout + 1.0)
-                continue
+                with self._lock:
+                    if self._state == "ready":
+                        return list(self._snapshot)
+                    raise CacheColdError("Reading category cache unavailable")
 
             # We are the leader thread doing the fetch
             try:

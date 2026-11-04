@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 
@@ -93,16 +94,37 @@ class TestImportPurity(unittest.TestCase):
     """Verify that importing the filter module causes zero runtime side-effects."""
 
     def test_import_has_no_side_effects(self):
+        code = '''
+import builtins, logging, os, pathlib, socket, subprocess, sys, threading, urllib.request
+from unittest import mock
+sys.dont_write_bytecode = True
+sys.path.insert(0, ROOT_PATH)
+original_open = builtins.open
+original_path_open = pathlib.Path.open
+def checked_open(file, mode='r', *args, **kwargs):
+    if str(file).startswith('/data/data/com.termux/files') or any(c in mode for c in 'wax+'):
+        raise AssertionError('Runtime file access during import')
+    return original_open(file, mode, *args, **kwargs)
+def checked_path_open(path, mode='r', *args, **kwargs):
+    if str(path).startswith('/data/data/com.termux/files') or any(c in mode for c in 'wax+'):
+        raise AssertionError('Runtime path access during import')
+    return original_path_open(path, mode, *args, **kwargs)
+with mock.patch('builtins.open', checked_open), \\
+     mock.patch.object(pathlib.Path, 'open', checked_path_open), \\
+     mock.patch('os.mkdir', side_effect=AssertionError('mkdir during import')), \\
+     mock.patch.object(logging.FileHandler, '_open', side_effect=AssertionError('Log open during import')), \\
+     mock.patch('subprocess.Popen', side_effect=AssertionError('Process during import')), \\
+     mock.patch.object(threading.Thread, 'start', side_effect=AssertionError('Thread during import')), \\
+     mock.patch.object(socket.socket, 'connect', side_effect=AssertionError('Socket during import')), \\
+     mock.patch('urllib.request.urlopen', side_effect=AssertionError('Network during import')):
+    import scripts.suwayomi_graphql_filter
+assert threading.active_count() == 1
+print('PURE_IMPORT_OK')
+'''.replace('ROOT_PATH', repr(str(REPO_ROOT)))
         cmd = [
             sys.executable,
             "-c",
-            "import sys, threading, pathlib; "
-            f"sys.path.insert(0, {str(REPO_ROOT)!r}); "
-            "import scripts.suwayomi_graphql_filter as mod; "
-            "assert threading.active_count() == 1, f'Thread count: {threading.active_count()}'; "
-            "assert not pathlib.Path('/data/data/com.termux/files/home/suwayomi').exists() "
-            "or True; "
-            "print('PURE_IMPORT_OK')",
+            code,
         ]
         res = subprocess.run(cmd, capture_output=True, text=True, check=True)
         self.assertIn("PURE_IMPORT_OK", res.stdout)
@@ -464,6 +486,78 @@ class TestReadingIdCache(unittest.TestCase):
 
         self.assertEqual(follower_res, [[101]])
         self.assertEqual(fetch_count, 1)
+
+
+    def test_waiter_timeout_is_bounded_and_keeps_existing_snapshot(self):
+        for snapshot in (None, []):
+            with self.subTest(snapshot=snapshot):
+                cache = ReadingIdCache()
+                cache._refresh_in_flight = True
+                event = mock.Mock()
+                event.wait.side_effect = [False, AssertionError("Wait retried after timeout")]
+                cache._refresh_event = event
+                if snapshot is not None:
+                    cache._state = "ready"
+                    cache._snapshot = snapshot
+                    cache._last_success = time.monotonic() - 60
+                    self.assertEqual(cache.get_reading_ids(), [])
+                else:
+                    with self.assertRaises(CacheColdError):
+                        cache.get_reading_ids()
+                event.wait.assert_called_once_with(timeout=cache.timeout + 1.0)
+
+    def test_simultaneous_forced_refreshes_share_leader_result(self):
+        entered = threading.Event()
+        release = threading.Event()
+        waiting = threading.Event()
+        calls = []
+        results = []
+        errors = []
+
+        class GatedCache(ReadingIdCache):
+            def _fetch_upstream(self):
+                calls.append(1)
+                entered.set()
+                if not release.wait(2):
+                    raise AssertionError("Leader was not released")
+                return []
+
+        cache = GatedCache()
+
+        def refresh():
+            try:
+                results.append(cache.refresh())
+            except Exception as error:
+                errors.append(error)
+
+        leader = threading.Thread(target=refresh)
+        follower = threading.Thread(target=refresh)
+        leader.start()
+        try:
+            self.assertTrue(entered.wait(2))
+            event = cache._refresh_event
+            original_wait = event.wait
+
+            def observed_wait(timeout):
+                waiting.set()
+                return original_wait(timeout)
+
+            with mock.patch.object(event, "wait", side_effect=observed_wait):
+                follower.start()
+                self.assertTrue(waiting.wait(2))
+                release.set()
+                leader.join(2)
+                follower.join(2)
+        finally:
+            release.set()
+            leader.join(2)
+            if follower.ident is not None:
+                follower.join(2)
+        self.assertFalse(leader.is_alive())
+        self.assertFalse(follower.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(results, [[], []])
+        self.assertEqual(len(calls), 1)
 
 
 class TestQueryTransformation(unittest.TestCase):
