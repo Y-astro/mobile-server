@@ -1,7 +1,9 @@
 # Suwayomi reliability design
 
-Status: Proposed for user review. The completed general-server release remains
-deployed. This document does not authorize changing the phone before design review.
+Status: Approved by the user's instruction to continue on 2026-11-04, after review
+of the staged design. General-server stabilization remains deployed. Implementation,
+verification and the scoped releases described below are authorized; routine steps
+within this design do not require another approval.
 
 ## Goal and preserved behavior
 
