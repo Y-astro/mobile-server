@@ -156,4 +156,80 @@ This transaction engine strictly manages files on disk. It:
 - **Does NOT** connect to remote phones or SSH daemons.
 - **Does NOT** manage database migrations or user credentials.
 
-Production service quiescence and service reactivation are the responsibility of a separately reviewed service activation adapter.
+Production service quiescence and service reactivation are orchestrated by `scripts/release_activation.py` using `scripts/termux_activation.py`.
+
+## 8. Service-Scoped Release Activation
+
+The service activation adapter coordinates the file transaction engine with Termux service supervisor lifecycle authority (`scripts/server_supervisor.py`).
+
+### Lock Hierarchy
+To prevent deadlock across independent lock files:
+1. `ActivationLock` (`<namespace_root>/.release_activation.lock`): Acquired exclusively for the entire activation command duration.
+2. `services.lock` (`<STATE>/services.lock`): Held during flag inspection/mutation, process quiescence, and service start/probe. Released during supervisor daemon termination to avoid deadlock with a daemon blocked on `cycle()`.
+3. `NamespaceLock` (`<namespace_root>/.release_transaction.lock`): Held internally and transiently by `ReleaseTransaction` methods (`prepare`, `apply`, `commit`, `rollback`, `recover`).
+
+### Destination Mapping & Invariants
+Only destinations with actual content or mode changes (`action != ACTION_UNTOUCHED`) affect running services:
+- Dashboard helpers, templates, CSS, JS: Affects `dashboard`.
+- Gateway executable (`home/bin/mobile-gateway`): Affects `transfer_gateway`.
+- Caddy config (`home/.config/caddy/Caddyfile`): Affects `caddy`.
+- Supervisor script (`home/bin/server_supervisor.py`) / shared catalog (`service_catalog.py`): Affects `supervisor` daemon (and `dashboard` if catalog changed).
+- TTYD assets / scripts: Affects `terminal`, `laptop_terminal`, or `agy`.
+- Tor config (`home/.config/tor/torrc`): Affects `tor`.
+- CLI commands (`server-user`, `server-status`, `server-health`, `server-up`, `server-down`, `server-restart`) and boot aliases: No running daemon affected.
+- **Safety Invariants**:
+  - `ssh` is strictly prohibited from being selected or restarted.
+  - Suwayomi scripts (`start_suwayomi.sh`, `suwayomi_daily_update.py`, `suwayomi_graphql_filter.py`, `suwayomi_update.sh`) must be unchanged in software releases; any candidate modification is rejected fail-closed.
+  - Pre-disabled services (flags existing in `services_disabled/`) are preserved exactly (bytes, mode, inode) and never started.
+  - Unrelated running services continue running without interruption.
+
+### Flag Preservation & Ownership Tokens
+- Existing disable flags are presence markers. Pre-existing flags are never overwritten, truncated, or removed.
+- Temporary guards are created only for originally absent flags under `services.lock` prior to process termination.
+- Each temporary guard receives a unique ownership token `release_guard:{tx_id}:{sid}` written with mode `0600` and fsync.
+- Guard removal verifies ownership token, file type (regular file), runtime UID, mode, and recorded inode. Concurrent modifications fail-closed without deleting external markers.
+
+### CLI Commands
+
+#### Dry Planning
+```bash
+python3 scripts/release_activation.py plan \
+  --bundle /path/to/bundle \
+  --preconditions /path/to/preconditions.json \
+  [--namespace-root /data/data/com.termux/files]
+```
+
+#### Service-Scoped Activation
+```bash
+python3 scripts/release_activation.py apply \
+  --bundle /path/to/bundle \
+  --preconditions /path/to/preconditions.json \
+  --transaction-dir /path/to/tx_dir \
+  [--namespace-root /data/data/com.termux/files]
+```
+
+#### Standalone Interruption Recovery
+Even if the candidate bundle is deleted and live modules are corrupted:
+```bash
+python3 /path/to/tx_dir/recovery_lifecycle/release_activation.py recover \
+  --transaction-dir /path/to/tx_dir \
+  --namespace-root /data/data/com.termux/files
+```
+
+#### Rollback
+```bash
+python3 scripts/release_activation.py rollback \
+  --transaction-dir /path/to/tx_dir \
+  [--namespace-root /data/data/com.termux/files]
+```
+
+#### Inspect Activation Status
+```bash
+python3 scripts/release_activation.py status --transaction-dir /path/to/tx_dir
+```
+
+### Durability & Rollback Boundaries
+- **No Multi-File Atomic Filesystem Swaps**: Files are replaced individually via `os.replace` while affected services are quiesced. Interruption during replacement triggers roll back of all touched destinations to backups.
+- **Power Loss**: Relies on POSIX `fsync` and journal state boundaries. Does not guarantee flash controller durability against sudden power loss during raw hardware write cycles.
+- **Live Processes During File Recovery**: File recovery must never be invoked on a namespace with running candidate processes. The activation adapter guarantees candidate processes are quiesced before file rollback executes.
+- **Fail-Closed on Drift**: External modifications to owned destinations or guard flags fail-closed into `STATE_RECOVERY_REQUIRED`.
