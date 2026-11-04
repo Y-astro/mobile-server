@@ -31,7 +31,6 @@ import time
 HOME = Path('/data/data/com.termux/files/home')
 PREFIX = Path('/data/data/com.termux/files/usr')
 PROC = Path('/proc')
-SCHEDULER_PID_FILE = HOME / 'suwayomi/data/scheduler.pid'
 MOBILE_LIB = Path.home() / '.local/lib/mobile-server'
 _lib_dir = MOBILE_LIB if MOBILE_LIB.is_dir() else (HOME / '.local/lib/mobile-server' if (HOME / '.local/lib/mobile-server').is_dir() else Path(__file__).resolve().parents[1] / 'app')
 if str(_lib_dir) not in sys.path:
@@ -52,8 +51,6 @@ def services():
 
 
 def get_scheduler_pid_file():
-    if SCHEDULER_PID_FILE != HOME / 'suwayomi/data/scheduler.pid':
-        return SCHEDULER_PID_FILE
     return HOME / 'suwayomi/data/scheduler.pid'
 
 
@@ -132,36 +129,52 @@ def matching_processes(sid):
                 match = (base == 'java' and any('suwayomi' in a.lower() for a in args)) or any('start_suwayomi' in a for a in args) or ('proot' in base and any('suwayomi' in a.lower() for a in args))
             elif sid == 'suwayomi_scheduler':
                 match = False
-                if base.startswith('python') and not any(a in ('-c', '-m', '--now', '--status') for a in args):
-                    if ('--foreground' in args) ^ ('--daemon' in args):
-                        target = HOME / 'bin/suwayomi_daily_update.py'
-                        targets = {str(target)}
-                        with contextlib.suppress(OSError):
-                            targets.add(str(target.resolve()))
-                        if any(a in targets for a in args):
-                            match = True
-                        else:
-                            try:
-                                if (proc / 'cwd').is_symlink():
-                                    proc_cwd = os.readlink(proc / 'cwd')
-                                elif (proc / 'cwd').is_file():
-                                    proc_cwd = (proc / 'cwd').read_text().strip()
-                                else:
-                                    proc_cwd = str((proc / 'cwd').resolve())
-                                for a in args[1:]:
-                                    if a.startswith('-'):
-                                        continue
-                                    if not os.path.isabs(a) and (a == 'suwayomi_daily_update.py' or a.endswith('/suwayomi_daily_update.py')):
-                                        candidate = os.path.normpath(os.path.join(proc_cwd, a))
-                                        if candidate in targets:
-                                            match = True
-                                            break
+                if base.startswith('python') and len(args) >= 3:
+                    idx = 1
+                    safe_cli = True
+                    safe_flags = {'-u', '-B', '-E', '-s', '-S', '-O', '-OO', '-v', '-q'}
+                    while idx < len(args):
+                        arg = args[idx]
+                        if arg == '--':
+                            idx += 1
+                            break
+                        if not arg.startswith('-'):
+                            break
+                        if arg.startswith('-c') or arg.startswith('-m'):
+                            safe_cli = False
+                            break
+                        if arg in safe_flags or (not arg.startswith('--') and all(c in 'uBEsSOvq' for c in arg[1:])):
+                            idx += 1
+                            continue
+                        safe_cli = False
+                        break
+                    if safe_cli and idx < len(args):
+                        script_arg = args[idx]
+                        script_args = args[idx + 1:]
+                        if len(script_args) == 1 and script_args[0] in ('--foreground', '--daemon'):
+                            target = HOME / 'bin/suwayomi_daily_update.py'
+                            targets = {str(target)}
+                            with contextlib.suppress(OSError):
+                                targets.add(str(target.resolve()))
+                            if script_arg in targets:
+                                match = True
+                            elif not os.path.isabs(script_arg) and (script_arg == 'suwayomi_daily_update.py' or script_arg.endswith('/suwayomi_daily_update.py')):
+                                try:
+                                    if (proc / 'cwd').is_symlink():
+                                        proc_cwd = os.readlink(proc / 'cwd')
+                                    elif (proc / 'cwd').is_file():
+                                        proc_cwd = (proc / 'cwd').read_text().strip()
+                                    else:
+                                        proc_cwd = str((proc / 'cwd').resolve())
+                                    candidate = os.path.normpath(os.path.join(proc_cwd, script_arg))
+                                    if candidate in targets:
+                                        match = True
+                                    else:
                                         with contextlib.suppress(OSError):
                                             if str(Path(candidate).resolve()) in targets:
                                                 match = True
-                                                break
-                            except OSError:
-                                pass
+                                except OSError:
+                                    pass
             else:
                 owned_argument = {
                     'adguard': str(HOME / 'adguard/data/AdGuardHome.yaml'),

@@ -88,10 +88,11 @@ class SuwayomiLauncherLifecycleTests(unittest.TestCase):
             stub_java.write_text(
                 f"""#!/bin/sh
 python3 -c "import sys, os, json
+ALLOWLIST = {{'HOME', 'PREFIX', 'TMPDIR', 'PATH', 'LD_PRELOAD', 'LANG', 'LC_ALL'}}
 data = {{
     'argv': sys.argv[1:],
     'cwd': os.getcwd(),
-    'env': dict(os.environ),
+    'env': {{k: os.environ[k] for k in ALLOWLIST if k in os.environ}},
 }}
 with open('{stub_log}', 'w') as f:
     json.dump(data, f)
@@ -173,10 +174,11 @@ with open('{stub_log}', 'w') as f:
             stub_proot.write_text(
                 f"""#!/bin/sh
 python3 -c "import sys, os, json
+ALLOWLIST = {{'HOME', 'PREFIX', 'TMPDIR', 'PATH', 'LD_PRELOAD', 'LANG', 'LC_ALL'}}
 data = {{
     'argv': sys.argv[1:],
     'cwd': os.getcwd(),
-    'env': dict(os.environ),
+    'env': {{k: os.environ[k] for k in ALLOWLIST if k in os.environ}},
 }}
 with open('{stub_log}', 'w') as f:
     json.dump(data, f)
@@ -314,6 +316,110 @@ class SuwayomiSchedulerMatchingTests(unittest.TestCase):
         )
         self.assertEqual(supervisor.matching_processes("suwayomi_scheduler"), [])
 
+    def test_rejects_cpass_combined_decoy(self):
+        """Rejects combined -c form e.g. python3 -cpass OWNED --foreground (PID 200)."""
+        self._create_proc(
+            200,
+            [
+                "python3",
+                "-cpass",
+                str(self.home_dir / "bin/suwayomi_daily_update.py"),
+                "--foreground",
+            ],
+        )
+        self.assertEqual(supervisor.matching_processes("suwayomi_scheduler"), [])
+
+    def test_rejects_unrelated_script_operand_with_trailing_owned_tokens(self):
+        """Rejects invocation executing unrelated script operand (PID 201)."""
+        self._create_proc(
+            201,
+            [
+                "python3",
+                "unrelated.py",
+                str(self.home_dir / "bin/suwayomi_daily_update.py"),
+                "--foreground",
+            ],
+        )
+        self.assertEqual(supervisor.matching_processes("suwayomi_scheduler"), [])
+
+    def test_rejects_duplicate_foreground_mode_arguments(self):
+        """Rejects duplicate mode flags e.g. --foreground --foreground (PID 202)."""
+        self._create_proc(
+            202,
+            [
+                "python3",
+                str(self.home_dir / "bin/suwayomi_daily_update.py"),
+                "--foreground",
+                "--foreground",
+            ],
+        )
+        self.assertEqual(supervisor.matching_processes("suwayomi_scheduler"), [])
+
+    def test_rejects_mpass_combined_decoy(self):
+        """Rejects combined -m form e.g. python3 -mpass OWNED --foreground."""
+        self._create_proc(
+            210,
+            [
+                "python3",
+                "-mpass",
+                str(self.home_dir / "bin/suwayomi_daily_update.py"),
+                "--foreground",
+            ],
+        )
+        self.assertEqual(supervisor.matching_processes("suwayomi_scheduler"), [])
+
+    def test_rejects_unknown_option_with_value(self):
+        """Rejects unknown interpreter option with value e.g. -W ignore rather than guessing operand."""
+        self._create_proc(
+            211,
+            [
+                "python3",
+                "-W",
+                "ignore",
+                str(self.home_dir / "bin/suwayomi_daily_update.py"),
+                "--foreground",
+            ],
+        )
+        self.assertEqual(supervisor.matching_processes("suwayomi_scheduler"), [])
+
+    def test_rejects_extra_script_arguments(self):
+        """Rejects extra tokens after the mode flag."""
+        self._create_proc(
+            212,
+            [
+                "python3",
+                str(self.home_dir / "bin/suwayomi_daily_update.py"),
+                "--foreground",
+                "extra_arg",
+            ],
+        )
+        self.assertEqual(supervisor.matching_processes("suwayomi_scheduler"), [])
+
+    def test_matches_known_safe_interpreter_flags(self):
+        """Permits known safe standalone interpreter flags (-u, -B, combined, --)."""
+        self._create_proc(
+            110,
+            ["python3", "-u", str(self.home_dir / "bin/suwayomi_daily_update.py"), "--foreground"],
+            starttime="1110",
+        )
+        self._create_proc(
+            111,
+            ["python3", "-B", str(self.home_dir / "bin/suwayomi_daily_update.py"), "--daemon"],
+            starttime="1111",
+        )
+        self._create_proc(
+            112,
+            ["python3", "-uB", str(self.home_dir / "bin/suwayomi_daily_update.py"), "--foreground"],
+            starttime="1112",
+        )
+        self._create_proc(
+            113,
+            ["python3", "--", str(self.home_dir / "bin/suwayomi_daily_update.py"), "--daemon"],
+            starttime="1113",
+        )
+        matches = supervisor.matching_processes("suwayomi_scheduler")
+        self.assertEqual(sorted([p for p, _ in matches]), [110, 111, 112, 113])
+
     def test_rejects_m_decoy(self):
         """Rejects python -m invocation."""
         self._create_proc(
@@ -410,14 +516,38 @@ class SuwayomiSchedulerHealthTests(unittest.TestCase):
         self.pid_file.parent.mkdir(parents=True)
 
         self.orig_home = supervisor.HOME
-        self.orig_pid_file = supervisor.SCHEDULER_PID_FILE
         supervisor.HOME = self.home_dir
-        supervisor.SCHEDULER_PID_FILE = self.pid_file
         self.cfg = {"cmd": ["python3", "suwayomi_daily_update.py", "--foreground"]}
 
     def tearDown(self):
         supervisor.HOME = self.orig_home
-        supervisor.SCHEDULER_PID_FILE = self.orig_pid_file
+
+    def test_namespace_binding_derives_pid_path_from_current_home_without_explicit_override(self):
+        """get_scheduler_pid_file dynamically follows rebound HOME; healthy only probes rebound namespace."""
+        temp_namespace_home = self.root / "rebound_namespace_home"
+        temp_pid_file = temp_namespace_home / "suwayomi/data/scheduler.pid"
+        temp_pid_file.parent.mkdir(parents=True)
+        temp_pid_file.write_text("7777\n")
+
+        supervisor.HOME = temp_namespace_home
+        self.assertEqual(supervisor.get_scheduler_pid_file(), temp_pid_file)
+
+        lock_fd = open(temp_pid_file, "a+")
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with patch.object(supervisor, "matching_processes", return_value=[(7777, "ident")]):
+                self.assertTrue(supervisor.healthy("suwayomi_scheduler", self.cfg))
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+
+        # Rebind to empty namespace without pid file -> healthy is False, does not open previous namespace
+        empty_namespace_home = self.root / "empty_namespace_home"
+        supervisor.HOME = empty_namespace_home
+        self.assertEqual(supervisor.get_scheduler_pid_file(), empty_namespace_home / "suwayomi/data/scheduler.pid")
+        with patch.object(supervisor, "matching_processes", return_value=[(7777, "ident")]):
+            self.assertFalse(supervisor.healthy("suwayomi_scheduler", self.cfg))
+        self.assertFalse((empty_namespace_home / "suwayomi/data/scheduler.pid").exists())
 
     def test_healthy_when_one_process_pid_matches_and_flock_held(self):
         """Healthy when exactly one live process matches, recorded PID matches, and flock is held."""
@@ -477,8 +607,9 @@ class SuwayomiSchedulerHealthTests(unittest.TestCase):
 
     def test_health_check_is_strictly_non_creating(self):
         """Health check performs no file or directory creation on disk."""
-        non_existent_target = self.root / "completely/absent/path/scheduler.pid"
-        supervisor.SCHEDULER_PID_FILE = non_existent_target
+        non_existent_home = self.root / "completely/absent/path"
+        supervisor.HOME = non_existent_home
+        non_existent_target = supervisor.get_scheduler_pid_file()
         self.assertFalse(non_existent_target.exists())
         self.assertFalse(non_existent_target.parent.exists())
 
