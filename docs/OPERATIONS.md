@@ -131,11 +131,11 @@ The 15 managed services listed above use [`scripts/server_supervisor.py`](../scr
 - Calls [`stop_agy()`](../scripts/server_supervisor.py#L155-L189) to terminate AGY runner loops, PRoot descendants, and tmux panes.
 - Resumed with `server_supervisor.py --resume` (or `server-up`), which removes markers and calls `ensure()`.
 
-### Activation Adapter Status and Installer Guard
+### Transactional Activation and Installer Guard
 
-> [!WARNING]
-> The transactional release activation adapter is currently being implemented and reviewed in a separate branch (`release-activation`); it is **not available** in maintained HEAD.
-> The legacy installer ([`scripts/install.sh:8-11`](../scripts/install.sh#L8-L11)) terminates immediately at an explicit fail-fast guard (`exit 1`) at entry, before running baseline checks or tool verification. Direct source writes via the legacy installer are disabled until the reviewed transactional activation adapter takes over. File-only recovery requires stopping affected processes and ensuring service quiescence first.
+The maintained [installer](../scripts/install.sh) requires an explicit `plan` or `apply` action, a complete release bundle and reviewed live preconditions. A no-argument invocation still fails before external commands. See the [installer reference](INSTALLER.md) for arguments and [release recovery reference](RELEASE-TRANSACTIONS.md) for journals and standalone recovery.
+
+The service adapter guards and quiesces affected services before replacing owned files. It preserves intentional disabled markers and refuses unknown source or flag edits. File-only recovery requires stopping affected processes first; use the service-aware recovery command while managing a running server. Code availability does not establish that a particular candidate has been deployed.
 
 ---
 

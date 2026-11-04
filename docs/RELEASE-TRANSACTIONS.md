@@ -99,9 +99,8 @@ res_rb = tx.rollback(namespace_root="/data/data/com.termux/files")
 ## 4. Mode Policy & Write Safety
 
 - **Canonical Permissions**:
-  - `0755` strictly for `agy-runner-loop` (`/home/bin/agy-runner-loop` or `/usr/local/bin/agy-runner-loop`).
-  - `0700` for executable binaries and scripts (`dashboard`, `mobile-gateway`, `start-services.sh`, ordinary scripts in `usr/bin/` and `home/bin/`).
-  - `0600` for runtime helper modules (`home/.local/lib/mobile-server/`), configs, and web assets.
+  - Exact audited destination overrides take precedence; see [the mode policy](RELEASE-MODE-POLICY.md) and `AUDITED_TARGET_MODE_OVERRIDES`. They preserve existing Suwayomi/AGY/terminal permissions without mode-only restarts.
+  - Defaults are `0700` for ordinary executables/scripts and `0600` for helper modules, configs and web assets. Historical runner fallback paths use `0755`; the audited Debian container runner override is `0700`.
   - Manifests declaring non-canonical target modes fail-closed in `prepare()` before any staging.
   - Staged files follow canonical `target_mode`, backups preserve `orig_mode`, and transaction directories are created with `0700` mode.
 - **Strict UID Validation & Prepare Zero-Disk-Write Guarantee**:
@@ -174,7 +173,7 @@ Only destinations with actual content or mode changes (`action != ACTION_UNTOUCH
 - Gateway executable (`home/bin/mobile-gateway`): Affects `transfer_gateway`.
 - Caddy config (`home/.config/caddy/Caddyfile`): Affects `caddy`.
 - Supervisor script (`home/bin/server_supervisor.py`) / shared catalog (`service_catalog.py`): Affects `supervisor` daemon (and `dashboard` if catalog changed).
-- TTYD assets / scripts: Affects `terminal`, `laptop_terminal`, or `agy`.
+- TTYD assets / scripts: Maps to their owning terminal service. This release refuses changes to AGY launcher/runner/ttyd runtime assets rather than attempting unsupported descendant migrations.
 - Tor config (`home/.config/tor/torrc`): Affects `tor`.
 - CLI commands (`server-user`, `server-status`, `server-health`, `server-up`, `server-down`, `server-restart`) and boot aliases: No running daemon affected.
 - **Safety Invariants**:
@@ -186,6 +185,7 @@ Only destinations with actual content or mode changes (`action != ACTION_UNTOUCH
 ### Flag Preservation & Ownership Tokens
 - Existing disable flags are presence markers. Pre-existing flags are never overwritten, truncated, or removed.
 - Temporary guards are created only for originally absent flags under `services.lock` prior to process termination.
+- The complete original flag snapshot is journaled before creating the first guard. Recovery binds that snapshot to the file engine's affected destinations and current state.
 - Each temporary guard receives a unique ownership token `release_guard:{tx_id}:{sid}` written with mode `0600` and fsync.
 - Guard removal verifies ownership token, file type (regular file), runtime UID, mode, and recorded inode. Concurrent modifications fail-closed without deleting external markers.
 
@@ -209,7 +209,7 @@ python3 scripts/release_activation.py apply \
 ```
 
 #### Standalone Interruption Recovery
-Even if the candidate bundle is deleted and live modules are corrupted:
+Use the preserved command when the candidate bundle is deleted or published candidate modules cannot be imported. All five preserved code assets must match recorded hashes before execution. Unknown edits to live files or recovery code are refused:
 ```bash
 python3 /path/to/tx_dir/recovery_lifecycle/release_activation.py recover \
   --transaction-dir /path/to/tx_dir \
@@ -229,7 +229,7 @@ python3 scripts/release_activation.py status --transaction-dir /path/to/tx_dir
 ```
 
 ### Durability & Rollback Boundaries
-- **No Multi-File Atomic Filesystem Swaps**: Files are replaced individually via `os.replace` while affected services are quiesced. Interruption during replacement triggers roll back of all touched destinations to backups.
+- **No Multi-File Atomic Filesystem Swaps**: Files are replaced individually via `os.replace` while affected services are quiesced. Ordinary exceptions attempt coherent backout; a terminated process requires the preserved recovery command. Recovery refuses unknown edits and surviving processes rather than overwriting them.
 - **Power Loss**: Relies on POSIX `fsync` and journal state boundaries. Does not guarantee flash controller durability against sudden power loss during raw hardware write cycles.
 - **Live Processes During File Recovery**: File recovery must never be invoked on a namespace with running candidate processes. The activation adapter guarantees candidate processes are quiesced before file rollback executes.
 - **Fail-Closed on Drift**: External modifications to owned destinations or guard flags fail-closed into `STATE_RECOVERY_REQUIRED`.

@@ -23,7 +23,7 @@ scripts/release_activation.py  <--->  scripts/release_transaction.py
 ```
 
 > [!IMPORTANT]
-> **Integration Prerequisite**: This isolated branch implements only the entrypoint wrapper and test harness. The service activation adapter is being corrected in a separate active worktree. No deployment to phone or live servers occurs in this task. Live deployment requires root integration and acceptance of the activation adapter.
+> **Release Prerequisite**: Review the complete candidate and its actual gateway artifact, pin live preconditions, inspect the plan, and verify recovery before applying. The wrapper delegates to the maintained activation adapter; invoking `plan` does not activate a release.
 
 ## 2. Command-Line Interface (CLI)
 
@@ -56,7 +56,7 @@ Path arguments reject option-like values (values beginning with `-`). Paths with
 - **Fail-Fast Guard**: A zero-argument invocation immediately emits:
   `Direct source writes via legacy installer are disabled: reviewed transactional activation adapter is required.`
   and exits with code 1 before resolving script paths or executing any external binaries.
-- **Fail-Closed on Missing Adapter**: The entrypoint resolves `scripts/release_activation.py` relative to its own script directory. If the adapter is absent (as in this branch prior to root integration), it halts fail-closed before invoking the Python interpreter.
+- **Fail-Closed on Missing Adapter**: The entrypoint resolves `scripts/release_activation.py` relative to its own script directory. If the adapter is absent, it halts fail-closed before invoking the Python interpreter.
 - **No Direct Mutation**: The shell wrapper contains no file copy logic, staging commands, Caddy operations, or service process kill logic.
 - **Strict Input Validation**:
   - Positional action must be `plan` or `apply`.
