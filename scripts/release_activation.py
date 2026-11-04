@@ -184,6 +184,19 @@ DEPENDENCY_ORDER = [
     "caddy",
 ]
 
+# Release Profiles
+PROFILE_GENERAL = "general"
+PROFILE_SUWAYOMI_FILTER = "suwayomi-filter"
+VALID_PROFILES = (PROFILE_GENERAL, PROFILE_SUWAYOMI_FILTER)
+SUWAYOMI_FILTER_REMOTE = "/data/data/com.termux/files/home/bin/suwayomi_graphql_filter.py"
+
+
+def validate_profile(profile: Any) -> str:
+    """Validate release profile strictly; fail-closed on unknown/nonstring/null."""
+    if not isinstance(profile, str) or profile not in VALID_PROFILES:
+        raise ActivationError(f"Invalid release profile: {profile!r}")
+    return profile
+
 
 class ActivationError(Exception):
     """Base exception for release activation errors."""
@@ -267,8 +280,11 @@ def map_destination_to_component(remote_path: str) -> Optional[Tuple[str, bool, 
     """
     norm = remote_path.replace("\\", "/").rstrip("/")
 
-    # Check for Suwayomi scripts - must NOT change
-    for sw in ("start_suwayomi.sh", "suwayomi_daily_update.py", "suwayomi_graphql_filter.py", "suwayomi_update.sh"):
+    # Check for Suwayomi scripts
+    if norm == SUWAYOMI_FILTER_REMOTE or norm.endswith("home/bin/suwayomi_graphql_filter.py"):
+        return ("suwayomi_filter", True, False)
+
+    for sw in ("start_suwayomi.sh", "suwayomi_daily_update.py", "suwayomi_update.sh"):
         if norm.endswith(f"home/bin/{sw}"):
             return ("suwayomi", True, False)
 
@@ -337,11 +353,16 @@ def map_destination_to_component(remote_path: str) -> Optional[Tuple[str, bool, 
     return None
 
 
-def map_changed_destinations(entries: List[Dict[str, Any]]) -> Tuple[Set[str], bool, List[str]]:
+def map_changed_destinations(
+    entries: List[Dict[str, Any]],
+    profile: str = PROFILE_GENERAL,
+) -> Tuple[Set[str], bool, List[str]]:
     """
-    Given prepared transaction entries, return:
+    Given prepared transaction entries and release profile, return:
     (affected_services, supervisor_affected, changed_destinations)
     """
+    profile = validate_profile(profile)
+
     affected_services: Set[str] = set()
     supervisor_affected = False
     changed_destinations: List[str] = []
@@ -359,20 +380,39 @@ def map_changed_destinations(entries: List[Dict[str, Any]]) -> Tuple[Set[str], b
             raise ActivationError(f"Unexplained changed destination: {remote}")
 
         comp, is_sw, is_agy = mapping
-        if is_sw:
-            raise ActivationError("Suwayomi launcher/filter/scheduler sources must be unchanged in this release")
         if is_agy:
             raise ActivationError("AGY launcher/runner/ttyd runtime-asset changes are prohibited in this release")
 
-        if comp == "cli_only":
-            continue
-        elif comp == "service_catalog":
-            affected_services.add("dashboard")
-            supervisor_affected = True
-        elif comp == "supervisor":
-            supervisor_affected = True
-        else:
-            affected_services.add(comp)
+        if profile == PROFILE_GENERAL:
+            if is_sw:
+                raise ActivationError("Suwayomi launcher/filter/scheduler sources must be unchanged in this release")
+
+            if comp == "cli_only":
+                continue
+            elif comp == "service_catalog":
+                affected_services.add("dashboard")
+                supervisor_affected = True
+            elif comp == "supervisor":
+                supervisor_affected = True
+            else:
+                affected_services.add(comp)
+
+        elif profile == PROFILE_SUWAYOMI_FILTER:
+            norm = remote.replace("\\", "/").rstrip("/")
+            if norm != SUWAYOMI_FILTER_REMOTE and not norm.endswith("home/bin/suwayomi_graphql_filter.py"):
+                raise ActivationError(
+                    f"Profile '{PROFILE_SUWAYOMI_FILTER}' permits only {SUWAYOMI_FILTER_REMOTE} to change, found: {remote}"
+                )
+            if action not in (None, rt.ACTION_REPLACE):
+                raise ActivationError(
+                    f"Profile '{PROFILE_SUWAYOMI_FILTER}' permits only modifying existing {SUWAYOMI_FILTER_REMOTE}"
+                )
+            if len(changed_destinations) > 1:
+                raise ActivationError(
+                    f"Profile '{PROFILE_SUWAYOMI_FILTER}' permits only a single changed destination"
+                )
+            affected_services.add("suwayomi_filter")
+            supervisor_affected = False
 
     if "ssh" in affected_services:
         raise ActivationError("SSH service restart is strictly prohibited")
@@ -412,6 +452,8 @@ def load_activation_journal(tx_dir: Path) -> Dict[str, Any]:
     state = data.get("state")
     if state not in ALLOWED_STATES:
         raise ActivationError(f"Invalid activation journal state: {state}")
+    if "profile" in data:
+        validate_profile(data["profile"])
     return data
 
 
@@ -434,6 +476,10 @@ def validate_activation_journal(
     if state not in ALLOWED_STATES:
         raise ActivationError(f"Invalid activation journal state: {state}")
 
+    # Validate profile: absent means general; explicit invalid refuses
+    raw_profile = act_journal.get("profile", PROFILE_GENERAL)
+    validated_profile = validate_profile(raw_profile)
+
     act_ns = Path(act_journal.get("namespace_root", "")).resolve()
     tx_ns = Path(tx_journal.get("namespace_root", "")).resolve()
     if act_ns != expected_ns_root or tx_ns != expected_ns_root:
@@ -453,8 +499,11 @@ def validate_activation_journal(
             f"Top UID mismatch: act={top_uid}, tx={tx_journal.get('top_uid')}, expected={expected_uid}"
         )
 
-    # Recompute affected services from verified file engine entries
-    recomputed_services, recomputed_sup, _ = map_changed_destinations(tx_journal.get("entries", []))
+    # Recompute affected services from verified file engine entries using validated profile
+    recomputed_services, recomputed_sup, _ = map_changed_destinations(
+        tx_journal.get("entries", []),
+        profile=validated_profile,
+    )
 
     act_services_raw = act_journal.get("affected_services")
     if not isinstance(act_services_raw, list):
@@ -976,8 +1025,10 @@ def plan(
     bundle_root: Path,
     preconditions: Dict[str, Any],
     namespace_root: Optional[Path] = None,
+    profile: str = PROFILE_GENERAL,
 ) -> Dict[str, Any]:
     """Dry planning: determine changed destinations and affected services without disk writes."""
+    profile = validate_profile(profile)
     b_root = Path(bundle_root).resolve()
     manifest_mod = rt._load_release_manifest_module()
     manifest_entries = manifest_mod.generate_manifest(b_root, require_gateway=True)
@@ -1022,10 +1073,14 @@ def plan(
                 "action": action,
             })
 
-    affected_services, supervisor_affected, _ = map_changed_destinations(changed_destinations)
+    affected_services, supervisor_affected, _ = map_changed_destinations(
+        changed_destinations,
+        profile=profile,
+    )
 
     return {
         "status": "plan_ok",
+        "profile": profile,
         "changed_destinations": changed_destinations,
         "affected_services": sorted(list(affected_services)),
         "supervisor_affected": supervisor_affected,
@@ -1041,8 +1096,10 @@ def apply(
     namespace_root: Optional[Path] = None,
     driver: Optional[ta.LifecycleDriver] = None,
     health_timeout: float = 10.0,
+    profile: str = PROFILE_GENERAL,
 ) -> Dict[str, Any]:
     """Execute service-scoped release activation."""
+    profile = validate_profile(profile)
     b_root = Path(bundle_root).resolve()
     tx_dir = Path(transaction_dir).resolve()
     ns_root = Path(namespace_root).resolve() if namespace_root else Path("/data/data/com.termux/files")
@@ -1074,7 +1131,10 @@ def apply(
 
         tx_journal = tx.load_journal()
         entries = tx_journal.get("entries", [])
-        affected_services_set, supervisor_affected, _ = map_changed_destinations(entries)
+        affected_services_set, supervisor_affected, _ = map_changed_destinations(
+            entries,
+            profile=profile,
+        )
         affected_services = sorted(list(affected_services_set))
 
         tx_id = f"act_{uuid.uuid4().hex[:12]}"
@@ -1082,6 +1142,7 @@ def apply(
 
         act_journal: Dict[str, Any] = {
             "version": JOURNAL_VERSION,
+            "profile": profile,
             "state": STATE_PREPARED,
             "created_at": time.time(),
             "updated_at": time.time(),
@@ -1112,7 +1173,12 @@ def apply(
                 tx.commit(namespace_root=ns_root)
                 act_journal["state"] = STATE_COMPLETED
                 save_activation_journal(tx_dir, act_journal)
-                return {"state": STATE_COMPLETED, "affected_services": [], "status": "completed_noop_services"}
+                return {
+                    "state": STATE_COMPLETED,
+                    "profile": profile,
+                    "affected_services": [],
+                    "status": "completed_noop_services",
+                }
             except Exception:
                 act_journal["state"] = STATE_RECOVERY_REQUIRED
                 save_activation_journal(tx_dir, act_journal)
@@ -1251,6 +1317,7 @@ def apply(
 
             return {
                 "state": STATE_COMPLETED,
+                "profile": profile,
                 "tx_id": tx_id,
                 "affected_services": affected_services,
                 "reactivated_services": active_services,
@@ -1551,10 +1618,12 @@ def status(transaction_dir: Path) -> Dict[str, Any]:
     """Inspect activation status."""
     tx_dir = Path(transaction_dir).resolve()
     act_journal = load_activation_journal(tx_dir)
+    profile = act_journal.get("profile", PROFILE_GENERAL)
     tx = rt.ReleaseTransaction(tx_dir)
     tx_status = tx.status()
     return {
         "activation_state": act_journal.get("state"),
+        "profile": profile,
         "tx_id": act_journal.get("tx_id"),
         "affected_services": act_journal.get("affected_services"),
         "supervisor_affected": act_journal.get("supervisor_affected"),
@@ -1572,12 +1641,14 @@ def main():
     plan_parser.add_argument("--bundle", required=True, help="Candidate bundle directory")
     plan_parser.add_argument("--preconditions", required=True, help="Preconditions JSON file")
     plan_parser.add_argument("--namespace-root", help="Live namespace root directory")
+    plan_parser.add_argument("--profile", choices=list(VALID_PROFILES), default=PROFILE_GENERAL, help="Release profile")
 
     apply_parser = subparsers.add_parser("apply", help="Execute service-scoped release activation")
     apply_parser.add_argument("--bundle", required=True, help="Candidate bundle directory")
     apply_parser.add_argument("--preconditions", required=True, help="Preconditions JSON file")
     apply_parser.add_argument("--transaction-dir", required=True, help="Transaction directory")
     apply_parser.add_argument("--namespace-root", help="Live namespace root directory")
+    apply_parser.add_argument("--profile", choices=list(VALID_PROFILES), default=PROFILE_GENERAL, help="Release profile")
 
     rb_parser = subparsers.add_parser("rollback", help="Roll back activation")
     rb_parser.add_argument("--transaction-dir", required=True, help="Transaction directory")
@@ -1600,6 +1671,7 @@ def main():
                 bundle_root=Path(args.bundle),
                 preconditions=preconds,
                 namespace_root=Path(args.namespace_root) if args.namespace_root else None,
+                profile=args.profile,
             )
             print(json.dumps(res, indent=2))
         elif args.command == "apply":
@@ -1610,6 +1682,7 @@ def main():
                 preconditions=preconds,
                 transaction_dir=Path(args.transaction_dir),
                 namespace_root=Path(args.namespace_root) if args.namespace_root else None,
+                profile=args.profile,
             )
             print(json.dumps(res, indent=2))
         elif args.command == "rollback":

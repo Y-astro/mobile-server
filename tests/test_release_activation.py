@@ -1170,6 +1170,320 @@ class TestReleaseActivation(unittest.TestCase):
         act = ra.load_activation_journal(tx_dir)
         self.assertEqual(act["state"], ra.STATE_RECOVERY_REQUIRED)
 
+    def test_validate_profile_strictness(self):
+        """Strict profile validation: known profiles pass; unknown/nonstring/null failclosed."""
+        self.assertEqual(ra.validate_profile("general"), "general")
+        self.assertEqual(ra.validate_profile("suwayomi-filter"), "suwayomi-filter")
+
+        for bad in (None, 123, True, False, "", "unknown", "suwayomi", "filter", ["general"]):
+            with self.assertRaises(ra.ActivationError):
+                ra.validate_profile(bad)
+
+    def test_default_general_profile_refuses_all_suwayomi_changes(self):
+        """Default general profile must continue refusing any changed Suwayomi script."""
+        sw_scripts = (
+            "start_suwayomi.sh",
+            "suwayomi_daily_update.py",
+            "suwayomi_graphql_filter.py",
+            "suwayomi_update.sh",
+        )
+        for sw in sw_scripts:
+            fake_entry = [{"remote": f"/data/data/com.termux/files/home/bin/{sw}", "action": ra.rt.ACTION_REPLACE}]
+            with self.assertRaises(ra.ActivationError) as ctx:
+                ra.map_changed_destinations(fake_entry, profile="general")
+            self.assertIn("Suwayomi launcher/filter/scheduler sources must be unchanged", str(ctx.exception))
+
+            # Also verify default argument profile=general behaves identically
+            with self.assertRaises(ra.ActivationError):
+                ra.map_changed_destinations(fake_entry)
+
+    def test_suwayomi_filter_profile_plan_and_apply_success(self):
+        """Profile suwayomi-filter allows only suwayomi_graphql_filter.py; supervisor unaffected."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        orig_filter = (live / "home/bin/suwayomi_graphql_filter.py").read_text(encoding="utf-8")
+        candidate_code = "# CANDIDATE_FILTER_STUB\nprint('candidate filter')\n"
+        (bundle / "scripts/suwayomi_graphql_filter.py").write_text(candidate_code, encoding="utf-8")
+
+        # Plan check
+        plan_res = ra.plan(bundle, preconds, namespace_root=live, profile="suwayomi-filter")
+        self.assertEqual(plan_res["status"], "plan_ok")
+        self.assertEqual(plan_res["profile"], "suwayomi-filter")
+        self.assertEqual(plan_res["affected_services"], ["suwayomi_filter"])
+        self.assertFalse(plan_res["supervisor_affected"])
+        self.assertEqual(len(plan_res["changed_destinations"]), 1)
+        self.assertEqual(plan_res["changed_destinations"][0]["remote"], ra.SUWAYOMI_FILTER_REMOTE)
+
+        # Apply check
+        driver = FakeLifecycleDriver()
+        driver.running_processes["suwayomi_filter"] = [(1234, "start_1234")]
+        driver.running_processes["dashboard"] = [(1000, "start_1000")]
+        driver.healthy_services.add("suwayomi_filter")
+        driver.healthy_services.add("dashboard")
+
+        apply_res = ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-filter")
+        self.assertEqual(apply_res["state"], ra.STATE_COMPLETED)
+        self.assertEqual(apply_res["profile"], "suwayomi-filter")
+        self.assertEqual(apply_res["affected_services"], ["suwayomi_filter"])
+        self.assertEqual(apply_res["reactivated_services"], ["suwayomi_filter"])
+
+        # File on live disk changed to candidate
+        self.assertEqual((live / "home/bin/suwayomi_graphql_filter.py").read_text(encoding="utf-8"), candidate_code)
+
+        # Candidate was quiesced then restarted; dashboard was NOT touched; supervisor was NOT touched
+        terminated = [e for e in driver.events if e[0] == "terminate"]
+        self.assertEqual(len(terminated), 1)
+        self.assertEqual(terminated[0][1], [(1234, "start_1234")])
+
+        launched = [e for e in driver.events if e[0] == "launch"]
+        self.assertEqual(launched, [("launch", "suwayomi_filter")])
+
+        self.assertFalse(any(e[0] in ("stop_daemon", "start_daemon") for e in driver.events))
+        self.assertEqual(driver.running_processes["dashboard"], [(1000, "start_1000")])
+
+        # Status check
+        st = ra.status(tx_dir)
+        self.assertEqual(st["activation_state"], ra.STATE_COMPLETED)
+        self.assertEqual(st["profile"], "suwayomi-filter")
+        self.assertEqual(st["affected_services"], ["suwayomi_filter"])
+        self.assertFalse(st["supervisor_affected"])
+
+    def test_suwayomi_filter_profile_noop(self):
+        """Zero changes under suwayomi-filter profile is a completed noop release."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        driver = FakeLifecycleDriver()
+        driver.running_processes["suwayomi_filter"] = [(1234, "start_1234")]
+
+        res = ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-filter")
+        self.assertEqual(res["state"], ra.STATE_COMPLETED)
+        self.assertEqual(res["status"], "completed_noop_services")
+        self.assertEqual(res["profile"], "suwayomi-filter")
+        self.assertEqual(res["affected_services"], [])
+        self.assertFalse(any(e[0] in ("terminate", "launch", "stop_daemon", "start_daemon") for e in driver.events))
+
+    def test_suwayomi_filter_profile_refuses_forbidden_single_and_mixed_changes(self):
+        """suwayomi-filter profile rejects any single or mixed change outside suwayomi_graphql_filter.py."""
+        forbidden_singles = [
+            # Auth
+            [{"remote": "/data/data/com.termux/files/home/.local/lib/mobile-server/auth.py", "action": ra.rt.ACTION_REPLACE}],
+            # Launcher
+            [{"remote": "/data/data/com.termux/files/home/bin/start_suwayomi.sh", "action": ra.rt.ACTION_REPLACE}],
+            # Scheduler
+            [{"remote": "/data/data/com.termux/files/home/bin/suwayomi_daily_update.py", "action": ra.rt.ACTION_REPLACE}],
+            [{"remote": "/data/data/com.termux/files/home/bin/suwayomi_update.sh", "action": ra.rt.ACTION_REPLACE}],
+            # Caddy
+            [{"remote": "/data/data/com.termux/files/home/.config/caddy/Caddyfile", "action": ra.rt.ACTION_REPLACE}],
+            # Catalog
+            [{"remote": "/data/data/com.termux/files/home/.local/lib/mobile-server/service_catalog.py", "action": ra.rt.ACTION_REPLACE}],
+            # CLI
+            [{"remote": "/data/data/com.termux/files/usr/bin/server-user", "action": ra.rt.ACTION_REPLACE}],
+            # Gateway
+            [{"remote": "/data/data/com.termux/files/home/bin/mobile-gateway", "action": ra.rt.ACTION_REPLACE}],
+            # Dashboard
+            [{"remote": "/data/data/com.termux/files/usr/bin/dashboard", "action": ra.rt.ACTION_REPLACE}],
+            # AGY
+            [{"remote": "/data/data/com.termux/files/home/bin/agy_session.sh", "action": ra.rt.ACTION_REPLACE}],
+        ]
+
+        for entry in forbidden_singles:
+            with self.assertRaises(ra.ActivationError):
+                ra.map_changed_destinations(entry, profile="suwayomi-filter")
+
+        # Mixed changes: filter + auth
+        mixed_filter_auth = [
+            {"remote": ra.SUWAYOMI_FILTER_REMOTE, "action": ra.rt.ACTION_REPLACE},
+            {"remote": "/data/data/com.termux/files/home/.local/lib/mobile-server/auth.py", "action": ra.rt.ACTION_REPLACE},
+        ]
+        with self.assertRaises(ra.ActivationError):
+            ra.map_changed_destinations(mixed_filter_auth, profile="suwayomi-filter")
+
+        # Mixed changes: filter + launcher
+        mixed_filter_launcher = [
+            {"remote": ra.SUWAYOMI_FILTER_REMOTE, "action": ra.rt.ACTION_REPLACE},
+            {"remote": "/data/data/com.termux/files/home/bin/start_suwayomi.sh", "action": ra.rt.ACTION_REPLACE},
+        ]
+        with self.assertRaises(ra.ActivationError):
+            ra.map_changed_destinations(mixed_filter_launcher, profile="suwayomi-filter")
+
+        # Multiple filter changes
+        duplicate_filter = [
+            {"remote": ra.SUWAYOMI_FILTER_REMOTE, "action": ra.rt.ACTION_REPLACE},
+            {"remote": ra.SUWAYOMI_FILTER_REMOTE, "action": ra.rt.ACTION_REPLACE},
+        ]
+        with self.assertRaises(ra.ActivationError):
+            ra.map_changed_destinations(duplicate_filter, profile="suwayomi-filter")
+
+    def test_journal_profile_validation_forgery_and_mismatch(self):
+        """Activation journal profile validation: legacy absence valid, invalid/forged refused."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        (bundle / "scripts/suwayomi_graphql_filter.py").write_text("# FILTER\n", encoding="utf-8")
+
+        driver = FakeLifecycleDriver()
+        driver.running_processes["suwayomi_filter"] = [(1234, "start_1234")]
+        driver.healthy_services.add("suwayomi_filter")
+
+        ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-filter")
+
+        # 1. Tamper journal with invalid profile
+        jpath = tx_dir / "activation_journal.json"
+        with open(jpath, "r", encoding="utf-8") as f:
+            jdata = json.load(f)
+
+        tx = ra.rt.ReleaseTransaction(tx_dir)
+        tx_journal = tx.load_journal()
+
+        # Invalid profile type / value
+        for bad_prof in ("unknown", 123, None):
+            jdata_bad = dict(jdata, profile=bad_prof)
+            with self.assertRaises(ra.ActivationError):
+                ra.validate_activation_journal(jdata_bad, tx_journal, live, tx_dir, os.getuid())
+
+        # Forged profile 'general' on filter tx
+        jdata_forged = dict(jdata, profile="general")
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.validate_activation_journal(jdata_forged, tx_journal, live, tx_dir, os.getuid())
+        self.assertIn("Suwayomi launcher/filter/scheduler sources must be unchanged", str(ctx.exception))
+
+        # Forged affected_services
+        jdata_mismatch = dict(jdata, affected_services=["dashboard"])
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.validate_activation_journal(jdata_mismatch, tx_journal, live, tx_dir, os.getuid())
+        self.assertIn("Affected services mismatch", str(ctx.exception))
+
+    def test_legacy_journal_without_profile_treated_as_general(self):
+        """Legacy activation journal without 'profile' field is validated as 'general'."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
+        driver = FakeLifecycleDriver()
+        driver.running_processes["dashboard"] = [(101, "start_101")]
+        driver.healthy_services.add("dashboard")
+
+        ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="general")
+
+        jpath = tx_dir / "activation_journal.json"
+        with open(jpath, "r", encoding="utf-8") as f:
+            jdata = json.load(f)
+
+        # Remove profile field (simulate legacy journal)
+        self.assertIn("profile", jdata)
+        del jdata["profile"]
+
+        with open(jpath, "w", encoding="utf-8") as f:
+            json.dump(jdata, f, indent=2)
+
+        # Loading and validation must succeed
+        loaded = ra.load_activation_journal(tx_dir)
+        self.assertNotIn("profile", loaded)
+
+        tx = ra.rt.ReleaseTransaction(tx_dir)
+        tx_journal = tx.load_journal()
+        # Must not raise:
+        ra.validate_activation_journal(loaded, tx_journal, live, tx_dir, os.getuid())
+
+        # Rollback using legacy journal must succeed
+        res = ra.rollback(tx_dir, live, driver=driver)
+        self.assertEqual(res["state"], ra.STATE_ROLLED_BACK)
+
+    def test_suwayomi_filter_profile_health_failure_backout(self):
+        """Candidate filter health failure quiesces candidate before restoring prior file and service."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        live_filter = live / "home/bin/suwayomi_graphql_filter.py"
+        orig_filter = live_filter.read_text(encoding="utf-8")
+        (bundle / "scripts/suwayomi_graphql_filter.py").write_text("# BROKEN_FILTER\n", encoding="utf-8")
+
+        driver = FakeLifecycleDriver()
+        driver.running_processes["suwayomi_filter"] = [(1234, "start_1234")]
+        # Candidate health will fail
+        driver.fail_candidate_health.add("suwayomi_filter")
+
+        with self.assertRaises(ra.HealthCheckError):
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver, health_timeout=0.2, profile="suwayomi-filter")
+
+        # Rollback executed: prior file content restored
+        self.assertEqual(live_filter.read_text(encoding="utf-8"), orig_filter)
+
+        # Flags state coherent: temporary guards removed
+        guard_path = live / "home/.config/services_disabled/suwayomi_filter"
+        self.assertFalse(guard_path.exists())
+
+        # Check journal state
+        act_journal = ra.load_activation_journal(tx_dir)
+        self.assertEqual(act_journal["state"], ra.STATE_ROLLED_BACK)
+
+    def test_suwayomi_filter_profile_repeated_recovery_idempotency(self):
+        """Repeated recovery of suwayomi_filter activation is safe and idempotent."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        live_filter = live / "home/bin/suwayomi_graphql_filter.py"
+        orig_filter = live_filter.read_text(encoding="utf-8")
+        (bundle / "scripts/suwayomi_graphql_filter.py").write_text("# CANDIDATE_FILTER\n", encoding="utf-8")
+
+        driver = FakeLifecycleDriver()
+        driver.running_processes["suwayomi_filter"] = [(1234, "start_1234")]
+        driver.healthy_services.add("suwayomi_filter")
+
+        ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-filter")
+
+        # First rollback
+        rec1 = ra.rollback(tx_dir, live, driver=driver)
+        self.assertEqual(rec1["state"], ra.STATE_ROLLED_BACK)
+        self.assertEqual(rec1["status"], "rolled_back")
+        self.assertEqual(live_filter.read_text(encoding="utf-8"), orig_filter)
+
+        # Second recovery must be idempotent
+        rec2 = ra.recover(tx_dir, live, driver=driver)
+        self.assertEqual(rec2["state"], ra.STATE_ROLLED_BACK)
+        self.assertEqual(rec2["status"], "idempotent_success")
+
+    def test_cli_profile_choices(self):
+        """CLI choices: --profile suwayomi-filter succeeds; invalid profile fails."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        (bundle / "scripts/suwayomi_graphql_filter.py").write_text("# FILTER\n", encoding="utf-8")
+        preconds_file = self.test_root / "preconds.json"
+        preconds_file.write_text(json.dumps(preconds), encoding="utf-8")
+
+        # Valid profile on plan
+        proc_ok = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "release_activation.py"),
+                "plan",
+                "--bundle",
+                str(bundle),
+                "--preconditions",
+                str(preconds_file),
+                "--namespace-root",
+                str(live),
+                "--profile",
+                "suwayomi-filter",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(proc_ok.returncode, 0, f"CLI plan failed: {proc_ok.stderr}")
+        res = json.loads(proc_ok.stdout)
+        self.assertEqual(res["profile"], "suwayomi-filter")
+        self.assertEqual(res["affected_services"], ["suwayomi_filter"])
+
+        # Invalid profile choice
+        proc_bad = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "release_activation.py"),
+                "plan",
+                "--bundle",
+                str(bundle),
+                "--preconditions",
+                str(preconds_file),
+                "--profile",
+                "invalid-profile",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertNotEqual(proc_bad.returncode, 0)
+        self.assertIn("invalid choice", proc_bad.stderr)
+
+
     
 class TestTermuxLifecycleDriverUnit(unittest.TestCase):
     """Unit tests for TermuxLifecycleDriver using mocked filesystem and proc."""

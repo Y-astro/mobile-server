@@ -33,11 +33,13 @@ bundle=""
 preconditions=""
 transaction_dir=""
 namespace_root=""
+profile=""
 
 has_bundle=0
 has_preconditions=0
 has_transaction_dir=0
 has_namespace_root=0
+has_profile=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -121,6 +123,31 @@ while [ "$#" -gt 0 ]; do
             has_namespace_root=1
             shift 2
             ;;
+        --profile)
+            if [ "$has_profile" -ne 0 ]; then
+                echo "Error: duplicate flag --profile" >&2
+                exit 1
+            fi
+            if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+                echo "Error: missing value for --profile" >&2
+                exit 1
+            fi
+            case "$2" in
+                -*)
+                    echo "Error: invalid value for --profile: option-like value '$2' is not allowed" >&2
+                    exit 1
+                    ;;
+                general|suwayomi-filter)
+                    ;;
+                *)
+                    echo "Error: invalid value for --profile: '$2'. Expected 'general' or 'suwayomi-filter'." >&2
+                    exit 1
+                    ;;
+            esac
+            profile="$2"
+            has_profile=1
+            shift 2
+            ;;
         *)
             echo "Error: unknown or unsupported argument '$1'" >&2
             exit 1
@@ -163,6 +190,10 @@ cmd=(python3 "$activation_script" "$action" --bundle "$bundle" --preconditions "
 
 if [ "$action" = "apply" ]; then
     cmd+=(--transaction-dir "$transaction_dir")
+fi
+
+if [ "$has_profile" -ne 0 ]; then
+    cmd+=(--profile "$profile")
 fi
 
 if [ "$has_namespace_root" -ne 0 ]; then
