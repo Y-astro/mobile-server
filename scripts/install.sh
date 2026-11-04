@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 # Update an already provisioned K20 Pro server installation.
 # NOTE: Unsafe legacy file synchronization, unjournaled in-place copies,
 # and ambient supervisor restarts have been completely replaced by the
