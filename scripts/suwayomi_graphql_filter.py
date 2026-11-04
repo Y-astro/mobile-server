@@ -75,13 +75,13 @@ def parse_category_response(raw_bytes: bytes) -> list:
     try:
         payload = json.loads(raw_bytes.decode("utf-8"))
     except Exception as e:
-        raise ValueError(f"Malformed JSON from upstream: {e}") from e
+        raise ValueError("Malformed JSON from upstream") from e
 
     if not isinstance(payload, dict):
         raise ValueError("Upstream response is not a JSON object")
 
     if payload.get("errors"):
-        raise ValueError(f"Upstream returned GraphQL errors: {payload['errors']}")
+        raise ValueError("Upstream returned GraphQL errors")
 
     if "data" not in payload:
         raise ValueError("Missing 'data' field in upstream response")
@@ -90,35 +90,35 @@ def parse_category_response(raw_bytes: bytes) -> list:
     if not isinstance(data, dict):
         raise ValueError("'data' field is not a JSON object")
 
-    category = data.get("category")
-    if category is None:
+    if "category" not in data or data["category"] is None:
         # Valid category null or missing within otherwise valid GraphQL data means known empty
         return []
 
+    category = data["category"]
     if not isinstance(category, dict):
         raise ValueError("'category' field is not a JSON object or null")
 
-    mangas = category.get("mangas")
-    if mangas is None:
-        return []
+    if "mangas" not in category or category["mangas"] is None:
+        raise ValueError("Missing or null 'mangas' field in category")
 
+    mangas = category["mangas"]
     if not isinstance(mangas, dict):
-        raise ValueError("'mangas' field is not a JSON object or null")
+        raise ValueError("'mangas' field is not a JSON object")
 
-    nodes = mangas.get("nodes")
-    if nodes is None:
-        return []
+    if "nodes" not in mangas or mangas["nodes"] is None:
+        raise ValueError("Missing or null 'nodes' field in mangas")
 
+    nodes = mangas["nodes"]
     if not isinstance(nodes, list):
-        raise ValueError("'nodes' field is not a JSON list or null")
+        raise ValueError("'nodes' field is not a JSON list")
 
     result = []
     for node in nodes:
         if not isinstance(node, dict) or "id" not in node:
-            raise ValueError(f"Invalid node shape in nodes: {node}")
+            raise ValueError("Invalid node shape in nodes list")
         node_id = node["id"]
         if isinstance(node_id, bool) or not isinstance(node_id, (int, str)):
-            raise ValueError(f"Invalid ID shape (expected int or str, not bool/obj): {node_id}")
+            raise ValueError("Invalid ID shape in nodes list")
         result.append(node_id)
     return result
 
@@ -142,8 +142,8 @@ class ReadingIdCache:
         self._lock = threading.Lock()
         self._snapshot = None
         self._state = "unknown"  # "unknown" or "ready"
-        self._last_success = 0.0
-        self._last_failure = 0.0
+        self._last_success = None
+        self._last_failure = None
         self._refresh_in_flight = False
         self._refresh_event = None
 
@@ -151,20 +151,24 @@ class ReadingIdCache:
         """Return a copied snapshot of reading IDs, refreshing if expired."""
         now = time.monotonic()
         with self._lock:
-            if self._state == "ready" and (now - self._last_success) < self.ttl:
+            if self._state == "ready" and self._last_success is not None and (now - self._last_success) < self.ttl:
                 return list(self._snapshot)
-        return self._do_refresh()
+        return self._do_refresh(force=False)
 
     def refresh(self) -> list:
         """Force a refresh attempt (coalesced with in-flight refreshes)."""
-        return self._do_refresh()
+        return self._do_refresh(force=True)
 
-    def _do_refresh(self) -> list:
+    def _do_refresh(self, force: bool = False) -> list:
         while True:
             now = time.monotonic()
             with self._lock:
+                # Under-lock double check: if ordinary get (not forced), check if another thread refreshed
+                if not force and self._state == "ready" and self._last_success is not None and (now - self._last_success) < self.ttl:
+                    return list(self._snapshot)
+
                 # If recently failed, honor retry cooldown to avoid hammering upstream
-                if (now - self._last_failure) < self.retry_cooldown:
+                if self._last_failure is not None and (now - self._last_failure) < self.retry_cooldown:
                     if self._state == "ready":
                         return list(self._snapshot)
                     raise CacheColdError("Reading category cache unavailable")
@@ -179,10 +183,7 @@ class ReadingIdCache:
             if event is not None:
                 # Wait for leader's in-flight refresh to finish
                 event.wait(timeout=self.timeout + 1.0)
-                with self._lock:
-                    if self._state == "ready":
-                        return list(self._snapshot)
-                    raise CacheColdError("Reading category cache unavailable")
+                continue
 
             # We are the leader thread doing the fetch
             try:
@@ -252,7 +253,12 @@ def is_recognized_updates_query(body: bytes) -> bool:
     return b"GetChapterWithMangaPage" in body or (b"chapters" in body and b"FETCHED_AT" in body)
 
 
-def transform_recognized_query(body: bytes, reading_ids: list) -> bytes:
+def prepare_recognized_query(body: bytes) -> tuple[dict, dict, dict]:
+    """
+    Validate recognized query JSON and variables/filter structure before cache lookup.
+    Returns (data, variables, flt).
+    Raises FilterPayloadError on invalid JSON or malformed variables/filter.
+    """
     try:
         decoded = body.decode("utf-8")
         data = json.loads(decoded)
@@ -276,11 +282,25 @@ def transform_recognized_query(body: bytes, reading_ids: list) -> bytes:
     elif not isinstance(flt, dict):
         raise FilterPayloadError("Filter must be a JSON object")
 
+    return data, variables, flt
+
+
+def apply_reading_constraints(data: dict, flt: dict, reading_ids: list) -> bytes:
+    """Apply Reading category constraints to filter and return encoded bytes."""
     flt["inLibrary"] = {"equalTo": True}
     flt["isRead"] = {"equalTo": False}
-    flt["mangaId"] = {"in": list(reading_ids)}
+    if reading_ids:
+        flt["mangaId"] = {"in": list(reading_ids)}
+    else:
+        # Known empty reading category: contradictory IntFilterInput guarantees zero results
+        flt["mangaId"] = {"equalTo": 0, "notEqualTo": 0}
 
     return json.dumps(data).encode("utf-8")
+
+
+def transform_recognized_query(body: bytes, reading_ids: list) -> bytes:
+    data, variables, flt = prepare_recognized_query(body)
+    return apply_reading_constraints(data, flt, reading_ids)
 
 
 def clean_request_headers(headers) -> dict:
@@ -398,6 +418,17 @@ class FilterHandler(http.server.BaseHTTPRequestHandler):
 
         # Filter updates queries (Tsumiru uses GetChapterWithMangaPage)
         if is_recognized_updates_query(body):
+            # Validate recognized payload shape BEFORE category lookup
+            try:
+                data, variables, flt = prepare_recognized_query(body)
+            except FilterPayloadError:
+                self.send_error_json(400, "Invalid GraphQL request payload")
+                return
+            except Exception as e:
+                logger.error(f"Error validating updates query: {e}")
+                self.send_error_json(400, "Invalid GraphQL request payload")
+                return
+
             cache_inst = self._get_cache()
             try:
                 current_reading_ids = cache_inst.get_reading_ids()
@@ -409,15 +440,7 @@ class FilterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error_json(503, "Reading category cache unavailable")
                 return
 
-            try:
-                body = transform_recognized_query(body, current_reading_ids)
-            except FilterPayloadError:
-                self.send_error_json(400, "Invalid GraphQL request payload")
-                return
-            except Exception as e:
-                logger.error(f"Error filtering updates query: {e}")
-                self.send_error_json(400, "Invalid GraphQL request payload")
-                return
+            body = apply_reading_constraints(data, flt, current_reading_ids)
 
         # Forward request to Suwayomi upstream
         self._forward("POST", body, TIMEOUT_POST)

@@ -170,13 +170,66 @@ class TestCategoryResponseParser(unittest.TestCase):
         payload = json.dumps({"data": {}}).encode("utf-8")
         self.assertEqual(parse_category_response(payload), [])
 
-    def test_parse_null_mangas_is_known_empty(self):
+    def test_parse_null_mangas_raises(self):
         payload = json.dumps({"data": {"category": {"mangas": None}}}).encode("utf-8")
-        self.assertEqual(parse_category_response(payload), [])
+        with self.assertRaises(ValueError):
+            parse_category_response(payload)
 
-    def test_parse_null_nodes_is_known_empty(self):
+    def test_parse_missing_mangas_raises(self):
+        payload = json.dumps({"data": {"category": {}}}).encode("utf-8")
+        with self.assertRaises(ValueError):
+            parse_category_response(payload)
+
+    def test_parse_null_nodes_raises(self):
         payload = json.dumps({"data": {"category": {"mangas": {"nodes": None}}}}).encode("utf-8")
-        self.assertEqual(parse_category_response(payload), [])
+        with self.assertRaises(ValueError):
+            parse_category_response(payload)
+
+    def test_parse_missing_nodes_raises(self):
+        payload = json.dumps({"data": {"category": {"mangas": {}}}}).encode("utf-8")
+        with self.assertRaises(ValueError):
+            parse_category_response(payload)
+
+    def test_parse_invalid_mangas_type_raises(self):
+        payload = json.dumps({"data": {"category": {"mangas": "not_a_dict"}}}).encode("utf-8")
+        with self.assertRaises(ValueError):
+            parse_category_response(payload)
+
+    def test_parse_invalid_nodes_type_raises(self):
+        payload = json.dumps({"data": {"category": {"mangas": {"nodes": "not_a_list"}}}}).encode("utf-8")
+        with self.assertRaises(ValueError):
+            parse_category_response(payload)
+
+    def test_cache_state_on_malformed_category(self):
+        # 1. Cold cache with malformed mangas raises CacheColdError and stays unknown
+        class MalformedMangaCache(ReadingIdCache):
+            def _fetch_upstream(self):
+                return parse_category_response(json.dumps({"data": {"category": {"mangas": None}}}).encode("utf-8"))
+
+        cache = MalformedMangaCache()
+        with self.assertRaises(CacheColdError):
+            cache.get_reading_ids()
+        self.assertEqual(cache._state, "unknown")
+        self.assertIsNone(cache._snapshot)
+
+        # 2. Warm cache with malformed nodes preserves previous snapshot and does not mark ready with empty
+        class MalformedNodeCache(ReadingIdCache):
+            def __init__(self):
+                super().__init__(ttl=0.01)
+                self.calls = 0
+
+            def _fetch_upstream(self):
+                self.calls += 1
+                if self.calls == 1:
+                    return [42]
+                return parse_category_response(json.dumps({"data": {"category": {"mangas": {"nodes": None}}}}).encode("utf-8"))
+
+        warm_cache = MalformedNodeCache()
+        self.assertEqual(warm_cache.get_reading_ids(), [42])
+        time.sleep(0.02)
+        # Second call fails upstream parse, retains stale snapshot [42]
+        self.assertEqual(warm_cache.get_reading_ids(), [42])
+        self.assertEqual(warm_cache._snapshot, [42])
 
     def test_parse_graphql_errors_raises(self):
         payload = json.dumps({
@@ -365,6 +418,53 @@ class TestReadingIdCache(unittest.TestCase):
         self.assertEqual(cache.get_reading_ids(), [])
         self.assertEqual(fetch_count, 1)
 
+    def test_unknown_cache_initialization_does_not_pretend_recent_failure(self):
+        cache = ReadingIdCache()
+        self.assertIsNone(cache._last_failure)
+        self.assertIsNone(cache._last_success)
+        self.assertEqual(cache._state, "unknown")
+
+    def test_stale_reader_race_proves_single_fetch_with_under_lock_double_check(self):
+        fetch_count = 0
+        follower_paused = threading.Event()
+        resume_follower = threading.Event()
+        main_thread = threading.current_thread()
+
+        class RaceCache(ReadingIdCache):
+            def _fetch_upstream(self):
+                nonlocal fetch_count
+                fetch_count += 1
+                return [101]
+
+            def _do_refresh(self, force=False):
+                if not force and threading.current_thread() != main_thread:
+                    follower_paused.set()
+                    resume_follower.wait(timeout=5.0)
+                return super()._do_refresh(force=force)
+
+        cache = RaceCache(ttl=30.0)
+        follower_res = []
+
+        def follower_worker():
+            follower_res.append(cache.get_reading_ids())
+
+        t = threading.Thread(target=follower_worker)
+        t.start()
+
+        # Wait until follower has passed freshness check and is paused right at _do_refresh entry
+        self.assertTrue(follower_paused.wait(timeout=2.0))
+
+        # Main thread explicitly refreshes and fills cache
+        cache.refresh()
+        self.assertEqual(fetch_count, 1)
+
+        # Unpause follower: under-lock double check must see fresh cache and return [101] without fetch
+        resume_follower.set()
+        t.join(timeout=2.0)
+
+        self.assertEqual(follower_res, [[101]])
+        self.assertEqual(fetch_count, 1)
+
 
 class TestQueryTransformation(unittest.TestCase):
     """Test recognized query heuristic and query rewriting logic."""
@@ -404,7 +504,8 @@ class TestQueryTransformation(unittest.TestCase):
         flt = parsed["variables"]["filter"]
         self.assertEqual(flt["inLibrary"], {"equalTo": True})
         self.assertEqual(flt["isRead"], {"equalTo": False})
-        self.assertEqual(flt["mangaId"], {"in": []})
+        self.assertEqual(flt["mangaId"], {"equalTo": 0, "notEqualTo": 0})
+        self.assertNotIn("in", flt["mangaId"])
 
     def test_transform_malformed_inputs_raise_payload_error(self):
         with self.assertRaises(FilterPayloadError):
@@ -547,7 +648,8 @@ class TestHttpHandlerIntegration(unittest.TestCase):
         self.assertEqual(flt["order"], "DESC")
         self.assertEqual(flt["inLibrary"], {"equalTo": True})
         self.assertEqual(flt["isRead"], {"equalTo": False})
-        self.assertEqual(flt["mangaId"], {"in": []})
+        self.assertEqual(flt["mangaId"], {"equalTo": 0, "notEqualTo": 0})
+        self.assertNotIn("in", flt["mangaId"])
 
     def test_post_recognized_cold_failure_returns_controlled_503(self):
         # Upstream fails category query
@@ -588,6 +690,42 @@ class TestHttpHandlerIntegration(unittest.TestCase):
 
         err_data = json.loads(body.decode("utf-8"))
         self.assertEqual(err_data["errors"][0]["message"], "Invalid GraphQL request payload")
+
+    def test_post_recognized_malformed_cold_upstream_returns_400_without_category_fetch(self):
+        category_fetches = 0
+        feed_forwards = 0
+
+        def upstream_post(handler, body):
+            nonlocal category_fetches, feed_forwards
+            if b"category(id: 1)" in body:
+                category_fetches += 1
+                handler.send_response(500)
+                handler.end_headers()
+                return
+            feed_forwards += 1
+            handler.send_response(200)
+            handler.end_headers()
+
+        self.upstream_server.server.post_callback = upstream_post
+
+        # Cache is completely cold
+        self.assertIsNone(self.cache._snapshot)
+        self.assertEqual(self.cache._state, "unknown")
+
+        bad_payload = b'{"query": "query GetChapterWithMangaPage", "variables": "not_a_dict"}'
+        conn = http.client.HTTPConnection("127.0.0.1", self.filter_server.port)
+        conn.request("POST", "/suwayomi/api/graphql", body=bad_payload, headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 400)
+        body = resp.read()
+        conn.close()
+
+        err_data = json.loads(body.decode("utf-8"))
+        self.assertEqual(err_data["errors"][0]["message"], "Invalid GraphQL request payload")
+
+        # Proves zero category fetch and zero feed forward occurred
+        self.assertEqual(category_fetches, 0)
+        self.assertEqual(feed_forwards, 0)
 
     def test_headers_stripping_and_uniqueness(self):
         def upstream_get(handler):
