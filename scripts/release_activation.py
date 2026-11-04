@@ -421,6 +421,8 @@ def validate_activation_journal(
 
     # Safe branch for genuinely interrupted pre-snapshot PREPARED transaction:
     if state == STATE_PREPARED and len(flags) == 0:
+        if tx_journal.get("state") != rt.STATE_PREPARED:
+            raise ActivationError("Pre-snapshot activation requires an unchanged PREPARED file transaction")
         return
 
     # Once past pre-snapshot PREPARED, flags keys must strictly match act_services

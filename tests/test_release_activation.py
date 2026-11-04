@@ -769,6 +769,26 @@ class TestReleaseActivation(unittest.TestCase):
         auth_after = (live / "home/.local/lib/mobile-server/auth.py").read_text(encoding="utf-8")
         self.assertEqual(auth_cand, auth_after)
 
+    def test_presnapshot_claim_cannot_bypass_applied_file_transaction(self):
+        """A corrupt empty snapshot must not bypass quiescence for published files."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
+        driver = FakeLifecycleDriver()
+        ra.apply(bundle, preconds, tx_dir, live, driver=driver)
+        journal = ra.load_activation_journal(tx_dir)
+        journal.update(state=ra.STATE_PREPARED, flags={})
+        ra.save_activation_journal(tx_dir, journal)
+        auth_path = live / "home/.local/lib/mobile-server/auth.py"
+        candidate_bytes = auth_path.read_bytes()
+        driver.events.clear()
+
+        for operation in (ra.rollback, ra.recover):
+            with self.subTest(operation=operation.__name__):
+                with self.assertRaisesRegex(ra.ActivationError, "PREPARED file transaction"):
+                    operation(tx_dir, live, driver=driver)
+                self.assertEqual(auth_path.read_bytes(), candidate_bytes)
+                self.assertEqual(driver.events, [])
+                self.assertEqual(ra.rt.ReleaseTransaction(tx_dir).load_journal()["state"], ra.rt.STATE_COMMITTED)
+
     def test_root_probe_2_post_success_explicit_rollback_recreates_guard_coherently(self):
         bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
         driver = FakeLifecycleDriver()
