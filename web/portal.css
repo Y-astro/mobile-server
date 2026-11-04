@@ -103,6 +103,23 @@ body {
   overflow-x: hidden;
 }
 
+/* --- Base Element Resets --- */
+button,
+input[type="button"],
+input[type="submit"],
+input[type="reset"] {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 /* --- Typography Hierarchy (System/Roboto Sans Stack, Sentence Case) --- */
 h1, h2, h3, h4, .m3-title {
   font-family: Roboto, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif;
@@ -463,8 +480,9 @@ h3 {
   border-color: var(--md-sys-color-primary);
 }
 
-/* Touch Targets for Small / Icon / Text Controls */
+/* Touch Targets for Small / Icon / Text Controls (Strict 48x48 min) */
 .touch-target,
+#header-local-ip,
 button[onclick="closeConverterModal()"],
 button[onclick="handleLogout()"],
 .notes-toolbar-btn {
@@ -473,6 +491,20 @@ button[onclick="handleLogout()"],
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
+}
+
+#header-local-ip {
+  padding: 0 4px;
+}
+
+button[onclick="closeConverterModal()"] {
+  color: var(--md-sys-color-outline);
+  border-radius: var(--md-shape-corner-medium);
+}
+button[onclick="closeConverterModal()"]:hover {
+  color: var(--md-sys-color-on-surface);
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 /* --- Material 3 Switch (Authentic toggle with 48px hit area) --- */
@@ -656,4 +688,14 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
 }
 .animate-spin {
   animation: spin 1s linear infinite;
+}
+
+/* Accessibility: Respect Reduced Motion Preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

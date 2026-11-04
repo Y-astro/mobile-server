@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const assert = require('node:assert/strict');
 const { chromium } = require('@playwright/test');
 
@@ -18,18 +19,45 @@ const { chromium } = require('@playwright/test');
   const portalPollingJs = fs.readFileSync(path.join(rootDir, 'web/portal-polling.js'), 'utf8');
   const laptopJs = fs.readFileSync(path.join(rootDir, 'web/laptop.js'), 'utf8');
 
-  const fullServices = [
-    { id: 'filebrowser', name: 'Cloud Storage & Media', category: 'Storage & Media', running: true, ondemand: false, pid: 1234, rss_mb: 24.5, status_badge: 'Active (24.5 MB)', port: 8085, open_url: '/drive/', open_label: 'Master Drive', can_toggle: true, memory_complete: true },
-    { id: 'suwayomi', name: 'Manga Reader & Server', category: 'Media & Reading', running: true, ondemand: false, pid: 1400, rss_mb: 120.0, status_badge: 'Active (120 MB)', port: 4567, open_url: '/suwayomi/', open_label: 'Reader GUI', unread_updates: 3, can_toggle: true, memory_complete: true },
-    { id: 'vaultwarden', name: 'Password Vault (Bitwarden)', category: 'Security & Auth', running: false, ondemand: false, pid: null, rss_mb: null, status_badge: 'Disabled', port: 8082, open_url: 'javascript:openVaultHTTPS()', open_label: 'HTTPS Portal', can_toggle: true, memory_complete: true },
-    { id: 'adguard', name: 'AdGuard Home DNS', category: 'Network Protection', running: true, ondemand: false, pid: 1550, rss_mb: 45.2, status_badge: 'Active (45.2 MB)', port: 3000, open_url: 'http://100.75.159.53:3000', open_label: 'DNS Dashboard', can_toggle: false, memory_complete: true },
-    { id: 'terminal', name: 'Termux Web Terminal', category: 'System Shell', running: false, ondemand: false, pid: null, rss_mb: null, status_badge: 'Disabled', port: 8080, open_url: '/termux/', open_label: 'Terminal Shell', can_toggle: true, memory_complete: true },
-    { id: 'agy', name: 'Autonomous Coding Agent', category: 'AI & Developer', running: true, ondemand: false, pid: 1800, rss_mb: 85.0, status_badge: 'Active (85 MB)', port: 8086, open_url: '/agy/', open_label: 'Agent Workspace', can_toggle: false, memory_complete: true },
-    { id: 'converter', name: 'Document to PDF Converter', category: 'Document Tools', running: false, ondemand: false, pid: null, rss_mb: null, status_badge: 'Tool Ready', port: null, open_url: 'javascript:openConverterModal()', open_label: 'Convert File', can_toggle: false, memory_complete: true },
-    { id: 'syncthing', name: 'Continuous File Sync', category: 'Sync & Backup', running: false, ondemand: false, pid: null, rss_mb: null, status_badge: 'Disabled', port: 8384, open_url: 'javascript:openSyncthingGUI()', open_label: 'Sync Console', can_toggle: true, memory_complete: true }
-  ];
+  // Derive pure catalog metadata from app/service_catalog.py
+  const catalogRaw = JSON.parse(
+    execSync('python3 -c "import json, sys; from app.service_catalog import dashboard_services; json.dump(dashboard_services(), sys.stdout)"', {
+      cwd: rootDir,
+      encoding: 'utf8'
+    })
+  );
+
+  const runtimeOverrides = {
+    filebrowser: { running: true, ondemand: false, pid: 1234, rss_mb: 24.5, status_badge: 'Active (24.5 MB)', memory_complete: true },
+    suwayomi: { running: true, ondemand: false, pid: 1400, rss_mb: 120.0, status_badge: 'Active (120 MB)', unread_updates: 3, memory_complete: true },
+    vaultwarden: { running: false, ondemand: false, pid: null, rss_mb: null, status_badge: 'Disabled', memory_complete: true },
+    adguard: { running: true, ondemand: false, pid: 1550, rss_mb: 45.2, status_badge: 'Active (45.2 MB)', memory_complete: true },
+    terminal: { running: false, ondemand: false, pid: null, rss_mb: null, status_badge: 'Disabled', memory_complete: true },
+    agy: { running: true, ondemand: false, pid: 1800, rss_mb: 85.0, status_badge: 'Active (85 MB)', memory_complete: true },
+    converter: { running: false, ondemand: true, pid: null, rss_mb: null, status_badge: 'Idle (0 MB)', memory_complete: true },
+    syncthing: { running: false, ondemand: false, pid: null, rss_mb: null, status_badge: 'Disabled', memory_complete: true },
+    battery_guard: { running: true, ondemand: false, pid: 2100, rss_mb: null, status_badge: 'Active (daemon)', memory_complete: false }
+  };
+
+  const fullServices = Object.keys(catalogRaw).map(id => {
+    return {
+      ...catalogRaw[id],
+      ...(runtimeOverrides[id] || { running: false, ondemand: false, pid: null, rss_mb: null, status_badge: 'Disabled', memory_complete: true })
+    };
+  });
 
   let currentNotes = 'Default note content for M3 testing';
+
+  let torState = {
+    enabled: true,
+    verified_via_tor: true,
+    stale: false,
+    direct_ip: '192.168.1.8',
+    masked_ip: '185.220.101.5',
+    error: null
+  };
+  let vpnToggleRequests = [];
+  let simulateVpnFailure = false;
 
   const server = http.createServer((req, res) => {
     const parsed = new URL(req.url, 'http://127.0.0.1');
@@ -69,23 +97,48 @@ const { chromium } = require('@playwright/test');
       }));
     } else if (pathname === '/api/vpn/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        enabled: true,
-        verified_via_tor: true,
-        stale: false,
-        direct_ip: '192.168.1.8',
-        masked_ip: '185.220.101.5',
-        error: null
-      }));
+      res.end(JSON.stringify(torState));
+    } else if (pathname === '/api/vpn/toggle' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        let parsedBody = null;
+        try { parsedBody = JSON.parse(body); } catch (e) {}
+        vpnToggleRequests.push({
+          headers: req.headers,
+          body: parsedBody
+        });
+        if (simulateVpnFailure) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Tor daemon unavailable' }));
+          return;
+        }
+        const desired = (parsedBody && typeof parsedBody.enabled === 'boolean')
+          ? parsedBody.enabled
+          : !torState.enabled;
+        torState.enabled = desired;
+        torState.verified_via_tor = desired;
+        torState.masked_ip = desired ? '185.220.101.5' : 'unavailable';
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        // NOTE: Truthful state response, no status property
+        res.end(JSON.stringify({
+          enabled: torState.enabled,
+          verified_via_tor: torState.verified_via_tor,
+          stale: false,
+          direct_ip: torState.direct_ip,
+          masked_ip: torState.masked_ip,
+          error: null
+        }));
+      });
     } else if (pathname === '/api/services') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         services: fullServices,
         active_memory_mb: 274.7,
         total_active_mem_mb: 274.7,
-        memory_complete: true,
+        memory_complete: false,
         estimated_saved_mem_mb: 320,
-        sleeping_count: 3
+        sleeping_count: 4
       }));
     } else if (pathname === '/api/agy/sessions') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -119,8 +172,19 @@ const { chromium } = require('@playwright/test');
         res.end(JSON.stringify({ notes: currentNotes }));
       }
     } else if (pathname === '/api/login' && req.method === 'POST') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', user: 'astro', role: 'admin', jwt: 'mock-jwt-token', redirect: '/admin' }));
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        let creds = {};
+        try { creds = JSON.parse(body); } catch (e) {}
+        if (creds.username === 'wrong' || creds.password === 'badpassword') {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'error', message: 'Invalid credentials provided' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', user: 'astro', role: 'admin', jwt: 'mock-jwt-token', redirect: '/admin' }));
+      });
     } else if (pathname === '/api/logout' && req.method === 'POST') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'logged_out' }));
@@ -154,7 +218,7 @@ const { chromium } = require('@playwright/test');
     await desktopPage.waitForFunction(() => {
       const memEl = document.getElementById('svc-active-mem');
       const gridEl = document.getElementById('services-grid');
-      return memEl && memEl.textContent.includes('274.7 MB') && gridEl && gridEl.children.length >= 8;
+      return memEl && memEl.textContent.includes('274.7 MB') && gridEl && gridEl.children.length === 9;
     });
 
     // 1. Verify computed Material 3 theme colors
@@ -189,21 +253,96 @@ const { chromium } = require('@playwright/test');
     assert(!typography.batteryFont.includes('Georgia') && !typography.batteryFont.includes('Times'), 'Battery numerals must NOT use Georgia/Times');
     assert(!typography.ramFont.includes('Georgia') && !typography.ramFont.includes('Times'), 'RAM numerals must NOT use Georgia/Times');
 
-    // 3. Verify No Horizontal Overflow on Desktop
+    // 3. Verify actual computed text/action contrast on representative rendered pairs
+    console.log('Checking computed contrast ratios on rendered elements...');
+    const contrastChecks = await desktopPage.evaluate(() => {
+      function luminance(r, g, b) {
+        const a = [r, g, b].map(v => {
+          v /= 255;
+          return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return a[0] * 0.2126 + a[1] * 0.7152 + a[2] * 0.0722;
+      }
+      function parseRgb(str) {
+        const m = str.match(/\d+(\.\d+)?/g);
+        return m ? [parseFloat(m[0]), parseFloat(m[1]), parseFloat(m[2])] : [0, 0, 0];
+      }
+      function getRatio(c1, c2) {
+        const [r1, g1, b1] = parseRgb(c1);
+        const [r2, g2, b2] = parseRgb(c2);
+        const l1 = luminance(r1, g1, b1);
+        const l2 = luminance(r2, g2, b2);
+        return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+      }
+
+      const pairs = [];
+      const vpnBtn = document.getElementById('vpn-toggle-btn');
+      if (vpnBtn) {
+        const s = window.getComputedStyle(vpnBtn);
+        pairs.push({ name: 'Primary Button', fg: s.color, bg: s.backgroundColor, ratio: getRatio(s.color, s.backgroundColor), min: 4.5 });
+      }
+      const card = document.querySelector('#services-grid .m3-card');
+      if (card) {
+        const cardBg = window.getComputedStyle(card).backgroundColor;
+        const h3 = card.querySelector('h3');
+        if (h3) {
+          const s = window.getComputedStyle(h3);
+          pairs.push({ name: 'Card Title vs Card Bg', fg: s.color, bg: cardBg, ratio: getRatio(s.color, cardBg), min: 4.5 });
+        }
+        const p = card.querySelector('p');
+        if (p) {
+          const s = window.getComputedStyle(p);
+          pairs.push({ name: 'Card Desc vs Card Bg', fg: s.color, bg: cardBg, ratio: getRatio(s.color, cardBg), min: 4.5 });
+        }
+      }
+      const tonalBtn = document.querySelector('.m3-btn-tonal');
+      if (tonalBtn) {
+        const s = window.getComputedStyle(tonalBtn);
+        pairs.push({ name: 'Tonal Button', fg: s.color, bg: s.backgroundColor, ratio: getRatio(s.color, s.backgroundColor), min: 4.5 });
+      }
+      const goldBadge = document.querySelector('.badge-gold, .badge-accent');
+      if (goldBadge) {
+        const s = window.getComputedStyle(goldBadge);
+        pairs.push({ name: 'Gold Badge', fg: s.color, bg: s.backgroundColor, ratio: getRatio(s.color, s.backgroundColor), min: 4.5 });
+      }
+      return pairs;
+    });
+    console.log('Measured Contrast Ratios:', contrastChecks);
+    for (const item of contrastChecks) {
+      assert(item.ratio >= item.min, `${item.name} contrast ratio ${item.ratio.toFixed(2)} must be >= ${item.min}`);
+    }
+
+    // 4. Verify prefers-reduced-motion in browser
+    console.log('Checking prefers-reduced-motion...');
+    await desktopPage.emulateMedia({ reducedMotion: 'reduce' });
+    const reducedMotionDuration = await desktopPage.evaluate(() => {
+      const dummy = document.createElement('div');
+      dummy.className = 'animate-spin';
+      document.body.appendChild(dummy);
+      const style = window.getComputedStyle(dummy);
+      const dur = style.animationDuration;
+      dummy.remove();
+      return dur;
+    });
+    console.log('Reduced motion animation duration:', reducedMotionDuration);
+    assert(reducedMotionDuration === '0.00001s' || reducedMotionDuration === '0.01ms' || parseFloat(reducedMotionDuration) < 0.001, 'Reduced motion must shorten animation duration');
+    await desktopPage.emulateMedia({ reducedMotion: 'no-preference' });
+
+    // 5. Verify No Horizontal Overflow on Desktop
     const desktopOverflow = await desktopPage.evaluate(() => {
       return document.documentElement.scrollWidth <= document.documentElement.clientWidth;
     });
     assert(desktopOverflow, 'Desktop view must not exhibit horizontal overflow');
 
-    // 4. Verify Interactive Touch Targets (all buttons, links, inputs, switches >= 48px hit area)
-    const targetChecks = await desktopPage.evaluate(() => {
-      const elements = Array.from(document.querySelectorAll('button, a.m3-btn, a.btn-secondary, label.switch, input.m3-text-field'));
+    // 6. Verify Interactive Touch Targets (all visible buttons, links, inputs, switches >= 48px hit area)
+    const desktopTargetChecks = await desktopPage.evaluate(() => {
+      const elements = Array.from(document.querySelectorAll('button, a[href], a#header-local-ip, label.switch, input.m3-text-field'));
       const failures = [];
       for (const el of elements) {
-        if (el.offsetParent === null) continue; // skip hidden
+        if (el.closest('.hidden')) continue;
+        if (el.offsetParent === null && el.offsetWidth === 0 && el.offsetHeight === 0) continue;
         const rect = el.getBoundingClientRect();
-        // check hit area: min dimension 48px or touch target height >= 48px
-        if (rect.height < 44 || rect.width < 44) {
+        if (rect.height < 48 || rect.width < 48) {
           failures.push({
             tag: el.tagName,
             id: el.id,
@@ -215,43 +354,139 @@ const { chromium } = require('@playwright/test');
       }
       return failures;
     });
-    console.log('Touch target deviations count:', targetChecks.length);
-    if (targetChecks.length > 0) {
-      console.warn('Deviating elements:', targetChecks.slice(0, 5));
-    }
-    assert(targetChecks.length === 0, `All interactive controls must meet minimum touch boundary, found ${targetChecks.length} undersized`);
+    console.log('Desktop touch target deviations count (>=48px):', desktopTargetChecks.length);
+    assert(desktopTargetChecks.length === 0, `All interactive controls must meet >=48px touch boundary, found ${desktopTargetChecks.length} undersized: ${JSON.stringify(desktopTargetChecks)}`);
 
-    // 5. Verify Populated Service Grid (8 cards with truthful state chips & action links)
+    // 7. Verify Populated Service Grid (9 cards from catalog, no undefined text)
     const cardCount = await desktopPage.locator('#services-grid .m3-card').count();
-    assert.equal(cardCount, 8, 'Services grid must render all 8 services');
+    assert.equal(cardCount, 9, 'Services grid must render all 9 services from catalog');
+    const gridText = await desktopPage.locator('#services-grid').textContent();
+    assert(!gridText.includes('undefined'), 'Services grid must not contain literal undefined text');
     const activeMemoryBadge = await desktopPage.textContent('#svc-active-mem');
     assert(activeMemoryBadge.includes('274.7 MB'), 'Active memory must reflect 274.7 MB');
 
-    // 6. Verify Keyboard Focus and Modal Dialog Escape Key Handling
-    await desktopPage.locator('a[href="javascript:openConverterModal()"]').click();
+    // 8. Test Tor Toggle: Input-driven verification (click, 1 POST with boolean enabled, no status, truthful state, no spurious alert, re-enabled button, non-success path)
+    console.log('Testing Tor Proxy Toggle (input-driven)...');
+    vpnToggleRequests = [];
+    let dialogAlerts = [];
+    const dialogHandler = async dialog => {
+      dialogAlerts.push(dialog.message());
+      await dialog.dismiss();
+    };
+    desktopPage.on('dialog', dialogHandler);
+
+    const vpnBtn = desktopPage.locator('#vpn-toggle-btn');
+    assert.equal((await vpnBtn.textContent()).trim(), 'Disable Tor Proxy');
+    assert.equal((await desktopPage.textContent('#vpn-badge')).trim(), 'Tor Exit Verified');
+
+    // Click toggle to disable Tor
+    await vpnBtn.click();
+    await desktopPage.waitForFunction(() => {
+      const btn = document.getElementById('vpn-toggle-btn');
+      return btn && !btn.disabled && btn.textContent.includes('Enable Tor Proxy');
+    });
+
+    assert.equal(vpnToggleRequests.length, 1, 'Exactly one POST request to /api/vpn/toggle must occur');
+    assert.equal(vpnToggleRequests[0].body.enabled, false, 'POST body must specify explicit boolean enabled: false');
+    assert(vpnToggleRequests[0].headers['content-type'].includes('application/json'), 'Content-Type must be application/json');
+    assert.equal(dialogAlerts.length, 0, 'No spurious alert must be shown on successful toggle');
+    assert.equal(await desktopPage.textContent('#vpn-badge'), 'OFF');
+
+    // Test controlled non-success path
+    simulateVpnFailure = true;
+    dialogAlerts = [];
+    await vpnBtn.click();
+    await desktopPage.waitForFunction(() => {
+      const btn = document.getElementById('vpn-toggle-btn');
+      return btn && !btn.disabled;
+    });
+    assert.equal(dialogAlerts.length, 1, 'Controlled non-success path must trigger exactly one alert');
+    assert(dialogAlerts[0].includes('Tor daemon unavailable') || dialogAlerts[0].includes('Tor control failed'));
+    simulateVpnFailure = false;
+    desktopPage.off('dialog', dialogHandler);
+
+    // 9. Converter Modal Keyboard Focus Trap, Dynamic Elements & Escape Handling
+    console.log('Testing Converter Modal Focus Containment & Traversal...');
+    const opener = desktopPage.locator('a[href="javascript:openConverterModal()"]');
+    await opener.focus();
+    await opener.click();
     assert(await desktopPage.locator('#converter-modal').isVisible(), 'Converter modal must open');
-    // Press Escape to dismiss
+
+    // Verify initial focus is inside modal
+    const initialFocusInside = await desktopPage.evaluate(() => {
+      const modal = document.getElementById('converter-modal');
+      return modal && modal.contains(document.activeElement);
+    });
+    assert(initialFocusInside, 'Focus must be placed inside modal upon opening');
+
+    // Traverse Tab forward
+    for (let i = 0; i < 5; i++) {
+      await desktopPage.keyboard.press('Tab');
+      const inside = await desktopPage.evaluate(() => {
+        const modal = document.getElementById('converter-modal');
+        return modal && modal.contains(document.activeElement);
+      });
+      assert(inside, `Tab step ${i} escaped converter modal focus trap`);
+    }
+
+    // Traverse Shift+Tab backward
+    for (let i = 0; i < 5; i++) {
+      await desktopPage.keyboard.press('Shift+Tab');
+      const inside = await desktopPage.evaluate(() => {
+        const modal = document.getElementById('converter-modal');
+        return modal && modal.contains(document.activeElement);
+      });
+      assert(inside, `Shift+Tab step ${i} escaped converter modal focus trap`);
+    }
+
+    // Verify touch targets on visible modal controls (>=48px)
+    const modalTargetChecks = await desktopPage.evaluate(() => {
+      const modal = document.getElementById('converter-modal');
+      const elements = Array.from(modal.querySelectorAll('button, a[href], label'));
+      const failures = [];
+      for (const el of elements) {
+        if (el.closest('.hidden')) continue;
+        if (el.offsetParent === null && el.offsetWidth === 0 && el.offsetHeight === 0) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.height < 48 || rect.width < 48) {
+          failures.push({
+            tag: el.tagName,
+            id: el.id,
+            text: el.textContent.trim().slice(0, 20),
+            w: Math.round(rect.width),
+            h: Math.round(rect.height)
+          });
+        }
+      }
+      return failures;
+    });
+    assert(modalTargetChecks.length === 0, `All modal controls must meet >=48px touch boundary: ${JSON.stringify(modalTargetChecks)}`);
+
+    // Capture Dialog Screenshot
+    const dialogScreenshot = path.join(sddDir, 'm3-dialog-desktop.png');
+    await desktopPage.screenshot({ path: dialogScreenshot });
+    console.log('Saved screenshot:', dialogScreenshot, `(${fs.statSync(dialogScreenshot).size} bytes)`);
+
+    // Press Escape to dismiss and verify focus restoration to opener
     await desktopPage.keyboard.press('Escape');
     await desktopPage.waitForTimeout(200);
     assert(await desktopPage.locator('#converter-modal').isHidden(), 'Converter modal must dismiss on Escape key');
+    const restoredToOpener = await desktopPage.evaluate(() => {
+      const op = document.querySelector('a[href="javascript:openConverterModal()"]');
+      return document.activeElement === op;
+    });
+    assert(restoredToOpener, 'Focus must be restored to actual opener after Escape dismissal');
 
     // Capture screenshot: Desktop Admin
     const desktopAdminScreenshot = path.join(sddDir, 'm3-admin-desktop.png');
     await desktopPage.screenshot({ path: desktopAdminScreenshot, fullPage: true });
     console.log('Saved screenshot:', desktopAdminScreenshot, `(${fs.statSync(desktopAdminScreenshot).size} bytes)`);
-
-    // Reopen modal to capture Dialog Screenshot
-    await desktopPage.locator('a[href="javascript:openConverterModal()"]').click();
-    const dialogScreenshot = path.join(sddDir, 'm3-dialog-desktop.png');
-    await desktopPage.screenshot({ path: dialogScreenshot });
-    console.log('Saved screenshot:', dialogScreenshot, `(${fs.statSync(dialogScreenshot).size} bytes)`);
-    await desktopPage.keyboard.press('Escape');
     await desktopPage.close();
 
     // -------------------------------------------------------------
-    // PASS 2: MOBILE ADMIN (412x915 & 360x800)
+    // PASS 2: MOBILE ADMIN (412x915 & 390x844 & 360x800)
     // -------------------------------------------------------------
-    console.log('--- TEST PASS 2: Mobile Admin (412x915 Redmi K20 Pro) ---');
+    console.log('--- TEST PASS 2: Mobile Admin (412x915, 390x844, 360x800) ---');
     const mobileAdminPage = await context.newPage();
     await mobileAdminPage.setViewportSize({ width: 412, height: 915 });
     await mobileAdminPage.goto(`${baseUrl}/admin`);
@@ -261,30 +496,48 @@ const { chromium } = require('@playwright/test');
       return memEl && memEl.textContent.includes('274.7 MB');
     });
 
-    const overflowData = await mobileAdminPage.evaluate(() => {
-      const sw = document.documentElement.scrollWidth;
-      const cw = document.documentElement.clientWidth;
-      const list = [];
-      document.querySelectorAll('*').forEach(el => {
-        const r = el.getBoundingClientRect();
-        if (r.right > cw + 1) {
-          list.push({ tag: el.tagName, id: el.id, cls: el.className, right: Math.round(r.right), width: Math.round(r.width) });
-        }
-      });
-      return { sw, cw, list };
+    const overflow412 = await mobileAdminPage.evaluate(() => {
+      return document.documentElement.scrollWidth <= document.documentElement.clientWidth;
     });
-    console.log('Mobile 412px scrollWidth vs clientWidth:', overflowData.sw, overflowData.cw);
-    console.log('Overflowing elements:', overflowData.list);
-    assert(overflowData.sw <= overflowData.cw, 'Mobile 412px view must not exhibit horizontal overflow');
+    assert(overflow412, 'Mobile 412px view must not exhibit horizontal overflow');
 
-    // Also test narrow 360px viewport
+    // Verify 390px mobile view: no horizontal overflow, touch targets >= 48px
+    await mobileAdminPage.setViewportSize({ width: 390, height: 844 });
+    const overflow390 = await mobileAdminPage.evaluate(() => {
+      return document.documentElement.scrollWidth <= document.documentElement.clientWidth;
+    });
+    assert(overflow390, 'Mobile 390px view must not exhibit horizontal overflow');
+
+    const mobile390Targets = await mobileAdminPage.evaluate(() => {
+      const elements = Array.from(document.querySelectorAll('button, a[href], a#header-local-ip, label.switch, input.m3-text-field'));
+      const failures = [];
+      for (const el of elements) {
+        if (el.closest('.hidden')) continue;
+        if (el.offsetParent === null && el.offsetWidth === 0 && el.offsetHeight === 0) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.height < 48 || rect.width < 48) {
+          failures.push({
+            tag: el.tagName,
+            id: el.id,
+            text: el.textContent.trim().slice(0, 20),
+            w: Math.round(rect.width),
+            h: Math.round(rect.height)
+          });
+        }
+      }
+      return failures;
+    });
+    console.log('Mobile 390px touch target deviations count (>=48px):', mobile390Targets.length);
+    assert(mobile390Targets.length === 0, `All interactive controls at 390px must meet >=48px hit area: ${JSON.stringify(mobile390Targets)}`);
+
+    // Verify 360px viewport
     await mobileAdminPage.setViewportSize({ width: 360, height: 800 });
     const narrowAdminOverflow = await mobileAdminPage.evaluate(() => {
       return document.documentElement.scrollWidth <= document.documentElement.clientWidth;
     });
     assert(narrowAdminOverflow, 'Mobile 360px view must not exhibit horizontal overflow');
 
-    // Reset to 412px for screenshot
+    // Reset to 412px for official screenshot
     await mobileAdminPage.setViewportSize({ width: 412, height: 915 });
     const mobileAdminScreenshot = path.join(sddDir, 'm3-admin-mobile.png');
     await mobileAdminPage.screenshot({ path: mobileAdminScreenshot, fullPage: true });
@@ -292,7 +545,7 @@ const { chromium } = require('@playwright/test');
     await mobileAdminPage.close();
 
     // -------------------------------------------------------------
-    // PASS 3: MOBILE FAMILY (412x915) & MOBILE LOGIN (412x915)
+    // PASS 3: MOBILE FAMILY (412x915)
     // -------------------------------------------------------------
     console.log('--- TEST PASS 3: Mobile Family (412x915) ---');
     const familyPage = await context.newPage();
@@ -307,25 +560,47 @@ const { chromium } = require('@playwright/test');
     // Check 5 family service cards
     const familyCards = await familyPage.locator('.family-services-grid .m3-card').count();
     assert.equal(familyCards, 5, 'Family page must render exactly 5 service cards');
+    const familyText = await familyPage.locator('.family-services-grid').textContent();
+    assert(!familyText.includes('undefined'), 'Family grid must not contain literal undefined text');
 
-    // Check Quick Notes toolbar buttons meeting touch target
+    // Check Quick Notes toolbar buttons meeting >=48px touch target
     const bulletBtnRect = await familyPage.locator('button[onclick="insertBulletList()"]').boundingBox();
-    assert(bulletBtnRect.height >= 44 && bulletBtnRect.width >= 44, 'Bullet list button must satisfy touch target boundary');
+    assert(bulletBtnRect.height >= 48 && bulletBtnRect.width >= 48, `Bullet list button must be >= 48px, got ${bulletBtnRect.width}x${bulletBtnRect.height}`);
 
-    // Test notes edit and autosave
+    // Test notes edit and autosave with corrected waitForFunction signature (fn, undefined, options)
     await familyPage.locator('#user-notes-input').fill('Updated notes in family M3 test');
     await familyPage.waitForFunction(() => {
       const st = document.getElementById('notes-status');
       return st && st.textContent.includes('Saved');
-    }, { timeout: 3000 });
+    }, undefined, { timeout: 3000 });
     assert.equal(currentNotes, 'Updated notes in family M3 test');
+
+    // Verify converter modal keyboard focus trap & Escape on family page
+    const familyConverterOpener = familyPage.locator('button[onclick="openConverterModal()"]');
+    await familyConverterOpener.focus();
+    await familyConverterOpener.click();
+    assert(await familyPage.locator('#converter-modal').isVisible(), 'Family converter modal must open');
+
+    for (let i = 0; i < 4; i++) {
+      await familyPage.keyboard.press('Tab');
+      const inside = await familyPage.evaluate(() => {
+        const m = document.getElementById('converter-modal');
+        return m && m.contains(document.activeElement);
+      });
+      assert(inside, 'Tab in family converter modal must remain trapped');
+    }
+    await familyPage.keyboard.press('Escape');
+    await familyPage.waitForTimeout(200);
+    assert(await familyPage.locator('#converter-modal').isHidden(), 'Family converter modal must dismiss on Escape');
 
     const mobileFamilyScreenshot = path.join(sddDir, 'm3-family-mobile.png');
     await familyPage.screenshot({ path: mobileFamilyScreenshot, fullPage: true });
     console.log('Saved screenshot:', mobileFamilyScreenshot, `(${fs.statSync(mobileFamilyScreenshot).size} bytes)`);
     await familyPage.close();
 
-    // Mobile Login Check
+    // -------------------------------------------------------------
+    // PASS 4: MOBILE LOGIN (412x915) & ERROR LAYOUT
+    // -------------------------------------------------------------
     console.log('--- TEST PASS 4: Mobile Login (412x915) ---');
     const loginPage = await context.newPage();
     await loginPage.setViewportSize({ width: 412, height: 915 });
@@ -340,13 +615,55 @@ const { chromium } = require('@playwright/test');
     const passBox = await loginPage.locator('#password').boundingBox();
     const submitBox = await loginPage.locator('#submit-btn').boundingBox();
 
-    assert(userBox.height >= 44, `Username field height must be >= 44px, got ${userBox.height}`);
-    assert(passBox.height >= 44, `Password field height must be >= 44px, got ${passBox.height}`);
-    assert(submitBox.height >= 44, `Submit button height must be >= 44px, got ${submitBox.height}`);
+    assert(userBox.height >= 48, `Username field height must be >= 48px, got ${userBox.height}`);
+    assert(passBox.height >= 48, `Password field height must be >= 48px, got ${passBox.height}`);
+    assert(submitBox.height >= 48, `Submit button height must be >= 48px, got ${submitBox.height}`);
 
     const mobileLoginScreenshot = path.join(sddDir, 'm3-login-mobile.png');
     await loginPage.screenshot({ path: mobileLoginScreenshot, fullPage: true });
     console.log('Saved screenshot:', mobileLoginScreenshot, `(${fs.statSync(mobileLoginScreenshot).size} bytes)`);
+
+    // Trigger synthetic login error and check visible layout
+    console.log('Triggering synthetic login error...');
+    await loginPage.fill('#username', 'wrong');
+    await loginPage.fill('#password', 'badpassword');
+    await loginPage.click('#submit-btn');
+
+    await loginPage.waitForSelector('#error-msg:not(.hidden)');
+    const errText = await loginPage.textContent('#error-msg');
+    assert.equal(errText, 'Invalid credentials provided');
+
+    const errBox = await loginPage.locator('#error-msg').boundingBox();
+    assert(errBox.width > 200 && errBox.height >= 20, 'Login error must have visible layout');
+
+    // Verify error contrast ratio
+    const errContrast = await loginPage.evaluate(() => {
+      function luminance(r, g, b) {
+        const a = [r, g, b].map(v => {
+          v /= 255;
+          return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return a[0] * 0.2126 + a[1] * 0.7152 + a[2] * 0.0722;
+      }
+      function parseRgb(str) {
+        const m = str.match(/\d+(\.\d+)?/g);
+        return m ? [parseFloat(m[0]), parseFloat(m[1]), parseFloat(m[2])] : [0, 0, 0];
+      }
+      const el = document.getElementById('error-msg');
+      const s = window.getComputedStyle(el);
+      const [r1, g1, b1] = parseRgb(s.color);
+      const l1 = luminance(r1, g1, b1);
+      // Dark card surface backdrop
+      const l2 = luminance(29, 34, 35);
+      return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+    });
+    console.log('Login error computed contrast ratio:', errContrast.toFixed(2));
+    assert(errContrast >= 4.5, `Error message contrast ratio ${errContrast.toFixed(2)} must be >= 4.5`);
+
+    const loginErrorScreenshot = path.join(sddDir, 'm3-login-error-mobile.png');
+    await loginPage.screenshot({ path: loginErrorScreenshot, fullPage: true });
+    console.log('Saved screenshot:', loginErrorScreenshot, `(${fs.statSync(loginErrorScreenshot).size} bytes)`);
+
     await loginPage.close();
 
     console.log('====================================================');
