@@ -711,17 +711,33 @@ def validate_journal(journal: Any, transaction_dir: Path) -> None:
                 raise TransactionError(f"Unexpected staged_file in UNTOUCHED entry for {remote}")
 
 
+# Exact audited destination mode overrides
+AUDITED_TARGET_MODE_OVERRIDES: Dict[str, int] = {
+    "/data/data/com.termux/files/usr/var/lib/proot-distro/containers/debian/rootfs/usr/local/bin/agy-runner-loop": 0o700,
+    "/data/data/com.termux/files/home/bin/agy_session.sh": 0o755,
+    "/data/data/com.termux/files/home/bin/start_suwayomi.sh": 0o755,
+    "/data/data/com.termux/files/home/bin/suwayomi_daily_update.py": 0o755,
+    "/data/data/com.termux/files/home/bin/suwayomi_graphql_filter.py": 0o755,
+    "/data/data/com.termux/files/home/bin/suwayomi_update.sh": 0o755,
+    "/data/data/com.termux/files/home/bin/termux_session.sh": 0o755,
+    "/data/data/com.termux/files/home/.config/ttyd/termux_index.html": 0o644,
+}
+
+
 def get_canonical_target_mode(remote_path: str) -> int:
     """
     Derive canonical owned mode from destination path:
+    - checked first against AUDITED_TARGET_MODE_OVERRIDES for captured live exceptions
     - dashboard executable: 0700
     - gateway executable: 0700
-    - only agy-runner-loop: 0755
+    - only agy-runner-loop: 0755 (fallback unanchored path)
     - ordinary scripts (usr/bin/, home/bin/, start-services.sh): 0700
     - Python helper modules (home/.local/lib/mobile-server/): 0600
     - web/config assets (home/.config/, web/, static/): 0600
     """
     norm = remote_path.replace("\\", "/")
+    if norm in AUDITED_TARGET_MODE_OVERRIDES:
+        return AUDITED_TARGET_MODE_OVERRIDES[norm]
     if norm.endswith("/usr/bin/dashboard"):
         return 0o700
     if norm.endswith("/home/bin/mobile-gateway"):

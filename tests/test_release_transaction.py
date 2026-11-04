@@ -161,18 +161,8 @@ class TestReleaseTransaction(unittest.TestCase):
             live_file = live_dir / rel_str
             live_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # Determine mode from explicit policy
-            norm_remote = remote.replace("\\", "/")
-            if norm_remote.endswith("/usr/bin/dashboard") or norm_remote.endswith("/home/bin/mobile-gateway"):
-                target_mode = 0o700
-            elif norm_remote.endswith("/home/bin/agy-runner-loop") or norm_remote.endswith("/usr/local/bin/agy-runner-loop"):
-                target_mode = 0o755
-            elif "/home/.local/lib/mobile-server/" in norm_remote:
-                target_mode = 0o600
-            elif "/usr/bin/" in norm_remote or "/home/bin/" in norm_remote or norm_remote.endswith("/start-services.sh") or norm_remote.endswith("/start_services.sh"):
-                target_mode = 0o700
-            else:
-                target_mode = 0o600
+            # Determine mode from explicit canonical policy
+            target_mode = rt.get_canonical_target_mode(remote)
 
             if entry["local"] == "app/auth.py" and modify_auth_in_candidate:
                 # Preimage auth.py has original content differing from candidate
@@ -735,17 +725,24 @@ class TestReleaseTransaction(unittest.TestCase):
             ("/data/data/com.termux/files/usr/bin/dashboard", 0o700),
             ("/data/data/com.termux/files/home/bin/mobile-gateway", 0o700),
             ("/data/data/com.termux/files/home/bin/agy-runner-loop", 0o755),
+            # Audited PRoot container destination: 0700 mode confirmed on live debian rootfs
+            ("/data/data/com.termux/files/usr/var/lib/proot-distro/containers/debian/rootfs/usr/local/bin/agy-runner-loop", 0o700),
+            # Unanchored fallback path remains 0755
             ("/data/data/com.termux/files/usr/local/bin/agy-runner-loop", 0o755),
             ("/data/data/com.termux/files/home/bin/server_supervisor.py", 0o700),
             ("/data/data/com.termux/files/home/bin/battery_guard.sh", 0o700),
-            ("/data/data/com.termux/files/home/bin/agy_session.sh", 0o700),
-            ("/data/data/com.termux/files/home/bin/termux_session.sh", 0o700),
-            ("/data/data/com.termux/files/home/bin/start_suwayomi.sh", 0o700),
-            ("/data/data/com.termux/files/home/bin/suwayomi_daily_update.py", 0o700),
+            # Audited live service script exceptions: 0755
+            ("/data/data/com.termux/files/home/bin/agy_session.sh", 0o755),
+            ("/data/data/com.termux/files/home/bin/termux_session.sh", 0o755),
+            ("/data/data/com.termux/files/home/bin/start_suwayomi.sh", 0o755),
+            ("/data/data/com.termux/files/home/bin/suwayomi_daily_update.py", 0o755),
+            ("/data/data/com.termux/files/home/bin/suwayomi_graphql_filter.py", 0o755),
+            ("/data/data/com.termux/files/home/bin/suwayomi_update.sh", 0o755),
             ("/data/data/com.termux/files/home/.local/lib/mobile-server/auth.py", 0o600),
             ("/data/data/com.termux/files/home/.local/lib/mobile-server/limits.py", 0o600),
             ("/data/data/com.termux/files/home/.config/caddy/Caddyfile", 0o600),
-            ("/data/data/com.termux/files/home/.config/ttyd/termux_index.html", 0o600),
+            # Audited terminal HTML exception: 0644
+            ("/data/data/com.termux/files/home/.config/ttyd/termux_index.html", 0o644),
             ("/data/data/com.termux/files/home/.config/tor/torrc", 0o600),
             ("/data/data/com.termux/files/web/login.html", 0o600),
             ("/data/data/com.termux/files/web/admin.html", 0o600),
@@ -1133,7 +1130,7 @@ class TestReleaseTransaction(unittest.TestCase):
             self.assertIn("sha256", entry)
             self.assertEqual(len(entry["sha256"]), 64)
             canonical_mode = rt.get_canonical_target_mode(entry["remote"])
-            self.assertIn(canonical_mode, (0o700, 0o600, 0o755))
+            self.assertIn(canonical_mode, (0o700, 0o600, 0o755, 0o644))
 
     def test_boot_alias_raw_target_drift_refused_before_live_writes(self):
         """Proof: Boot alias raw target drift (e.g. ./.termux vs .termux) refuses before live writes."""
@@ -1661,6 +1658,122 @@ class TestReleaseTransaction(unittest.TestCase):
         self.assertEqual((tx_dir / "journal.json").read_bytes(), prior_journal_bytes)
         self.assertEqual((tx_dir / "backups/prior.bak").read_bytes(), prior_backup_bytes)
 
+
+
+    def test_audited_exceptions_byte_identical_untouched(self):
+        """Proof: Byte-identical files for all 8 captured audited exceptions retain mode and inode deriving UNTOUCHED."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        captured_exceptions = {
+            "/data/data/com.termux/files/usr/var/lib/proot-distro/containers/debian/rootfs/usr/local/bin/agy-runner-loop": 0o700,
+            "/data/data/com.termux/files/home/bin/agy_session.sh": 0o755,
+            "/data/data/com.termux/files/home/bin/start_suwayomi.sh": 0o755,
+            "/data/data/com.termux/files/home/bin/suwayomi_daily_update.py": 0o755,
+            "/data/data/com.termux/files/home/bin/suwayomi_graphql_filter.py": 0o755,
+            "/data/data/com.termux/files/home/bin/suwayomi_update.sh": 0o755,
+            "/data/data/com.termux/files/home/bin/termux_session.sh": 0o755,
+            "/data/data/com.termux/files/home/.config/ttyd/termux_index.html": 0o644,
+        }
+
+        # 1. Verify canonical mode policy for all 8 exceptions
+        for remote, expected_mode in captured_exceptions.items():
+            self.assertEqual(
+                rt.get_canonical_target_mode(remote),
+                expected_mode,
+                f"Canonical mode mismatch for {remote}",
+            )
+
+        # 2. Record initial inode numbers of live files
+        inodes_before = {}
+        for remote in captured_exceptions:
+            rel = remote[len(rt.TERMUX_ROOT_PREFIX):].lstrip("/")
+            p = live_dir / rel
+            self.assertTrue(p.exists(), f"Live file missing: {p}")
+            st = p.stat()
+            self.assertEqual(
+                stat.S_IMODE(st.st_mode),
+                captured_exceptions[remote],
+                f"Initial mode mismatch for {remote}",
+            )
+            inodes_before[remote] = st.st_ino
+
+        # 3. Prepare transaction with byte-identical files
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            namespace_root=live_dir,
+            transaction_dir=tx_dir,
+        )
+
+        journal_doc = json.loads(tx.journal_path.read_text(encoding="utf-8"))
+        entries_by_remote = {e["remote"]: e for e in journal_doc["entries"]}
+        for remote in captured_exceptions:
+            entry = entries_by_remote[remote]
+            self.assertEqual(
+                entry["action"],
+                rt.ACTION_UNTOUCHED,
+                f"Expected UNTOUCHED for byte-identical {remote}, got {entry['action']}",
+            )
+            self.assertEqual(
+                rt.normalize_mode(entry["target_mode"]),
+                captured_exceptions[remote],
+            )
+
+        # Apply transaction and verify inodes unchanged
+        rt.apply(tx.transaction_dir, namespace_root=live_dir)
+
+        for remote in captured_exceptions:
+            rel = remote[len(rt.TERMUX_ROOT_PREFIX):].lstrip("/")
+            p = live_dir / rel
+            st = p.stat()
+            self.assertEqual(
+                st.st_ino,
+                inodes_before[remote],
+                f"Inode changed for untouched file {remote}",
+            )
+            self.assertEqual(
+                stat.S_IMODE(st.st_mode),
+                captured_exceptions[remote],
+            )
+
+    def test_audited_exceptions_altered_bytes_derive_replace(self):
+        """Proof: Altered bytes on captured exception scripts derive ACTION_REPLACE."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+        test_script_rel = "scripts/start_suwayomi.sh"
+        test_remote = "/data/data/com.termux/files/home/bin/start_suwayomi.sh"
+        (bundle_dir / test_script_rel).write_text("# Modified suwayomi script bytes\n", encoding="utf-8")
+        for m_rec in manifest:
+            if m_rec["local"] == test_script_rel:
+                m_rec["sha256"], m_rec["bytes"] = rt.compute_file_sha256(bundle_dir / test_script_rel)
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            namespace_root=live_dir,
+            transaction_dir=tx_dir,
+        )
+        j = json.loads(tx.journal_path.read_text(encoding="utf-8"))
+        entry = {e["remote"]: e for e in j["entries"]}[test_remote]
+        self.assertEqual(entry["action"], rt.ACTION_REPLACE, "Altered bytes must derive REPLACE")
+
+    def test_audited_exceptions_forged_declared_mode_rejected(self):
+        """Proof: Candidate manifest declaring non-canonical mode on audited exception is rejected."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+        test_remote = "/data/data/com.termux/files/home/bin/start_suwayomi.sh"
+        for m_rec in manifest:
+            if m_rec["remote"] == test_remote:
+                m_rec["mode"] = "0o700"
+        with self.assertRaises(rt.PreconditionError) as ctx:
+            rt.prepare(
+                bundle_root=bundle_dir,
+                candidate_manifest=manifest,
+                preconditions=preconds,
+                namespace_root=live_dir,
+                transaction_dir=tx_dir,
+            )
+        self.assertIn("declares non-canonical mode", str(ctx.exception))
 
 if __name__ == "__main__":
     unittest.main()
