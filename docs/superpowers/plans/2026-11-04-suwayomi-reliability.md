@@ -42,7 +42,9 @@ HTTP/cache check before integration. Record spec compliance and code quality.
 ## Task 2: add a narrow filter release profile
 
 Files: activation adapter, installer parser and focused activation/installer tests.
-Start after Task 1 acceptance. Keep default profile's general-server protections.
+Preparation may run alongside Task 1 in an isolated worktree because its control
+code and tests are independent of filter internals. Integrate and deploy only
+after both tasks pass acceptance. Keep the default general-server protections.
 Do not modify the file transaction engine or broaden AGY/Suwayomi ownership.
 
 - Add an explicit `suwayomi-filter` profile for plan/apply. Its only permitted
