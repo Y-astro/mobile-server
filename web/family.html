@@ -9,38 +9,37 @@
     .hidden { display: none !important; }
   </style>
 </head>
-<body class="bg-wallpaper p-4 sm:p-6 min-h-screen">
-  <div class="fixed inset-0 backdrop-overlay pointer-events-none"></div>
+<body class="p-4 sm:p-6 min-h-screen">
 
-  <div class="relative z-10 max-w-6xl mx-auto space-y-6">
+  <div class="max-w-6xl mx-auto space-y-6">
     <!-- Header -->
     <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-white/10">
       <div class="flex items-center gap-3">
         <div class="brand-mark">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z"></path></svg>
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z"></path></svg>
         </div>
         <div>
           <div class="flex items-center gap-2">
             <span class="text-xs font-medium text-secondary">Private Cloud</span>
-            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Family portal</span>
+            <span class="m3-badge badge-neutral">Family portal</span>
           </div>
           <h1 class="text-xl sm:text-2xl font-semibold text-white tracking-tight">Family Vault</h1>
         </div>
       </div>
 
       <div class="flex items-center gap-2.5">
-        <div class="px-3 py-1.5 rounded-lg bg-surface-raised border border-white/10 text-xs text-soft">
+        <div class="m3-badge badge-neutral">
           Logged in as <span class="font-medium text-white">Family</span>
         </div>
-        <button onclick="handleLogout()" class="px-3 py-1.5 rounded-lg bg-surface-raised hover:bg-white/10 border border-white/10 text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+        <button onclick="handleLogout()" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
           <span>Sign Out</span>
         </button>
       </div>
     </header>
 
     <!-- Welcome Banner -->
-    <div class="golden-glass p-5 sm:p-6 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div class="m3-card p-5 sm:p-6 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
       <div class="space-y-1">
         <h2 class="text-base font-semibold text-white">Family Cloud Vault</h2>
         <p class="text-xs text-soft">Access shared documents, photo albums, and music streaming from any connected device on Wi-Fi or Tailscale.</p>
@@ -55,16 +54,16 @@
     <div class="family-services-grid">
 
       <!-- 1. Personal Cloud Storage -->
-      <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+      <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
         <div class="space-y-3">
           <div class="flex items-start justify-between">
             <div class="service-icon-box">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
             </div>
-            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Drive</span>
+            <span class="m3-badge badge-neutral">Drive</span>
           </div>
           <div>
-            <span class="text-[11px] font-medium text-muted">Family files</span>
+            <span class="text-xs font-medium text-muted">Family files</span>
             <h3 class="text-base font-semibold text-white mt-0.5">Cloud Storage</h3>
             <p class="text-xs text-soft mt-1.5 leading-relaxed">
               Upload, organize, and download documents, downloads, and important files safely.
@@ -72,24 +71,24 @@
           </div>
         </div>
         <div class="pt-3 border-t border-white/5">
-          <a href="/drive/" class="gold-gradient-btn w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5">
+          <a href="/drive/" class="m3-btn m3-btn-filled gold-gradient-btn w-full text-xs font-medium flex items-center justify-center gap-1.5">
             <span>Open Cloud Drive</span>
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
           </a>
         </div>
       </div>
 
       <!-- 2. Family Photos -->
-      <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+      <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
         <div class="space-y-3">
           <div class="flex items-start justify-between">
             <div class="service-icon-box">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
             </div>
-            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Photos</span>
+            <span class="m3-badge badge-neutral">Photos</span>
           </div>
           <div>
-            <span class="text-[11px] font-medium text-muted">Memories & vacations</span>
+            <span class="text-xs font-medium text-muted">Memories & vacations</span>
             <h3 class="text-base font-semibold text-white mt-0.5">Family Photos</h3>
             <p class="text-xs text-soft mt-1.5 leading-relaxed">
               Browse, view, and share full-resolution family photo albums and picture collections.
@@ -97,24 +96,24 @@
           </div>
         </div>
         <div class="pt-3 border-t border-white/5">
-          <a href="/drive/files/Photos" class="gold-gradient-btn w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5">
+          <a href="/drive/files/Photos" class="m3-btn m3-btn-filled gold-gradient-btn w-full text-xs font-medium flex items-center justify-center gap-1.5">
             <span>View Photos</span>
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
           </a>
         </div>
       </div>
 
       <!-- 3. Music Jukebox -->
-      <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+      <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
         <div class="space-y-3">
           <div class="flex items-start justify-between">
             <div class="service-icon-box">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg>
             </div>
-            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Audio</span>
+            <span class="m3-badge badge-neutral">Audio</span>
           </div>
           <div>
-            <span class="text-[11px] font-medium text-muted">Hi-Fi streaming</span>
+            <span class="text-xs font-medium text-muted">Hi-Fi streaming</span>
             <h3 class="text-base font-semibold text-white mt-0.5">Music Jukebox</h3>
             <p class="text-xs text-soft mt-1.5 leading-relaxed">
               Listen to songs, audiobooks, and family music playlists directly with built-in streaming.
@@ -122,24 +121,24 @@
           </div>
         </div>
         <div class="pt-3 border-t border-white/5">
-          <a href="/drive/files/Music" class="gold-gradient-btn w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5">
+          <a href="/drive/files/Music" class="m3-btn m3-btn-filled gold-gradient-btn w-full text-xs font-medium flex items-center justify-center gap-1.5">
             <span>Open Music</span>
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
           </a>
         </div>
       </div>
 
       <!-- 4. Document to PDF Converter -->
-      <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+      <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
         <div class="space-y-3">
           <div class="flex items-start justify-between">
             <div class="service-icon-box">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
             </div>
-            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Tools</span>
+            <span class="m3-badge badge-neutral">Tools</span>
           </div>
           <div>
-            <span class="text-[11px] font-medium text-muted">PDF converter</span>
+            <span class="text-xs font-medium text-muted">PDF converter</span>
             <h3 class="text-base font-semibold text-white mt-0.5">Document to PDF</h3>
             <p class="text-xs text-soft mt-1.5 leading-relaxed">
               Convert Word documents, presentations, spreadsheets, and pictures into PDF instantly.
@@ -147,35 +146,35 @@
           </div>
         </div>
         <div class="pt-3 border-t border-white/5">
-          <button onclick="openConverterModal()" class="gold-gradient-btn w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5">
+          <button onclick="openConverterModal()" class="m3-btn m3-btn-filled gold-gradient-btn w-full text-xs font-medium flex items-center justify-center gap-1.5">
             <span>Convert File to PDF</span>
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
           </button>
         </div>
       </div>
 
       <!-- 5. Wealthfolio -->
-      <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+      <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
         <div class="space-y-3">
           <div class="flex items-start justify-between">
             <div class="service-icon-box">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
             </div>
-            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Finance</span>
+            <span class="m3-badge badge-neutral">Finance</span>
           </div>
           <div>
-            <span class="text-[11px] font-medium text-muted">Private finance</span>
+            <span class="text-xs font-medium text-muted">Private finance</span>
             <h3 class="text-base font-semibold text-white mt-0.5">Wealthfolio</h3>
             <p class="text-xs text-soft mt-1.5 leading-relaxed">
               Bank statements, cash flow, and investments streamed securely from the laptop.
             </p>
-            <p class="text-[11px] text-muted mt-2">Separate password required &bull; Laptop must be on</p>
+            <p class="text-xs text-muted mt-2">Separate password required &bull; Laptop must be on</p>
           </div>
         </div>
         <div class="pt-3 border-t border-white/5">
-          <a href="/wealth/" target="_blank" rel="noopener noreferrer" class="btn-secondary w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5">
+          <a href="/wealth/" target="_blank" rel="noopener noreferrer" class="m3-btn m3-btn-outlined btn-secondary w-full text-xs font-medium flex items-center justify-center gap-1.5">
             <span>Unlock Wealthfolio</span>
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
           </a>
         </div>
       </div>
@@ -183,7 +182,7 @@
     </div>
 
     <!-- Quick Notes Card -->
-    <div class="golden-glass-card p-5 rounded-xl space-y-3">
+    <div class="m3-card golden-glass-card p-5 rounded-xl space-y-3">
       <div class="flex items-center justify-between pb-3 border-b border-white/5">
         <div class="flex items-center gap-2.5">
           <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
@@ -191,7 +190,7 @@
           </div>
           <div>
             <h3 class="text-sm font-semibold text-white leading-none">Quick notes</h3>
-            <p class="text-[11px] text-muted mt-1">Private scratchpad &bull; Auto-saves as you type</p>
+            <p class="text-xs text-muted mt-1">Private scratchpad &bull; Auto-saves as you type</p>
           </div>
         </div>
         <div id="notes-status" class="text-xs text-soft flex items-center gap-1.5">
@@ -202,15 +201,15 @@
 
       <!-- Formatting Toolbar -->
       <div class="flex items-center gap-2 pt-0.5">
-        <button type="button" onclick="insertBulletList()" title="Add bullet list item" class="px-2.5 py-1 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
+        <button type="button" onclick="insertBulletList()" title="Add bullet list item" class="notes-toolbar-btn px-3 py-2 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
           <span class="text-sm font-black leading-none text-accent">&bull;</span>
           <span>Bullet</span>
         </button>
-        <button type="button" onclick="insertNumberedList()" title="Add numbered list item" class="px-2.5 py-1 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
+        <button type="button" onclick="insertNumberedList()" title="Add numbered list item" class="notes-toolbar-btn px-3 py-2 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
           <span class="mono text-xs font-bold leading-none text-accent">1.</span>
           <span>Numbered</span>
         </button>
-        <span class="text-[11px] text-muted ml-auto hidden sm:inline-block">Press Enter to continue lists</span>
+        <span class="text-xs text-muted ml-auto hidden sm:inline-block">Press Enter to continue lists</span>
       </div>
 
       <div class="relative">
@@ -238,9 +237,14 @@
     }
 
     let selectedConvertFiles = [];
+    let modalPreviousFocus = null;
 
     function openConverterModal() {
-      document.getElementById('converter-modal').classList.remove('hidden');
+      modalPreviousFocus = document.activeElement;
+      const modal = document.getElementById('converter-modal');
+      modal.classList.remove('hidden');
+      const closeBtn = modal.querySelector('button[onclick="closeConverterModal()"]');
+      if (closeBtn) closeBtn.focus();
     }
 
     function addConvertFiles(fileList) {
@@ -306,13 +310,13 @@
             return `
               <div class="flex items-center justify-between p-2 rounded-lg bg-surface-raised border border-white/5 text-xs">
                 <div class="flex items-center gap-2.5 overflow-hidden">
-                  <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-white/5 text-white border border-white/10 shrink-0">${escapeHtml(ext)}</span>
+                  <span class="px-1.5 py-0.5 rounded text-xs font-mono bg-white/5 text-white border border-white/10 shrink-0">${escapeHtml(ext)}</span>
                   <div class="truncate">
                     <p class="font-medium text-white truncate max-w-[220px] sm:max-w-xs">${escapeHtml(file.name)}</p>
-                    <p class="text-[10px] text-muted">${formatFileSize(file.size)}</p>
+                    <p class="text-xs text-muted">${formatFileSize(file.size)}</p>
                   </div>
                 </div>
-                <button type="button" onclick="removeConvertFile(${idx})" class="p-1 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition shrink-0 ml-2">
+                <button type="button" onclick="removeConvertFile(${idx})" aria-label="Remove ${escapeHtml(file.name)}" class="touch-target p-1 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition shrink-0 ml-2">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 18L18 6M6 6l12 12"></path></svg>
                 </button>
               </div>
@@ -332,9 +336,13 @@
     }
 
     function closeConverterModal() {
-      document.getElementById('converter-modal').classList.add('hidden');
+      const modal = document.getElementById('converter-modal');
+      modal.classList.add('hidden');
       document.getElementById('convert-progress').classList.add('hidden');
       clearAllConvertFiles();
+      if (modalPreviousFocus && typeof modalPreviousFocus.focus === 'function') {
+        modalPreviousFocus.focus();
+      }
     }
 
     function initConverter() {
@@ -352,14 +360,14 @@
           dropzone.addEventListener(name, (e) => {
             e.preventDefault();
             e.stopPropagation();
-            dropzone.classList.add('border-accent', 'bg-accent/10');
+            dropzone.classList.add('border-teal');
           });
         });
         ['dragleave', 'drop'].forEach(name => {
           dropzone.addEventListener(name, (e) => {
             e.preventDefault();
             e.stopPropagation();
-            dropzone.classList.remove('border-accent', 'bg-accent/10');
+            dropzone.classList.remove('border-teal');
           });
         });
         dropzone.addEventListener('drop', (e) => {
@@ -368,6 +376,15 @@
           }
         });
       }
+      // Escape key dismissal
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          const modal = document.getElementById('converter-modal');
+          if (modal && !modal.classList.contains('hidden')) {
+            closeConverterModal();
+          }
+        }
+      });
     }
 
     // --- Quick Notes Auto-resize, Smart Lists & Auto-save Logic ---
@@ -602,21 +619,21 @@
   </script>
 
   <!-- Document to PDF Converter Modal -->
-  <div id="converter-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm hidden">
-    <div class="golden-glass max-w-lg w-full p-5 sm:p-6 rounded-xl space-y-4 relative max-h-[90vh] flex flex-col justify-between">
+  <div id="converter-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title-family">
+    <div class="m3-card golden-glass max-w-lg w-full p-5 sm:p-6 rounded-xl space-y-4 relative max-h-[90vh] flex flex-col justify-between">
 
       <!-- Modal Header -->
       <div class="flex items-start justify-between">
         <div class="flex items-center gap-2.5">
-          <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
+          <div class="service-icon-box">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
           </div>
           <div>
-            <h3 class="text-base font-semibold text-white">Document to PDF</h3>
+            <h3 id="modal-title-family" class="text-base font-semibold text-white">Document to PDF</h3>
             <p class="text-xs text-soft">Convert single or batch documents instantly</p>
           </div>
         </div>
-        <button onclick="closeConverterModal()" class="text-muted hover:text-white p-1 rounded-lg hover:bg-white/5 transition">
+        <button onclick="closeConverterModal()" aria-label="Close converter dialog" class="touch-target text-muted hover:text-white p-2 rounded-lg hover:bg-white/5 transition">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 18L18 6M6 6l12 12"></path></svg>
         </button>
       </div>
@@ -629,9 +646,9 @@
         <svg class="w-8 h-8 text-muted pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
         <div class="pointer-events-none">
           <p class="text-xs font-medium text-white">Choose files or drag & drop</p>
-          <p class="text-[11px] text-muted mt-0.5">Word (.docx, .doc), PPT (.pptx), Excel (.xlsx), Images & Text</p>
+          <p class="text-xs text-muted mt-0.5">Word (.docx, .doc), PPT (.pptx), Excel (.xlsx), Images & Text</p>
         </div>
-        <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-hover text-white border border-white/10 text-xs font-medium transition pointer-events-none">
+        <span class="m3-btn m3-btn-tonal pointer-events-none text-xs font-medium">
           Select files
         </span>
       </label>
@@ -641,10 +658,10 @@
         <div class="flex items-center justify-between text-xs pb-1.5 border-b border-white/5">
           <span id="convert-file-summary" class="font-medium text-white">0 files selected</span>
           <div class="flex items-center gap-2">
-            <label for="convert-file-input" class="cursor-pointer text-[11px] px-2 py-0.5 rounded bg-surface-raised text-soft hover:text-white font-medium border border-white/10 transition">
+            <label for="convert-file-input" class="touch-target cursor-pointer text-xs px-3 py-1.5 rounded-md bg-surface-raised text-soft hover:text-white font-medium border border-white/10 transition">
               + Add More
             </label>
-            <button type="button" onclick="clearAllConvertFiles()" class="text-[11px] px-2 py-0.5 rounded text-muted hover:text-white transition">
+            <button type="button" onclick="clearAllConvertFiles()" class="touch-target text-xs px-3 py-1.5 rounded-md text-muted hover:text-white transition">
               Clear All
             </button>
           </div>
@@ -656,10 +673,10 @@
       <div id="convert-progress" class="hidden space-y-2">
         <div class="flex items-center justify-between text-xs">
           <span class="text-soft font-medium flex items-center gap-1.5">
-            <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+            <svg class="w-4 h-4 animate-spin text-teal" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
             <span id="convert-status-text">Converting documents to PDF...</span>
           </span>
-          <span class="mono text-white text-[11px]" id="convert-status-pct">Active</span>
+          <span class="mono text-white text-xs" id="convert-status-pct">Active</span>
         </div>
         <div class="w-full progress-track">
           <div class="progress-fill w-full"></div>
@@ -668,8 +685,8 @@
 
       <!-- Action Buttons -->
       <div class="pt-2 flex items-center justify-end gap-2 border-t border-white/5">
-        <button onclick="closeConverterModal()" class="px-3.5 py-1.5 rounded-lg text-xs font-medium text-soft hover:bg-white/5 transition">Cancel</button>
-        <button id="convert-btn" onclick="executeConversion()" disabled class="gold-gradient-btn px-4 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed">
+        <button onclick="closeConverterModal()" class="m3-btn m3-btn-outlined text-xs font-medium text-soft hover:bg-white/5 transition">Cancel</button>
+        <button id="convert-btn" onclick="executeConversion()" disabled class="m3-btn m3-btn-filled gold-gradient-btn text-xs font-medium">
           Convert & Download PDF
         </button>
       </div>

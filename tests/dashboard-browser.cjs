@@ -53,9 +53,10 @@ const assert = require('node:assert/strict');
 
       await page.locator('#username').fill('testadmin');
       await page.locator('#password').fill('secret-pass');
-      await page.locator('#submit-btn').click();
-
-      await page.waitForResponse(resp => resp.url().endsWith('/api/login'));
+      await Promise.all([
+        page.waitForResponse(resp => resp.url().endsWith('/api/login')),
+        page.locator('#submit-btn').click()
+      ]);
       assert.deepEqual(loginPayload, { username: 'testadmin', password: 'secret-pass' });
       console.log('Login page PASS: loads from maintained template, submits credentials.');
       await page.close();

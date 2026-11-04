@@ -25,16 +25,19 @@
       for (const session of data.sessions) {
         if (!/^[0-9a-f]{32}$/.test(session.id)) continue;
         const row = document.createElement('div');
-        row.className = 'flex items-center justify-between gap-3 p-3 rounded-xl bg-black/40';
+        row.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-surface-raised border border-white/5';
         const label = document.createElement('span');
+        label.className = 'font-medium text-white mono text-xs';
         label.textContent = 'Terminal ' + session.id.slice(0,8);
         const controls = document.createElement('div');
-        controls.className = 'flex items-center gap-3';
+        controls.className = 'flex items-center gap-2';
         const open = document.createElement('a');
+        open.className = 'm3-btn m3-btn-tonal text-xs font-medium';
         open.textContent = 'Reconnect';
         open.href = '/laptop/?arg=' + session.id;
         open.target = '_blank'; open.rel = 'noopener';
         const close = document.createElement('button');
+        close.className = 'm3-btn m3-btn-outlined text-xs font-medium';
         close.type = 'button'; close.textContent = 'Close';
         close.setAttribute('aria-label', 'Close terminal '+session.id.slice(0,8));
         close.addEventListener('click', async () => {

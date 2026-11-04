@@ -9,14 +9,13 @@
     .hidden { display: none !important; }
   </style>
 </head>
-<body class="bg-wallpaper flex items-center justify-center p-4 min-h-screen">
-  <div class="fixed inset-0 backdrop-overlay pointer-events-none"></div>
+<body class="flex items-center justify-center p-4 min-h-screen">
 
-  <div class="relative z-10 w-full max-w-sm">
-    <div class="golden-glass p-6 sm:p-8 rounded-2xl">
+  <div class="w-full max-w-sm">
+    <div class="m3-card p-6 sm:p-8 rounded-2xl">
       <!-- Header -->
       <div class="text-center space-y-2 mb-6">
-        <div class="brand-mark mb-2" style="width: 48px; height: 48px; margin: 0 auto;">
+        <div class="brand-mark mb-2" style="margin: 0 auto;">
           <svg class="w-6 h-6 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path>
           </svg>
@@ -29,17 +28,17 @@
       <form id="login-form" onsubmit="handleLogin(event)" class="space-y-4">
         <div>
           <label class="block text-xs font-medium text-soft mb-1.5" for="username">Username</label>
-          <input type="text" id="username" required value="" class="gold-input w-full px-3.5 py-2.5 rounded-lg text-sm" placeholder="Username" autocomplete="username">
+          <input type="text" id="username" required value="" class="m3-text-field w-full text-sm" placeholder="Username" autocomplete="username">
         </div>
 
         <div>
           <label class="block text-xs font-medium text-soft mb-1.5" for="password">Password</label>
-          <input type="password" id="password" required value="" class="gold-input w-full px-3.5 py-2.5 rounded-lg text-sm" placeholder="Password" autocomplete="current-password">
+          <input type="password" id="password" required value="" class="m3-text-field w-full text-sm" placeholder="Password" autocomplete="current-password">
         </div>
 
-        <div id="error-msg" class="hidden p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 text-xs text-center font-medium"></div>
+        <div id="error-msg" class="hidden p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 text-xs text-center font-medium"></div>
 
-        <button type="submit" id="submit-btn" class="gold-gradient-btn w-full py-2.5 rounded-lg font-medium text-sm flex items-center justify-center gap-2 mt-2">
+        <button type="submit" id="submit-btn" class="m3-btn m3-btn-filled w-full font-medium text-sm flex items-center justify-center gap-2 mt-2">
           <span>Sign In</span>
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
         </button>
@@ -47,7 +46,7 @@
 
       <!-- Footer Info -->
       <div class="mt-6 pt-4 border-t border-white/5 text-center text-xs text-muted">
-        <span>WireGuard encrypted mesh &bull; Private home cloud</span>
+        <span>WireGuard mesh &bull; Private home cloud</span>
       </div>
     </div>
   </div>

@@ -9,48 +9,46 @@
     .hidden { display: none !important; }
   </style>
 </head>
-<body class="bg-wallpaper p-4 sm:p-6 min-h-screen">
-  <div class="fixed inset-0 backdrop-overlay pointer-events-none"></div>
+<body class="p-4 sm:p-6 min-h-screen">
 
-  <div class="relative z-10 max-w-7xl mx-auto space-y-6">
+  <div class="max-w-7xl mx-auto space-y-6">
     <!-- Header -->
     <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-white/10">
       <div class="flex items-center gap-3">
         <div class="brand-mark">
-          <svg class="w-5 h-5 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+          <svg class="w-6 h-6 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
         </div>
         <div>
           <div class="flex items-center gap-2">
             <span class="text-xs font-medium text-secondary">Master Console</span>
-            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Admin &bull; astro</span>
+            <span class="m3-badge badge-neutral">Admin &bull; astro</span>
           </div>
           <h1 class="text-xl sm:text-2xl font-semibold text-white tracking-tight">K20 Pro Server Manager</h1>
         </div>
       </div>
 
       <div class="flex flex-wrap items-center gap-2.5">
-        <div class="px-3 py-1.5 rounded-lg bg-surface-raised border border-white/10 text-xs text-soft flex items-center gap-2">
+        <div class="m3-badge badge-neutral flex items-center gap-2">
           <span>TS: <span id="header-ts-ip" class="mono font-semibold text-accent">100.75.159.53</span></span>
           <span class="text-muted">&bull;</span>
           <span>Wi-Fi: <a id="header-local-ip" class="mono font-semibold text-accent hover:underline" aria-label="Open Wi-Fi website">Detecting…</a></span>
           <span class="text-muted">&bull;</span>
           <span>Uptime: <span id="header-uptime" class="mono text-white font-medium">...</span></span>
         </div>
-        <button onclick="handleLogout()" class="px-3 py-1.5 rounded-lg bg-surface-raised hover:bg-white/10 border border-white/10 text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+        <button onclick="handleLogout()" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
           <span>Sign Out</span>
         </button>
       </div>
     </header>
 
-    
     <!-- Telemetry Cards -->
     <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
       <!-- Battery -->
-      <div class="golden-glass-card p-4 rounded-xl flex flex-col justify-between">
+      <div class="m3-card golden-glass-card p-4 rounded-xl flex flex-col justify-between">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-soft">Battery</span>
-          <span id="battery-status-badge" class="px-1.5 py-0.5 rounded text-[10px] font-medium badge-neutral">...</span>
+          <span id="battery-status-badge" class="m3-badge badge-neutral">...</span>
         </div>
         <div class="my-3">
           <div class="flex items-baseline gap-2">
@@ -61,11 +59,11 @@
             <div id="battery-bar" class="progress-fill" style="width: 0%"></div>
           </div>
         </div>
-        <span class="text-[11px] text-muted">Hardware UPS &bull; Battery protection</span>
+        <span class="text-xs text-muted">Hardware UPS &bull; Battery protection</span>
       </div>
 
       <!-- RAM -->
-      <div class="golden-glass-card p-4 rounded-xl flex flex-col justify-between">
+      <div class="m3-card golden-glass-card p-4 rounded-xl flex flex-col justify-between">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-soft">RAM memory</span>
           <span class="text-xs mono text-accent" id="ram-pct">...%</span>
@@ -79,11 +77,11 @@
             <div id="ram-bar" class="progress-fill" style="width: 0%"></div>
           </div>
         </div>
-        <span class="text-[11px] text-muted">LPDDR4X high-speed</span>
+        <span class="text-xs text-muted">LPDDR4X high-speed</span>
       </div>
 
       <!-- Storage -->
-      <div class="golden-glass-card p-4 rounded-xl flex flex-col justify-between">
+      <div class="m3-card golden-glass-card p-4 rounded-xl flex flex-col justify-between">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-soft">UFS storage</span>
           <span class="text-xs mono text-accent" id="storage-pct">...%</span>
@@ -97,11 +95,11 @@
             <div id="storage-bar" class="progress-fill" style="width: 0%"></div>
           </div>
         </div>
-        <span class="text-[11px] text-muted">UFS 2.1 flash</span>
+        <span class="text-xs text-muted">UFS 2.1 flash</span>
       </div>
 
       <!-- CPU -->
-      <div class="golden-glass-card p-4 rounded-xl flex flex-col justify-between">
+      <div class="m3-card golden-glass-card p-4 rounded-xl flex flex-col justify-between">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-soft">Snapdragon 855</span>
           <span class="text-xs mono text-accent" id="cpu-temp">...°C</span>
@@ -111,26 +109,25 @@
             <span class="text-2xl sm:text-3xl font-semibold text-white">8 Cores</span>
             <span class="text-xs text-muted">Octa-core</span>
           </div>
-          <div class="text-[11px] text-muted mt-1">1x Prime &bull; 3x Gold &bull; 4x Silver</div>
+          <div class="text-xs text-muted mt-1">1x Prime &bull; 3x Gold &bull; 4x Silver</div>
         </div>
-        <span class="text-[11px] text-muted">Kryo 485 &bull; Up to 2.84 GHz</span>
+        <span class="text-xs text-muted">Kryo 485 &bull; Up to 2.84 GHz</span>
       </div>
     </section>
 
-    
     <!-- Live Network Monitor -->
-    <section class="golden-glass-card p-5 rounded-xl space-y-3">
+    <section class="m3-card golden-glass-card p-5 rounded-xl space-y-3">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2.5">
-          <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path></svg>
+          <div class="service-icon-box">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path></svg>
           </div>
           <div>
             <h3 class="font-semibold text-white text-sm">Live network & bandwidth monitor</h3>
             <p class="text-xs text-muted">Measured every 30 seconds; unavailable readings show N/A</p>
           </div>
         </div>
-        <span class="flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-medium badge-neutral">
+        <span class="flex items-center gap-1.5 m3-badge badge-neutral">
           <span class="w-2 h-2 rounded-full bg-emerald-400"></span><span id="telemetry-state">Waiting for sample</span>
         </span>
       </div>
@@ -138,229 +135,220 @@
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
         <!-- Wi-Fi Link Speed -->
         <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
-          <span class="text-[11px] font-medium text-muted">Wi-Fi link speed</span>
+          <span class="text-xs font-medium text-muted">Wi-Fi link speed</span>
           <div class="text-xl font-semibold text-white mt-0.5">
             <span id="net-wifi-speed" class="mono">N/A</span> <span class="text-xs text-muted">Mbps</span>
           </div>
-          <div class="text-[11px] text-muted mt-1">Interface: <span class="mono">wlan0</span></div>
+          <div class="text-xs text-muted mt-1">Interface: <span class="mono">wlan0</span></div>
         </div>
 
         <!-- Signal Strength -->
         <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
-          <span class="text-[11px] font-medium text-muted">Signal strength</span>
+          <span class="text-xs font-medium text-muted">Signal strength</span>
           <div class="text-xl font-semibold text-white mt-0.5">
             <span id="net-wifi-rssi" class="mono">N/A</span> <span class="text-xs text-muted">dBm</span>
           </div>
-          <div class="text-[11px] text-positive mt-1 font-medium">Measured RSSI</div>
+          <div class="text-xs text-positive mt-1 font-medium">Measured RSSI</div>
         </div>
 
         <!-- WAN Ping (Cloudflare) -->
         <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
-          <span class="text-[11px] font-medium text-muted">Internet latency</span>
+          <span class="text-xs font-medium text-muted">Internet latency</span>
           <div class="text-xl font-semibold text-white mt-0.5">
             <span id="net-wan-ping" class="mono">N/A</span> <span class="text-xs text-muted">ms</span>
           </div>
-          <div class="text-[11px] text-muted mt-1">Target: Cloudflare 1.1.1.1</div>
+          <div class="text-xs text-muted mt-1">Target: Cloudflare 1.1.1.1</div>
         </div>
 
         <!-- DNS Filter Status -->
         <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
-          <span class="text-[11px] font-medium text-muted">AdGuard DNS</span>
+          <span class="text-xs font-medium text-muted">AdGuard DNS</span>
           <div class="text-xl font-semibold text-white mt-0.5">Port 5353</div>
-          <div class="text-[11px] text-positive mt-1 font-medium"><span id="adguard-state">Checking interface…</span></div>
+          <div class="text-xs text-positive mt-1 font-medium"><span id="adguard-state">Checking interface…</span></div>
         </div>
       </div>
     </section>
 
-    
     <!-- Main Workstation Layout: 2-Column Split on Desktop, Single-Column on Mobile -->
     <div class="workstation-layout">
       <!-- Left Column: Core Operations & System Services (~58% width) -->
       <div class="workstation-col">
         <!-- System Services & Dynamic RAM Manager -->
-    <section class="space-y-3">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <div class="flex items-center gap-2">
-            <h2 class="text-base font-semibold text-white">System services & RAM optimizer</h2>
-            <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Dynamic</span>
+        <section class="space-y-3">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div class="flex items-center gap-2">
+                <h2 class="text-base font-semibold text-white">System services & RAM optimizer</h2>
+                <span class="m3-badge badge-neutral">Dynamic</span>
+              </div>
+              <p class="text-xs text-muted mt-0.5">Control background services and monitor active memory footprint</p>
+            </div>
+
+            <!-- Live RAM Preservation Summary Pill -->
+            <div class="flex items-center gap-2 bg-surface-raised border border-white/10 px-3 py-1.5 rounded-lg text-xs">
+              <div class="flex items-center gap-1.5 text-positive font-medium">
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span class="mono" id="svc-active-mem">-- MB</span> <span class="text-muted">active</span>
+              </div>
+            </div>
           </div>
-          <p class="text-xs text-muted mt-0.5">Control background services and monitor active memory footprint</p>
-        </div>
 
-        <!-- Live RAM Preservation Summary Pill -->
-        <div class="flex items-center gap-2 bg-surface-raised border border-white/10 px-3 py-1 rounded-lg text-xs">
-          <div class="flex items-center gap-1.5 text-positive font-medium">
-            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-            <span class="mono" id="svc-active-mem">-- MB</span> <span class="text-muted">active</span>
+          <!-- Services Grid Container -->
+          <div id="services-grid" class="services-subgrid">
+            <!-- Live rendered services -->
           </div>
-        </div>
-      </div>
+        </section>
 
-      <!-- Services Grid Container -->
-      <div id="services-grid" class="services-subgrid">
-        <!-- Live rendered services -->
-      </div>
-    </section>
-
-    
         <!-- Wealthfolio Card -->
-    <div class="golden-glass-card p-5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-      <div class="space-y-1">
-        <div class="flex items-center gap-2">
-          <span class="text-xs font-medium text-muted">Private finance</span>
-          <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Wealthfolio</span>
-        </div>
-        <h3 class="text-base font-semibold text-white">Bank statements, cash flow, and investments</h3>
-        <p class="text-xs text-soft">Streamed securely from laptop. Separate password required &bull; Laptop must be on</p>
-      </div>
-      <a href="/wealth/" target="_blank" rel="noopener noreferrer" class="btn-secondary px-4 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5 shrink-0">
-        <span>Unlock Wealthfolio</span>
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
-      </a>
-    </div>
-
-    
-        <!-- Tor SOCKS Proxy -->
-    <section class="golden-glass-card p-5 rounded-xl space-y-4">
-      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div class="space-y-1">
-          <div class="flex items-center gap-2">
-            <span class="text-xs font-medium text-muted">Privacy & tunneling</span>
-            <span id="vpn-badge" class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">OFF</span>
+        <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div class="space-y-1">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-medium text-muted">Private finance</span>
+              <span class="m3-badge badge-neutral">Wealthfolio</span>
+            </div>
+            <h3 class="text-base font-semibold text-white">Bank statements, cash flow, and investments</h3>
+            <p class="text-xs text-soft">Streamed securely from laptop. Separate password required &bull; Laptop must be on</p>
           </div>
-          <h2 class="text-base font-semibold text-white">Tor SOCKS proxy</h2>
-          <p class="text-xs text-soft max-w-2xl leading-relaxed">
-            Only applications configured for this proxy use Tor. Full-device routing through Tor is unavailable on this setup. File transfers stay direct over Tailscale.
-            On your laptop run <code class="mono px-1.5 py-0.5 rounded bg-surface-raised border border-white/10 text-white select-all">ssh -N -L 9050:127.0.0.1:9050 -p 8022 u0_a505@100.75.159.53</code>
-          </p>
+          <a href="/wealth/" target="_blank" rel="noopener noreferrer" class="m3-btn m3-btn-outlined btn-secondary px-5 py-2 text-xs font-medium flex items-center gap-1.5 shrink-0">
+            <span>Unlock Wealthfolio</span>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+          </a>
         </div>
 
-        <div class="flex items-center gap-2.5 shrink-0">
-          <button id="vpn-toggle-btn" onclick="toggleVPN()" class="gold-gradient-btn px-4 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5">
-            <span id="vpn-btn-text">Enable Tor Proxy</span>
-          </button>
-        </div>
-      </div>
+        <!-- Tor SOCKS Proxy -->
+        <section class="m3-card golden-glass-card p-5 rounded-xl space-y-4">
+          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div class="space-y-1">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-medium text-muted">Privacy & tunneling</span>
+                <span id="vpn-badge" class="m3-badge badge-neutral">OFF</span>
+              </div>
+              <h2 class="text-base font-semibold text-white">Tor SOCKS proxy</h2>
+              <p class="text-xs text-soft max-w-2xl leading-relaxed">
+                Only applications configured for this proxy use Tor. Full-device routing through Tor is unavailable on this setup. File transfers stay direct over Tailscale.
+                On your laptop run <code class="mono px-1.5 py-0.5 rounded bg-surface-raised border border-white/10 text-white select-all text-xs" style="word-break: break-all;">ssh -N -L 9050:127.0.0.1:9050 -p 8022 u0_a505@100.75.159.53</code>
+              </p>
+            </div>
 
-      <!-- Network Topology Diagram -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 border-t border-white/5">
-        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5 space-y-1">
-          <div class="text-[10px] font-medium text-muted">Step 1: Application routing</div>
-          <div class="text-sm font-semibold text-white">Application &rarr; local SOCKS5</div>
-          <div class="text-xs text-soft mono mt-1">WireGuard mesh (Tailscale)</div>
-          <div class="text-[11px] text-positive font-medium mt-2">Encrypted end-to-end</div>
-        </div>
+            <div class="flex items-center gap-2.5 shrink-0">
+              <button id="vpn-toggle-btn" onclick="toggleVPN()" class="m3-btn m3-btn-filled gold-gradient-btn px-5 py-2 text-xs font-medium flex items-center gap-1.5">
+                <span id="vpn-btn-text">Enable Tor Proxy</span>
+              </button>
+            </div>
+          </div>
 
-        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5 space-y-1">
-          <div class="text-[10px] font-medium text-muted">Step 2: Server gateway</div>
-          <div class="text-sm font-semibold text-white">Tor client on server</div>
-          <div class="text-xs text-soft mono mt-1" id="server-direct-ip">Direct IP: checking…</div>
-          <div class="text-[11px] text-muted font-medium mt-2" id="server-gateway-status">Full-device routing unavailable</div>
-        </div>
+          <!-- Network Topology Diagram -->
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 border-t border-white/5">
+            <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5 space-y-1">
+              <div class="text-xs font-medium text-muted">Step 1: Application routing</div>
+              <div class="text-sm font-semibold text-white">Application &rarr; local SOCKS5</div>
+              <div class="text-xs text-soft mono mt-1">WireGuard mesh (Tailscale)</div>
+              <div class="text-xs text-positive font-medium mt-2">Encrypted end-to-end</div>
+            </div>
 
-        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5 space-y-1">
-          <div class="text-[10px] font-medium text-muted">Step 3: Exit node</div>
-          <div class="text-sm font-semibold text-white" id="dest-exit-name">Proxy disabled</div>
-          <div class="text-xs text-soft mono mt-1" id="dest-exit-ip">Proxy exit: unavailable</div>
-          <div class="text-[11px] text-muted font-medium mt-2" id="dest-exit-status">Only configured applications use this proxy</div>
-        </div>
-      </div>
-    </section>
+            <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5 space-y-1">
+              <div class="text-xs font-medium text-muted">Step 2: Server gateway</div>
+              <div class="text-sm font-semibold text-white">Tor client on server</div>
+              <div class="text-xs text-soft mono mt-1" id="server-direct-ip">Direct IP: checking…</div>
+              <div class="text-xs text-muted font-medium mt-2" id="server-gateway-status">Full-device routing unavailable</div>
+            </div>
 
-    
+            <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5 space-y-1">
+              <div class="text-xs font-medium text-muted">Step 3: Exit node</div>
+              <div class="text-sm font-semibold text-white" id="dest-exit-name">Proxy disabled</div>
+              <div class="text-xs text-soft mono mt-1" id="dest-exit-ip">Proxy exit: unavailable</div>
+              <div class="text-xs text-muted font-medium mt-2" id="dest-exit-status">Only configured applications use this proxy</div>
+            </div>
+          </div>
+        </section>
       </div>
 
       <!-- Right Column: Autonomous Agents & Dev Control Center (~42% width) -->
       <div class="workstation-col">
         <!-- AGY Agent Instances Section -->
-    <section class="golden-glass-card p-5 rounded-xl space-y-4" aria-labelledby="agy-heading">
-      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <div class="flex items-center gap-2.5">
-          <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-          </div>
-          <div>
-            <div class="flex items-center gap-2">
-              <h2 id="agy-heading" class="text-base font-semibold text-white">Autonomous coding agent (AGY)</h2>
-              <span class="px-2 py-0.5 rounded text-[10px] font-medium badge-neutral">Multi-session</span>
+        <section class="m3-card golden-glass-card p-5 rounded-xl space-y-4" aria-labelledby="agy-heading">
+          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div class="flex items-center gap-2.5">
+              <div class="service-icon-box">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+              </div>
+              <div>
+                <div class="flex items-center gap-2">
+                  <h2 id="agy-heading" class="text-base font-semibold text-white">Autonomous coding agent (AGY)</h2>
+                  <span class="m3-badge badge-neutral">Multi-session</span>
+                </div>
+                <p class="text-xs text-muted mt-0.5">Independent Antigravity CLI coding sessions. Closing a tab keeps commands running.</p>
+              </div>
             </div>
-            <p class="text-xs text-muted mt-0.5">Independent Antigravity CLI coding sessions. Closing a tab keeps commands running.</p>
+            <button type="button" id="agy-new" onclick="createNewAgySession()" class="m3-btn m3-btn-filled gold-gradient-btn px-4 py-2 text-xs font-medium flex items-center gap-1.5 select-none shrink-0">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+              <span>New AGY Instance</span>
+            </button>
           </div>
-        </div>
-        <button type="button" id="agy-new" onclick="createNewAgySession()" class="gold-gradient-btn px-3.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 select-none shrink-0">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-          <span>New AGY Instance</span>
-        </button>
-      </div>
-      <div id="agy-sessions-container" class="space-y-2 text-sm">
-        <div class="text-xs text-muted flex items-center gap-2 p-2">
-          <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
-          <span>Loading AGY sessions…</span>
-        </div>
-      </div>
-    </section>
+          <div id="agy-sessions-container" class="space-y-2 text-sm">
+            <div class="text-xs text-muted flex items-center gap-2 p-2">
+              <svg class="w-4 h-4 animate-spin text-teal" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+              <span>Loading AGY sessions…</span>
+            </div>
+          </div>
+        </section>
 
-    
         <!-- Laptop Terminals Section -->
-    <section class="golden-glass-card p-5 rounded-xl space-y-3" aria-labelledby="laptop-heading">
-      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <div>
-          <h2 id="laptop-heading" class="text-base font-semibold text-white">Laptop terminals</h2>
-          <p class="text-xs text-muted mt-0.5">Control Kitty terminal sessions streamed over Tailscale from the laptop.</p>
-        </div>
-        <button type="button" id="laptop-new" disabled class="gold-gradient-btn px-3.5 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40 shrink-0">New Terminal</button>
-      </div>
-      <p id="laptop-status" class="text-xs text-soft" role="status" aria-live="polite">Checking laptop…</p>
-      <div id="laptop-sessions" class="space-y-2 text-sm"></div>
-      <p class="text-[11px] text-muted">Laptop must be awake and logged in to open Kitty. Closing the browser keeps commands running; Close terminates the session.</p>
-    </section>
-    <script src="/static/portal-polling.js"></script>
-    <script src="/static/laptop.js" defer></script>
+        <section class="m3-card golden-glass-card p-5 rounded-xl space-y-3" aria-labelledby="laptop-heading">
+          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div>
+              <h2 id="laptop-heading" class="text-base font-semibold text-white">Laptop terminals</h2>
+              <p class="text-xs text-muted mt-0.5">Control Kitty terminal sessions streamed over Tailscale from the laptop.</p>
+            </div>
+            <button type="button" id="laptop-new" disabled class="m3-btn m3-btn-filled gold-gradient-btn px-4 py-2 text-xs font-medium disabled:opacity-40 shrink-0">New Terminal</button>
+          </div>
+          <p id="laptop-status" class="text-xs text-soft" role="status" aria-live="polite">Checking laptop…</p>
+          <div id="laptop-sessions" class="space-y-2 text-sm"></div>
+          <p class="text-xs text-muted">Laptop must be awake and logged in to open Kitty. Closing the browser keeps commands running; Close terminates the session.</p>
+        </section>
+        <script src="/static/portal-polling.js"></script>
+        <script src="/static/laptop.js" defer></script>
 
-    
         <!-- Quick Notes Card -->
-    <div class="golden-glass-card p-5 rounded-xl space-y-3">
-      <div class="flex items-center justify-between pb-3 border-b border-white/5">
-        <div class="flex items-center gap-2.5">
-          <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+        <div class="m3-card golden-glass-card p-5 rounded-xl space-y-3">
+          <div class="flex items-center justify-between pb-3 border-b border-white/5">
+            <div class="flex items-center gap-2.5">
+              <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+              </div>
+              <div>
+                <h3 class="text-sm font-semibold text-white leading-none">Quick notes</h3>
+                <p class="text-xs text-muted mt-1">Private scratchpad &bull; Auto-saves as you type</p>
+              </div>
+            </div>
+            <div id="notes-status" class="text-xs text-soft flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span>Ready</span>
+            </div>
           </div>
-          <div>
-            <h3 class="text-sm font-semibold text-white leading-none">Quick notes</h3>
-            <p class="text-[11px] text-muted mt-1">Private scratchpad &bull; Auto-saves as you type</p>
+
+          <!-- Formatting Toolbar -->
+          <div class="flex items-center gap-2 pt-0.5">
+            <button type="button" onclick="insertBulletList()" title="Add bullet list item" class="notes-toolbar-btn px-3 py-2 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
+              <span class="text-sm font-black leading-none text-accent">&bull;</span>
+              <span>Bullet</span>
+            </button>
+            <button type="button" onclick="insertNumberedList()" title="Add numbered list item" class="notes-toolbar-btn px-3 py-2 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
+              <span class="mono text-xs font-bold leading-none text-accent">1.</span>
+              <span>Numbered</span>
+            </button>
+            <span class="text-xs text-muted ml-auto hidden sm:inline-block">Press Enter to continue lists</span>
+          </div>
+
+          <div class="relative">
+            <textarea
+              id="user-notes-input"
+              class="notes-textarea w-full rounded-lg p-3 text-sm outline-none resize-none overflow-hidden block"
+              placeholder="Take quick notes or paste snippets (auto-saved)..."
+              rows="3"
+            ></textarea>
           </div>
         </div>
-        <div id="notes-status" class="text-xs text-soft flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-          <span>Ready</span>
-        </div>
-      </div>
-
-      <!-- Formatting Toolbar -->
-      <div class="flex items-center gap-2 pt-0.5">
-        <button type="button" onclick="insertBulletList()" title="Add bullet list item" class="px-2.5 py-1 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
-          <span class="text-sm font-black leading-none text-accent">&bull;</span>
-          <span>Bullet</span>
-        </button>
-        <button type="button" onclick="insertNumberedList()" title="Add numbered list item" class="px-2.5 py-1 rounded-md bg-surface-raised hover:bg-white/10 border border-white/10 text-soft hover:text-white text-xs font-medium flex items-center gap-1.5 transition select-none">
-          <span class="mono text-xs font-bold leading-none text-accent">1.</span>
-          <span>Numbered</span>
-        </button>
-        <span class="text-[11px] text-muted ml-auto hidden sm:inline-block">Press Enter to continue lists</span>
-      </div>
-
-      <div class="relative">
-        <textarea
-          id="user-notes-input"
-          class="notes-textarea w-full rounded-lg p-3 text-sm outline-none resize-none overflow-hidden block"
-          placeholder="Take quick notes or paste snippets (auto-saved)..."
-          rows="3"
-        ></textarea>
-      </div>
-    </div>
-
-    
       </div>
     </div>
 
@@ -370,7 +358,7 @@
         <span>Snapdragon 855 &bull; Termux &bull; Caddy Reverse Proxy &bull; Tailscale</span>
       </div>
       <div class="flex items-center gap-4">
-        <button onclick="copySSH()" class="hover:text-white transition underline underline-offset-4">Copy SSH command</button>
+        <button onclick="copySSH()" class="touch-target hover:text-white transition underline underline-offset-4">Copy SSH command</button>
         <span class="mono">Auto-refreshes every 3s</span>
       </div>
     </footer>
@@ -458,14 +446,20 @@
     }
     async function toggleVPN() {
       const button = document.getElementById('vpn-toggle-btn');
-      button.disabled = true;
+      if (button) button.disabled = true;
       try {
-        const res = await fetch('/api/vpn/toggle', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({enabled: !torEnabled}) });
+        const res = await fetch('/api/vpn/toggle', { method: 'POST' });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.message || 'Tor control failed');
-        updateVPNUI(data);
-      } catch (err) { alert(err.message); }
-      finally { button.disabled = false; }
+        if (data.status === 'ok') {
+          await (vpnLoop ? vpnLoop.refreshAfterMutation() : fetchVPN());
+        } else {
+          alert('Failed to toggle Tor proxy: ' + (data.message || 'unknown error'));
+        }
+      } catch (err) {
+        alert('Network error toggling Tor proxy');
+      } finally {
+        if (button) button.disabled = false;
+      }
     }
 
     async function handleLogout() {
@@ -497,51 +491,55 @@
           : 'badge-neutral text-muted';
 
         const toggleHtml = svc.can_toggle ? `
-          <label class="switch">
+          <label class="switch m3-switch">
             <input type="checkbox" ${isRunning ? 'checked' : ''} onchange="toggleService('${svc.id}', this)">
             <span class="slider"></span>
           </label>
         ` : `
-          <span class="text-[10px] font-mono px-1.5 py-0.5 rounded badge-neutral">Auto</span>
+          <span class="text-xs font-mono px-2 py-1 rounded m3-badge badge-neutral">Auto</span>
         `;
 
         const openBtnLabel = (svc.id === 'suwayomi' && svc.unread_updates > 0)
           ? `${svc.open_label} (${svc.unread_updates} new)`
           : svc.open_label;
 
+        const openOnClick = svc.open_url.startsWith('javascript:')
+          ? `onclick="${svc.open_url.replace('javascript:', '')}; return false;"`
+          : '';
+
         const openBtn = `
-          <a href="${svc.open_url}" ${svc.open_url.startsWith('http') || svc.open_url.startsWith('/') ? 'target="_blank"' : ''} class="gold-gradient-btn w-full py-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 ${!isRunning && svc.can_toggle ? 'opacity-40 pointer-events-none' : ''}">
+          <a href="${svc.open_url}" ${openOnClick} ${svc.open_url.startsWith('http') || svc.open_url.startsWith('/') ? 'target="_blank"' : ''} class="m3-btn m3-btn-filled gold-gradient-btn w-full text-xs font-medium flex items-center justify-center gap-1.5 ${!isRunning && svc.can_toggle ? 'opacity-40 pointer-events-none' : ''}">
             <span>${openBtnLabel}</span>
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
           </a>
         `;
 
         return `
-          <div class="golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+          <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
             <div class="space-y-3">
               <div class="flex items-start justify-between">
                 <div class="service-icon-box">
                   ${iconSvg}
                 </div>
                 <div class="flex items-center gap-2">
-                  <span class="px-2 py-0.5 rounded text-[10px] font-medium ${badgeClass}">
+                  <span class="px-2 py-0.5 rounded text-xs font-medium ${badgeClass}">
                     ${svc.status_badge || (isRunning ? 'Active' : 'Disabled')}
                   </span>
                   ${toggleHtml}
                 </div>
               </div>
               <div>
-                ${svc.category ? `<span class='text-[11px] font-medium text-muted'>${svc.category}</span>` : ''}
+                ${svc.category ? `<span class='text-xs font-medium text-muted'>${svc.category}</span>` : ''}
                 <h3 class="font-semibold text-sm text-white mt-0.5">${svc.name}</h3>
                 <p class="text-xs text-soft mt-1 leading-relaxed">${svc.desc}</p>
                 ${svc.id === 'vaultwarden' ? `
-                  <div class="mt-2 p-2 rounded-lg bg-surface-raised border border-white/5 text-[11px] text-soft flex items-center justify-between">
+                  <div class="mt-2 p-2 rounded-lg bg-surface-raised border border-white/5 text-xs text-soft flex items-center justify-between">
                     <span class="mono">Bitwarden: http://100.75.159.53:8082</span>
-                    <button onclick="navigator.clipboard.writeText('http://100.75.159.53:8082'); alert('Copied Bitwarden Server URL');" class="hover:text-white underline text-[10px]">Copy</button>
+                    <button onclick="navigator.clipboard.writeText('http://100.75.159.53:8082'); alert('Copied Bitwarden Server URL');" class="touch-target hover:text-white underline text-xs px-2">Copy</button>
                   </div>
                 ` : ''}
                 ${svc.id === 'syncthing' ? `
-                  <div class="mt-2 p-2 rounded-lg bg-surface-raised border border-white/5 text-[11px] text-soft flex items-center justify-between">
+                  <div class="mt-2 p-2 rounded-lg bg-surface-raised border border-white/5 text-xs text-soft flex items-center justify-between">
                     <span class="mono">Sync: PES/Sem3 &harr; PC</span>
                     <span class="text-accent font-medium">Port 8384</span>
                   </div>
@@ -615,9 +613,14 @@
     }
 
     let selectedConvertFiles = [];
+    let modalPreviousFocus = null;
 
     function openConverterModal() {
-      document.getElementById('converter-modal').classList.remove('hidden');
+      modalPreviousFocus = document.activeElement;
+      const modal = document.getElementById('converter-modal');
+      modal.classList.remove('hidden');
+      const closeBtn = modal.querySelector('button[onclick="closeConverterModal()"]');
+      if (closeBtn) closeBtn.focus();
     }
 
     function addConvertFiles(fileList) {
@@ -683,13 +686,13 @@
             return `
               <div class="flex items-center justify-between p-2 rounded-lg bg-surface-raised border border-white/5 text-xs">
                 <div class="flex items-center gap-2.5 overflow-hidden">
-                  <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-white/5 text-white border border-white/10 shrink-0">${escapeHtml(ext)}</span>
+                  <span class="px-1.5 py-0.5 rounded text-xs font-mono bg-white/5 text-white border border-white/10 shrink-0">${escapeHtml(ext)}</span>
                   <div class="truncate">
                     <p class="font-medium text-white truncate max-w-[220px] sm:max-w-xs">${escapeHtml(file.name)}</p>
-                    <p class="text-[10px] text-muted">${formatFileSize(file.size)}</p>
+                    <p class="text-xs text-muted">${formatFileSize(file.size)}</p>
                   </div>
                 </div>
-                <button type="button" onclick="removeConvertFile(${idx})" class="p-1 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition shrink-0 ml-2">
+                <button type="button" onclick="removeConvertFile(${idx})" aria-label="Remove ${escapeHtml(file.name)}" class="touch-target p-1 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition shrink-0 ml-2">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 18L18 6M6 6l12 12"></path></svg>
                 </button>
               </div>
@@ -709,9 +712,13 @@
     }
 
     function closeConverterModal() {
-      document.getElementById('converter-modal').classList.add('hidden');
+      const modal = document.getElementById('converter-modal');
+      modal.classList.add('hidden');
       document.getElementById('convert-progress').classList.add('hidden');
       clearAllConvertFiles();
+      if (modalPreviousFocus && typeof modalPreviousFocus.focus === 'function') {
+        modalPreviousFocus.focus();
+      }
     }
 
     function initConverter() {
@@ -729,14 +736,14 @@
           dropzone.addEventListener(name, (e) => {
             e.preventDefault();
             e.stopPropagation();
-            dropzone.classList.add('border-accent', 'bg-accent/10');
+            dropzone.classList.add('border-teal');
           });
         });
         ['dragleave', 'drop'].forEach(name => {
           dropzone.addEventListener(name, (e) => {
             e.preventDefault();
             e.stopPropagation();
-            dropzone.classList.remove('border-accent', 'bg-accent/10');
+            dropzone.classList.remove('border-teal');
           });
         });
         dropzone.addEventListener('drop', (e) => {
@@ -745,8 +752,18 @@
           }
         });
       }
+      // Escape key dismissal
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          const modal = document.getElementById('converter-modal');
+          if (modal && !modal.classList.contains('hidden')) {
+            closeConverterModal();
+          }
+        }
+      });
     }
 
+    // --- Quick Notes Auto-resize, Smart Lists & Auto-save Logic ---
     let notesSaveTimeout = null;
     let lastSavedNotes = null;
 
@@ -812,8 +829,8 @@
         const text = textarea.value;
         const lineStart = text.lastIndexOf(String.fromCharCode(10), start - 1) + 1;
         const currentLine = text.substring(lineStart, start);
-        const bulletMatch = currentLine.match(/^(\s*)([•\-\*])\s+/);
-        const numberMatch = currentLine.match(/^(\s*)(\d+)\.\s+/);
+        const bulletMatch = currentLine.match(/^([ 	]*)([-•*])[ 	]+/);
+        const numberMatch = currentLine.match(/^([ 	]*)([0-9]+)\.[ 	]+/);
 
         if (bulletMatch) {
           e.preventDefault();
@@ -899,15 +916,6 @@
       } catch (e) { /* ignore */ }
     }
 
-    function copySSH() {
-      const cmd = "ssh -p 8022 u0_a505@100.75.159.53";
-      navigator.clipboard.writeText(cmd).then(() => {
-        alert("Copied SSH command to clipboard: " + cmd);
-      }).catch(err => {
-        prompt("Copy SSH Command manually:", cmd);
-      });
-    }
-
     async function executeConversion() {
       if (selectedConvertFiles.length === 0) return;
       const btn = document.getElementById('convert-btn');
@@ -971,10 +979,17 @@
       }
     }
 
-    // --- AGY Multi-Instance Session Management ---
+    function copySSH() {
+      const cmd = "ssh -p 8022 u0_a505@100.75.159.53";
+      navigator.clipboard.writeText(cmd).then(() => {
+        alert("Copied SSH command: " + cmd);
+      }).catch(() => {
+        alert("SSH command: " + cmd);
+      });
+    }
+
     async function fetchAgySessions(signal) {
       const container = document.getElementById('agy-sessions-container');
-      const newBtn = document.getElementById('agy-new');
       if (!container) return;
       try {
         const res = await fetch('/api/agy/sessions', signal ? { signal } : {});
@@ -983,35 +998,32 @@
         const data = await res.json();
         if (signal && signal.aborted) return;
         const sessions = data.sessions || [];
-        if (newBtn) {
-          newBtn.disabled = sessions.length >= (data.max_sessions || 8);
-        }
         if (sessions.length === 0) {
-          container.innerHTML = '<div class="p-3.5 rounded-lg bg-surface-raised border border-white/5 text-xs text-soft flex items-center justify-between"><span>No active AGY instances running. Click <b>New AGY Instance</b> to spawn one.</span></div>';
+          container.innerHTML = '<div class="text-xs text-muted p-2">No active AGY coding sessions. Click New AGY Instance to start.</div>';
           return;
         }
-        container.innerHTML = sessions.map(s => {
-          const safeId = s.id.replace(/[^a-zA-Z0-9_-]/g, '');
-          const isPrimary = Boolean(s.is_primary || safeId === 'default');
-          const label = isPrimary ? 'AGY (Primary)' : (s.name || ('AGY Instance ' + safeId));
-          const badgeText = isPrimary ? 'Primary' : `ID: ${safeId}`;
-          const openUrl = isPrimary ? '/agy/' : `/agy/?arg=${safeId}`;
+        container.innerHTML = sessions.map(sess => {
+          const safeId = (sess.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+          const isPrimary = sess.is_primary === true;
+          const label = isPrimary ? 'Primary AGY' : 'AGY Instance: ' + (sess.name || safeId);
+          const badgeText = isPrimary ? 'Locked' : 'Secondary';
+          const openUrl = '/agy/?arg=' + encodeURIComponent(safeId);
           return `
-            <div class="flex items-center justify-between gap-3 p-3 rounded-lg bg-surface-raised border border-white/5 hover:border-white/15 transition">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-lg bg-surface-raised border border-white/5 hover:border-white/15 transition">
               <div class="flex items-center gap-2.5">
                 <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
                 <span class="font-medium text-white mono text-xs">${label}</span>
-                <span class="px-1.5 py-0.5 rounded text-[10px] font-mono badge-neutral">${badgeText}</span>
+                <span class="px-1.5 py-0.5 rounded text-xs font-mono m3-badge badge-neutral">${badgeText}</span>
               </div>
-              <div class="flex items-center gap-2">
-                <a href="${openUrl}" target="_blank" rel="noopener noreferrer" class="px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-white text-xs font-medium transition flex items-center gap-1.5">
+              <div class="flex items-center gap-2 flex-wrap">
+                <a href="${openUrl}" target="_blank" rel="noopener noreferrer" class="m3-btn m3-btn-tonal text-xs font-medium flex items-center gap-1.5">
                   <span>Open / Reconnect</span>
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
                 </a>
                 ${isPrimary ? `
-                  <span class="px-2 py-1 rounded-md text-[11px] text-muted font-medium select-none">Protected</span>
+                  <span class="px-3 py-1.5 rounded-md text-xs text-muted font-medium select-none">Protected</span>
                 ` : `
-                  <button type="button" onclick="closeAgySession('${safeId}')" class="px-2.5 py-1 rounded-md bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-300 text-xs font-medium transition">
+                  <button type="button" onclick="closeAgySession('${safeId}')" class="m3-btn m3-btn-outlined text-xs text-red-300 font-medium">
                     Close
                   </button>
                 `}
@@ -1105,21 +1117,21 @@
   </script>
 
   <!-- Document to PDF Converter Modal -->
-  <div id="converter-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm hidden">
-    <div class="golden-glass max-w-lg w-full p-5 sm:p-6 rounded-xl space-y-4 relative max-h-[90vh] flex flex-col justify-between">
+  <div id="converter-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title-admin">
+    <div class="m3-card golden-glass max-w-lg w-full p-5 sm:p-6 rounded-xl space-y-4 relative max-h-[90vh] flex flex-col justify-between">
 
       <!-- Modal Header -->
       <div class="flex items-start justify-between">
         <div class="flex items-center gap-2.5">
-          <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
+          <div class="service-icon-box">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
           </div>
           <div>
-            <h3 class="text-base font-semibold text-white">Document to PDF</h3>
+            <h3 id="modal-title-admin" class="text-base font-semibold text-white">Document to PDF</h3>
             <p class="text-xs text-soft">Convert single or batch documents instantly</p>
           </div>
         </div>
-        <button onclick="closeConverterModal()" class="text-muted hover:text-white p-1 rounded-lg hover:bg-white/5 transition">
+        <button onclick="closeConverterModal()" aria-label="Close converter dialog" class="touch-target text-muted hover:text-white p-2 rounded-lg hover:bg-white/5 transition">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 18L18 6M6 6l12 12"></path></svg>
         </button>
       </div>
@@ -1132,9 +1144,9 @@
         <svg class="w-8 h-8 text-muted pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
         <div class="pointer-events-none">
           <p class="text-xs font-medium text-white">Choose files or drag & drop</p>
-          <p class="text-[11px] text-muted mt-0.5">Word (.docx, .doc), PPT (.pptx), Excel (.xlsx), Images & Text</p>
+          <p class="text-xs text-muted mt-0.5">Word (.docx, .doc), PPT (.pptx), Excel (.xlsx), Images & Text</p>
         </div>
-        <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-hover text-white border border-white/10 text-xs font-medium transition pointer-events-none">
+        <span class="m3-btn m3-btn-tonal pointer-events-none text-xs font-medium">
           Select files
         </span>
       </label>
@@ -1144,10 +1156,10 @@
         <div class="flex items-center justify-between text-xs pb-1.5 border-b border-white/5">
           <span id="convert-file-summary" class="font-medium text-white">0 files selected</span>
           <div class="flex items-center gap-2">
-            <label for="convert-file-input" class="cursor-pointer text-[11px] px-2 py-0.5 rounded bg-surface-raised text-soft hover:text-white font-medium border border-white/10 transition">
+            <label for="convert-file-input" class="touch-target cursor-pointer text-xs px-3 py-1.5 rounded-md bg-surface-raised text-soft hover:text-white font-medium border border-white/10 transition">
               + Add More
             </label>
-            <button type="button" onclick="clearAllConvertFiles()" class="text-[11px] px-2 py-0.5 rounded text-muted hover:text-white transition">
+            <button type="button" onclick="clearAllConvertFiles()" class="touch-target text-xs px-3 py-1.5 rounded-md text-muted hover:text-white transition">
               Clear All
             </button>
           </div>
@@ -1159,10 +1171,10 @@
       <div id="convert-progress" class="hidden space-y-2">
         <div class="flex items-center justify-between text-xs">
           <span class="text-soft font-medium flex items-center gap-1.5">
-            <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+            <svg class="w-4 h-4 animate-spin text-teal" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
             <span id="convert-status-text">Converting documents to PDF...</span>
           </span>
-          <span class="mono text-white text-[11px]" id="convert-status-pct">Active</span>
+          <span class="mono text-white text-xs" id="convert-status-pct">Active</span>
         </div>
         <div class="w-full progress-track">
           <div class="progress-fill w-full"></div>
@@ -1171,8 +1183,8 @@
 
       <!-- Action Buttons -->
       <div class="pt-2 flex items-center justify-end gap-2 border-t border-white/5">
-        <button onclick="closeConverterModal()" class="px-3.5 py-1.5 rounded-lg text-xs font-medium text-soft hover:bg-white/5 transition">Cancel</button>
-        <button id="convert-btn" onclick="executeConversion()" disabled class="gold-gradient-btn px-4 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed">
+        <button onclick="closeConverterModal()" class="m3-btn m3-btn-outlined text-xs font-medium text-soft hover:bg-white/5 transition">Cancel</button>
+        <button id="convert-btn" onclick="executeConversion()" disabled class="m3-btn m3-btn-filled gold-gradient-btn text-xs font-medium">
           Convert & Download PDF
         </button>
       </div>

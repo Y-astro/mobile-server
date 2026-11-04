@@ -15,7 +15,8 @@
 - **`scripts/server_supervisor.py`**: Owns background process lifecycle management, periodic polling, flock-based singleton daemon and cycle locking, service failure tracking with exponential backoff, and process log rotation (2 MiB copy/truncate).
 - **`config/Caddyfile`**: Owns edge reverse-proxy routing, HTTPS/TLS termination, access authentication (`forward_auth`), compression, security headers, and static asset delivery.
 - **`gateway/`**: Owns high-performance streaming transport and proxying implemented in Go.
-- **`web/`**: Owns frontend presentation and client-side interactions (`admin.html`, `family.html`, `login.html`, `portal.css`, `laptop.js`, `interactive_player.js`, `filebrowser.js`, `agy_index.html`, `termux_index.html`).
+- **`web/`**: Owns frontend presentation and client-side interactions (`admin.html`, `family.html`, `login.html`, `portal.css`, `laptop.js`, `interactive_player.js`, `filebrowser.js`, `agy_index.html`, `termux_index.html`). Implements the dark Material 3 design system (`--md-sys-color-*` tokens, 4px grid rhythm, sans typography, tabular numerals, 48px minimum touch targets) across administrator, family, and login pages.
+- **`tests/material3-browser.cjs`**: Owns automated visual and interaction acceptance for the Material 3 portal, testing computed tokens, typography, 48px touch targets, responsive viewports (1280px desktop, 360–412px mobile) without overflow, complete service grid states, dialog keyboard flows, and notes persistence.
 
 ## Template Authority and Availability
 
