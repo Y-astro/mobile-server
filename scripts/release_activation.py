@@ -178,17 +178,30 @@ ALLOWED_STATES = {
 }
 
 DEPENDENCY_ORDER = [
+    "suwayomi",
+    "suwayomi_filter",
     "filebrowser",
     "transfer_gateway",
     "dashboard",
     "caddy",
+    "suwayomi_scheduler",
 ]
 
 # Release Profiles
 PROFILE_GENERAL = "general"
 PROFILE_SUWAYOMI_FILTER = "suwayomi-filter"
-VALID_PROFILES = (PROFILE_GENERAL, PROFILE_SUWAYOMI_FILTER)
+PROFILE_SUWAYOMI_LIFECYCLE = "suwayomi-lifecycle"
+VALID_PROFILES = (PROFILE_GENERAL, PROFILE_SUWAYOMI_FILTER, PROFILE_SUWAYOMI_LIFECYCLE)
 SUWAYOMI_FILTER_REMOTE = "/data/data/com.termux/files/home/bin/suwayomi_graphql_filter.py"
+SUWAYOMI_LAUNCHER_REMOTE = "/data/data/com.termux/files/home/bin/start_suwayomi.sh"
+SUPERVISOR_REMOTE = "/data/data/com.termux/files/home/bin/server_supervisor.py"
+SERVICE_CATALOG_REMOTE = "/data/data/com.termux/files/home/.local/lib/mobile-server/service_catalog.py"
+
+SUWAYOMI_LIFECYCLE_ALLOWED_REMOTES = (
+    SUWAYOMI_LAUNCHER_REMOTE,
+    SUPERVISOR_REMOTE,
+    SERVICE_CATALOG_REMOTE,
+)
 
 
 def validate_profile(profile: Any) -> str:
@@ -414,6 +427,25 @@ def map_changed_destinations(
             affected_services.add("suwayomi_filter")
             supervisor_affected = False
 
+        elif profile == PROFILE_SUWAYOMI_LIFECYCLE:
+            norm = remote.replace("\\", "/").rstrip("/")
+            if norm not in SUWAYOMI_LIFECYCLE_ALLOWED_REMOTES:
+                raise ActivationError(
+                    f"Profile '{PROFILE_SUWAYOMI_LIFECYCLE}' permits only start_suwayomi.sh, server_supervisor.py, and service_catalog.py to change, found: {remote}"
+                )
+            if action != rt.ACTION_REPLACE:
+                raise ActivationError(
+                    f"Profile '{PROFILE_SUWAYOMI_LIFECYCLE}' permits only modifying existing assets with action REPLACE, found: {action} on {remote}"
+                )
+            if norm == SUWAYOMI_LAUNCHER_REMOTE:
+                affected_services.add("suwayomi")
+            elif norm == SUPERVISOR_REMOTE:
+                supervisor_affected = True
+            elif norm == SERVICE_CATALOG_REMOTE:
+                affected_services.add("dashboard")
+                affected_services.add("suwayomi_scheduler")
+                supervisor_affected = True
+
     if "ssh" in affected_services:
         raise ActivationError("SSH service restart is strictly prohibited")
 
@@ -525,6 +557,22 @@ def validate_activation_journal(
         raise ActivationError(
             f"Supervisor affected mismatch: journal={sup_affected}, recomputed={recomputed_sup}"
         )
+
+    if validated_profile == PROFILE_SUWAYOMI_LIFECYCLE:
+        transition = act_journal.get("transition")
+        if not isinstance(transition, dict):
+            raise ActivationError("Missing or invalid transition metadata in suwayomi-lifecycle activation journal")
+        if transition.get("type") != "suwayomi_15_to_16":
+            raise ActivationError(f"Invalid transition type: {transition.get('type')!r}")
+        if transition.get("prior_service_count") != 15:
+            raise ActivationError(f"Invalid prior service count: {transition.get('prior_service_count')!r}")
+        if transition.get("candidate_service_count") != 16:
+            raise ActivationError(f"Invalid candidate service count: {transition.get('candidate_service_count')!r}")
+        if transition.get("new_services") != ["suwayomi_scheduler"]:
+            raise ActivationError(f"Invalid new services in transition: {transition.get('new_services')!r}")
+        rec_hashes = transition.get("recovery_hashes")
+        if rec_hashes is not None and rec_hashes != act_journal.get("recovery_assets"):
+            raise ActivationError("Transition recovery_hashes do not match journal recovery_assets")
 
     tx_id = act_journal.get("tx_id")
     if not isinstance(tx_id, str) or not tx_id:
@@ -934,6 +982,11 @@ def verify_prerequisites_before_launch(
         if gw_cfg and "transfer_gateway" in active_services:
             if not driver.healthy("transfer_gateway", gw_cfg):
                 raise HealthCheckError("transfer_gateway must already be healthy before launching caddy")
+    elif sid == "suwayomi_scheduler":
+        sw_cfg = all_cfgs.get("suwayomi")
+        if sw_cfg:
+            if not driver.healthy("suwayomi", sw_cfg):
+                raise HealthCheckError("Suwayomi backend must already be healthy before launching suwayomi_scheduler")
 
 
 def preserve_recovery_lifecycle_code(
@@ -1078,6 +1131,22 @@ def plan(
         profile=profile,
     )
 
+    ns_root = Path(namespace_root).resolve() if namespace_root else Path("/data/data/com.termux/files")
+    cand_cat_path = b_root / "app/service_catalog.py"
+    if cand_cat_path.exists():
+        live_cat = ns_root / "home/.local/lib/mobile-server/service_catalog.py"
+        repo_cat = Path(__file__).resolve().parent.parent / "app/service_catalog.py"
+        scripts_cat = Path(__file__).resolve().parent / "service_catalog.py"
+        prior_cat_path = live_cat if live_cat.exists() else (repo_cat if repo_cat.exists() else (scripts_cat if scripts_cat.exists() else None))
+        if prior_cat_path and prior_cat_path.exists():
+            ta.validate_candidate_catalog_file(
+                candidate_catalog_path=cand_cat_path,
+                prior_catalog_path=prior_cat_path,
+                home_dir=ns_root / "home",
+                prefix_dir=ns_root / "usr",
+                profile=profile,
+            )
+
     return {
         "status": "plan_ok",
         "profile": profile,
@@ -1127,7 +1196,10 @@ def apply(
         )
 
         if hasattr(driver, "validate_candidate_services"):
-            driver.validate_candidate_services(b_root)
+            try:
+                driver.validate_candidate_services(b_root, profile=profile)
+            except TypeError:
+                driver.validate_candidate_services(b_root)
 
         tx_journal = tx.load_journal()
         entries = tx_journal.get("entries", [])
@@ -1158,6 +1230,14 @@ def apply(
             "daemon_record": None,
             "recovery_assets": recovery_hashes,
         }
+        if profile == PROFILE_SUWAYOMI_LIFECYCLE:
+            act_journal["transition"] = {
+                "type": "suwayomi_15_to_16",
+                "prior_service_count": 15,
+                "candidate_service_count": 16,
+                "new_services": ["suwayomi_scheduler"],
+                "recovery_hashes": recovery_hashes,
+            }
         save_activation_journal(tx_dir, act_journal)
 
         disabled_dir = ns_root / "home/.config/services_disabled"
@@ -1192,6 +1272,12 @@ def apply(
 
         try:
             with driver.lock("services", timeout=10.0):
+                if profile == PROFILE_SUWAYOMI_LIFECYCLE:
+                    existing_sched = driver.matching_processes("suwayomi_scheduler")
+                    if existing_sched:
+                        raise QuiescenceError(
+                            f"Pre-existing suwayomi_scheduler process found during initial 15-to-16 lifecycle transition: {existing_sched}; refusing unmanaged instance"
+                        )
                 active_services, _ = install_guards(
                     disabled_dir=disabled_dir,
                     affected_services=affected_services,
@@ -1253,6 +1339,13 @@ def apply(
 
                 # Revalidate ALL flags (pre-existing and guards)
                 revalidate_all_flags(disabled_dir, act_journal["flags"], current_uid, tx_id)
+
+                if profile == PROFILE_SUWAYOMI_LIFECYCLE:
+                    concurrent_sched = driver.matching_processes("suwayomi_scheduler")
+                    if concurrent_sched:
+                        raise QuiescenceError(
+                            f"suwayomi_scheduler process appeared concurrently before file mutation: {concurrent_sched}"
+                        )
 
                 # Re-verify active services dead
                 for sid in active_services:
@@ -1461,9 +1554,11 @@ def _rollback_internal(
         driver.reload_lifecycle()
 
         # 4. Relaunch prior services
-        sorted_active = sort_services_by_dependencies(active_services)
+        prior_services = driver.services()
+        prior_active = [sid for sid in active_services if sid in prior_services and sid != "suwayomi_scheduler"]
+        sorted_active = sort_services_by_dependencies(prior_active)
         for sid in sorted_active:
-            cfg = driver.services()[sid]
+            cfg = prior_services[sid]
             driver.launch(sid, cfg)
             deadline = time.monotonic() + health_timeout
             is_healthy = False

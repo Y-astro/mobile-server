@@ -463,6 +463,43 @@ class ReleaseInstallerTests(unittest.TestCase):
                 ["apply", "--bundle", "/tmp/bundle_dir", "--preconditions", "/tmp/pre.json", "--transaction-dir", "/tmp/tx_dir", "--profile", "general"],
             )
 
+            # Test explicit --profile suwayomi-lifecycle on apply
+            proc_lc = subprocess.run(
+                [
+                    "bash",
+                    str(staged_scripts / "install.sh"),
+                    "apply",
+                    "--bundle",
+                    "/tmp/bundle_dir",
+                    "--preconditions",
+                    "/tmp/pre.json",
+                    "--transaction-dir",
+                    "/tmp/tx_dir",
+                    "--profile",
+                    "suwayomi-lifecycle",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(proc_lc.returncode, 0, f"Apply lifecycle failed: {proc_lc.stderr}")
+            with open(log_path, "r", encoding="utf-8") as f:
+                received = json.load(f)
+            self.assertEqual(
+                received,
+                [
+                    "apply",
+                    "--bundle",
+                    "/tmp/bundle_dir",
+                    "--preconditions",
+                    "/tmp/pre.json",
+                    "--transaction-dir",
+                    "/tmp/tx_dir",
+                    "--profile",
+                    "suwayomi-lifecycle",
+                ],
+            )
+
             # Test omitted profile (default)
             proc_omit = subprocess.run(
                 [

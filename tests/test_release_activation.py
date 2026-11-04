@@ -1174,6 +1174,7 @@ class TestReleaseActivation(unittest.TestCase):
         """Strict profile validation: known profiles pass; unknown/nonstring/null failclosed."""
         self.assertEqual(ra.validate_profile("general"), "general")
         self.assertEqual(ra.validate_profile("suwayomi-filter"), "suwayomi-filter")
+        self.assertEqual(ra.validate_profile("suwayomi-lifecycle"), "suwayomi-lifecycle")
 
         for bad in (None, 123, True, False, "", "unknown", "suwayomi", "filter", ["general"]):
             with self.assertRaises(ra.ActivationError):
@@ -1479,6 +1480,38 @@ class TestReleaseActivation(unittest.TestCase):
         self.assertEqual(res["profile"], "suwayomi-filter")
         self.assertEqual(res["affected_services"], ["suwayomi_filter"])
 
+        # Valid suwayomi-lifecycle profile on plan: restore filter to match preconditions, modify launcher & candidate catalog
+        (bundle / "scripts/suwayomi_graphql_filter.py").write_text((live / "home/bin/suwayomi_graphql_filter.py").read_text(encoding="utf-8"), encoding="utf-8")
+        (bundle / "scripts/start_suwayomi.sh").write_text("# CANDIDATE_LAUNCHER\n", encoding="utf-8")
+        orig_cat = (bundle / "app/service_catalog.py").read_text(encoding="utf-8")
+        cand_cat = orig_cat.replace(
+            "'battery_guard': dict(cmd=[f'{p}/bin/bash', f'{h}/bin/battery_guard.sh', '--daemon']),",
+            "'battery_guard': dict(cmd=[f'{p}/bin/bash', f'{h}/bin/battery_guard.sh', '--daemon']),\n        'suwayomi_scheduler': dict(cmd=[f'{p}/bin/python3', f'{h}/bin/suwayomi_daily_update.py', '--foreground']),"
+        )
+        (bundle / "app/service_catalog.py").write_text(cand_cat, encoding="utf-8")
+        proc_lc = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "release_activation.py"),
+                "plan",
+                "--bundle",
+                str(bundle),
+                "--preconditions",
+                str(preconds_file),
+                "--namespace-root",
+                str(live),
+                "--profile",
+                "suwayomi-lifecycle",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(proc_lc.returncode, 0, f"CLI lifecycle plan failed: {proc_lc.stderr}")
+        res_lc = json.loads(proc_lc.stdout)
+        self.assertEqual(res_lc["profile"], "suwayomi-lifecycle")
+        self.assertIn("suwayomi", res_lc["affected_services"])
+
         # Invalid profile choice
         proc_bad = subprocess.run(
             [
@@ -1498,6 +1531,357 @@ class TestReleaseActivation(unittest.TestCase):
         )
         self.assertNotEqual(proc_bad.returncode, 0)
         self.assertIn("invalid choice", proc_bad.stderr)
+
+    def test_suwayomi_lifecycle_profile_allowed_paths_and_scope(self):
+        """Profile suwayomi-lifecycle allows exact 3 owned paths; derives exact service scope."""
+        # 1. All 3 allowed paths replaced
+        all_3_entries = [
+            {"remote": ra.SUWAYOMI_LAUNCHER_REMOTE, "action": ra.rt.ACTION_REPLACE},
+            {"remote": ra.SUPERVISOR_REMOTE, "action": ra.rt.ACTION_REPLACE},
+            {"remote": ra.SERVICE_CATALOG_REMOTE, "action": ra.rt.ACTION_REPLACE},
+        ]
+        affected, sup_aff, changed = ra.map_changed_destinations(all_3_entries, profile="suwayomi-lifecycle")
+        self.assertEqual(affected, {"dashboard", "suwayomi", "suwayomi_scheduler"})
+        self.assertTrue(sup_aff)
+        self.assertEqual(changed, [ra.SUWAYOMI_LAUNCHER_REMOTE, ra.SUPERVISOR_REMOTE, ra.SERVICE_CATALOG_REMOTE])
+
+        # 2. Individual paths
+        # Launcher only -> suwayomi
+        aff, sup, _ = ra.map_changed_destinations(
+            [{"remote": ra.SUWAYOMI_LAUNCHER_REMOTE, "action": ra.rt.ACTION_REPLACE}],
+            profile="suwayomi-lifecycle",
+        )
+        self.assertEqual(aff, {"suwayomi"})
+        self.assertFalse(sup)
+
+        # Supervisor only -> supervisor
+        aff, sup, _ = ra.map_changed_destinations(
+            [{"remote": ra.SUPERVISOR_REMOTE, "action": ra.rt.ACTION_REPLACE}],
+            profile="suwayomi-lifecycle",
+        )
+        self.assertEqual(aff, set())
+        self.assertTrue(sup)
+
+        # Catalog only -> dashboard, suwayomi_scheduler, supervisor
+        aff, sup, _ = ra.map_changed_destinations(
+            [{"remote": ra.SERVICE_CATALOG_REMOTE, "action": ra.rt.ACTION_REPLACE}],
+            profile="suwayomi-lifecycle",
+        )
+        self.assertEqual(aff, {"dashboard", "suwayomi_scheduler"})
+        self.assertTrue(sup)
+
+        # 3. Disallowed paths rejected
+        forbidden_remotes = [
+            ra.SUWAYOMI_FILTER_REMOTE,
+            "/data/data/com.termux/files/home/bin/suwayomi_daily_update.py",
+            "/data/data/com.termux/files/home/bin/suwayomi_update.sh",
+            "/data/data/com.termux/files/home/.local/lib/mobile-server/auth.py",
+            "/data/data/com.termux/files/home/.config/caddy/Caddyfile",
+            "/data/data/com.termux/files/usr/bin/dashboard",
+            "/data/data/com.termux/files/home/bin/mobile-gateway",
+            "/data/data/com.termux/files/home/bin/agy_session.sh",
+        ]
+        for remote in forbidden_remotes:
+            with self.subTest(remote=remote), self.assertRaises(ra.ActivationError):
+                ra.map_changed_destinations(
+                    [{"remote": remote, "action": ra.rt.ACTION_REPLACE}],
+                    profile="suwayomi-lifecycle",
+                )
+
+        # 4. Disallowed actions rejected (only ACTION_REPLACE allowed)
+        for action in (None, ra.rt.ACTION_CREATE, "REMOVE"):
+            with self.subTest(action=action), self.assertRaises(ra.ActivationError):
+                ra.map_changed_destinations(
+                    [{"remote": ra.SUWAYOMI_LAUNCHER_REMOTE, "action": action}],
+                    profile="suwayomi-lifecycle",
+                )
+
+    def test_suwayomi_lifecycle_wrong_profiles_and_mixed_changes(self):
+        """Profile cross-contamination refused: general refuses launcher/catalog; filter refuses launcher; lifecycle refuses filter."""
+        # General profile refuses launcher
+        with self.assertRaises(ra.ActivationError):
+            ra.map_changed_destinations(
+                [{"remote": ra.SUWAYOMI_LAUNCHER_REMOTE, "action": ra.rt.ACTION_REPLACE}],
+                profile="general",
+            )
+
+        # suwayomi-filter refuses launcher
+        with self.assertRaises(ra.ActivationError):
+            ra.map_changed_destinations(
+                [{"remote": ra.SUWAYOMI_LAUNCHER_REMOTE, "action": ra.rt.ACTION_REPLACE}],
+                profile="suwayomi-filter",
+            )
+
+        # suwayomi-lifecycle refuses filter
+        with self.assertRaises(ra.ActivationError):
+            ra.map_changed_destinations(
+                [{"remote": ra.SUWAYOMI_FILTER_REMOTE, "action": ra.rt.ACTION_REPLACE}],
+                profile="suwayomi-lifecycle",
+            )
+
+        # Mixed filter + launcher refused under suwayomi-lifecycle
+        with self.assertRaises(ra.ActivationError):
+            ra.map_changed_destinations(
+                [
+                    {"remote": ra.SUWAYOMI_LAUNCHER_REMOTE, "action": ra.rt.ACTION_REPLACE},
+                    {"remote": ra.SUWAYOMI_FILTER_REMOTE, "action": ra.rt.ACTION_REPLACE},
+                ],
+                profile="suwayomi-lifecycle",
+            )
+
+    def test_exact_15_to_16_vs_decoy_runtime_changes(self):
+        """Exact 15->16 candidate runtime contract verified; decoys, reordering, and wrong profiles rejected."""
+        import app.service_catalog as sc
+        prior_services = sc.runtime_services("/home", "/usr")
+        self.assertEqual(len(prior_services), 15)
+
+        # 1. Exact valid candidate 16 services
+        valid_cand = dict(prior_services)
+        valid_cand["suwayomi_scheduler"] = {
+            "cmd": ["/usr/bin/python3", "/home/bin/suwayomi_daily_update.py", "--foreground"]
+        }
+        # Passes validation
+        ta.validate_catalog_transition(
+            prior_services=prior_services,
+            cand_services=valid_cand,
+            home_str="/home",
+            prefix_str="/usr",
+            profile="suwayomi-lifecycle",
+        )
+
+        # 2. Decoy commands rejected
+        for bad_cmd in (
+            ["/usr/bin/python3", "/home/bin/suwayomi_daily_update.py", "--now"],
+            ["/usr/bin/python3", "/home/bin/suwayomi_daily_update.py", "--status"],
+            ["/usr/bin/python3", "/home/bin/suwayomi_daily_update.py", "--daemon"],
+            ["/usr/bin/python3", "/home/bin/suwayomi_update.sh"],
+        ):
+            bad_cand = dict(prior_services)
+            bad_cand["suwayomi_scheduler"] = {"cmd": bad_cmd}
+            with self.subTest(bad_cmd=bad_cmd), self.assertRaises(RuntimeError) as ctx:
+                ta.validate_catalog_transition(
+                    prior_services=prior_services,
+                    cand_services=bad_cand,
+                    home_str="/home",
+                    prefix_str="/usr",
+                    profile="suwayomi-lifecycle",
+                )
+            self.assertIn("cmd drift", str(ctx.exception))
+
+        # 3. Decoy extra attributes rejected (no port, no path, etc.)
+        for extra_key, extra_val in (("port", 4567), ("path", "/healthz"), ("protocol", "http")):
+            bad_cand = dict(prior_services)
+            bad_cand["suwayomi_scheduler"] = {
+                "cmd": ["/usr/bin/python3", "/home/bin/suwayomi_daily_update.py", "--foreground"],
+                extra_key: extra_val,
+            }
+            with self.subTest(extra_key=extra_key), self.assertRaises(RuntimeError) as ctx:
+                ta.validate_catalog_transition(
+                    prior_services=prior_services,
+                    cand_services=bad_cand,
+                    home_str="/home",
+                    prefix_str="/usr",
+                    profile="suwayomi-lifecycle",
+                )
+            self.assertIn("unexpected attributes", str(ctx.exception))
+
+        # 4. Altered prior service rejected
+        altered_prior = dict(valid_cand)
+        altered_prior["caddy"] = dict(altered_prior["caddy"], port=9999)
+        with self.assertRaises(RuntimeError) as ctx:
+            ta.validate_catalog_transition(
+                prior_services=prior_services,
+                cand_services=altered_prior,
+                home_str="/home",
+                prefix_str="/usr",
+                profile="suwayomi-lifecycle",
+            )
+        self.assertIn("runtime drift", str(ctx.exception))
+
+        # 5. Missing or reordered prior service rejected
+        reordered_keys = list(prior_services.keys())
+        reordered_keys[0], reordered_keys[1] = reordered_keys[1], reordered_keys[0]
+        reordered_cand = {k: prior_services[k] for k in reordered_keys}
+        reordered_cand["suwayomi_scheduler"] = valid_cand["suwayomi_scheduler"]
+        with self.assertRaises(RuntimeError) as ctx:
+            ta.validate_catalog_transition(
+                prior_services=prior_services,
+                cand_services=reordered_cand,
+                home_str="/home",
+                prefix_str="/usr",
+                profile="suwayomi-lifecycle",
+            )
+        self.assertIn("first 15 keys mismatch", str(ctx.exception))
+
+        # 6. Wrong profile rejected: 16 services under general or suwayomi-filter
+        for prof in ("general", "suwayomi-filter"):
+            with self.subTest(prof=prof), self.assertRaises(RuntimeError) as ctx:
+                ta.validate_catalog_transition(
+                    prior_services=prior_services,
+                    cand_services=valid_cand,
+                    home_str="/home",
+                    prefix_str="/usr",
+                    profile=prof,
+                )
+            self.assertIn("order mismatch", str(ctx.exception))
+
+        # 7. 15 services under suwayomi-lifecycle rejected
+        with self.assertRaises(RuntimeError) as ctx:
+            ta.validate_catalog_transition(
+                prior_services=prior_services,
+                cand_services=prior_services,
+                home_str="/home",
+                prefix_str="/usr",
+                profile="suwayomi-lifecycle",
+            )
+        self.assertIn("requires exact 16 candidate services", str(ctx.exception))
+
+    def test_suwayomi_lifecycle_pre_existing_scheduler_refused(self):
+        """Initial 15->16 transition refuses any pre-existing owned scheduler process."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        (bundle / "scripts/start_suwayomi.sh").write_text("# LAUNCHER\n", encoding="utf-8")
+
+        driver = FakeLifecycleDriver()
+        driver.running_processes["suwayomi_scheduler"] = [(4444, "sched_start_4444")]
+
+        with self.assertRaises(ra.QuiescenceError) as ctx:
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-lifecycle")
+        self.assertIn("Pre-existing suwayomi_scheduler process found", str(ctx.exception))
+
+    def test_suwayomi_lifecycle_concurrent_scheduler_appearance_refused(self):
+        """Concurrent scheduler appearance before file mutation is detected and refused under lock."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        (bundle / "scripts/start_suwayomi.sh").write_text("# LAUNCHER\n", encoding="utf-8")
+
+        driver = FakeLifecycleDriver()
+        orig_install_guards = ra.install_guards
+
+        def _spawning_install_guards(*args, **kwargs):
+            active, disabled = orig_install_guards(*args, **kwargs)
+            # Concurrently spawn scheduler
+            driver.running_processes["suwayomi_scheduler"] = [(5555, "sched_start_5555")]
+            return active, disabled
+
+        with unittest.mock.patch.object(ra, "install_guards", _spawning_install_guards):
+            with self.assertRaises(ra.QuiescenceError) as ctx:
+                ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-lifecycle")
+            self.assertIn("appeared concurrently", str(ctx.exception))
+
+    def test_suwayomi_lifecycle_pre_disabled_marker_preserved(self):
+        """Pre-existing disabled marker for suwayomi_scheduler is preserved and unstarted."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        (bundle / "scripts/start_suwayomi.sh").write_text("# LAUNCHER\n", encoding="utf-8")
+        (bundle / "app/service_catalog.py").write_text("# CATALOG\n", encoding="utf-8")
+
+        disabled_dir = live / "home/.config/services_disabled"
+        disabled_dir.mkdir(parents=True, exist_ok=True)
+        sched_flag = disabled_dir / "suwayomi_scheduler"
+        sched_flag.write_text("MANUALLY_DISABLED\n", encoding="utf-8")
+        os.chmod(sched_flag, 0o600)
+
+        driver = FakeLifecycleDriver()
+        driver.running_processes["suwayomi"] = [(1001, "sw_1001")]
+        driver.running_processes["dashboard"] = [(1002, "dash_1002")]
+        driver.healthy_services.update({"suwayomi", "dashboard"})
+
+        res = ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-lifecycle")
+        self.assertEqual(res["state"], ra.STATE_COMPLETED)
+        # suwayomi_scheduler was NOT launched because it was pre-disabled
+        launched = [e[1] for e in driver.events if e[0] == "launch"]
+        self.assertNotIn("suwayomi_scheduler", launched)
+        # Marker retained
+        self.assertTrue(sched_flag.exists())
+        self.assertEqual(sched_flag.read_text(encoding="utf-8"), "MANUALLY_DISABLED\n")
+
+    def test_suwayomi_lifecycle_survivor_candidate_blocks_file_writes(self):
+        """Candidate process surviving termination blocks file writes and marks RECOVERY_REQUIRED."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        (bundle / "scripts/start_suwayomi.sh").write_text("# CANDIDATE_LAUNCHER\n", encoding="utf-8")
+
+        driver = FakeLifecycleDriver()
+        driver.running_processes["suwayomi"] = [(1001, "sw_1001")]
+        driver.fail_quiescence = True
+
+        live_launcher = live / "home/bin/start_suwayomi.sh"
+        orig_launcher = live_launcher.read_text(encoding="utf-8")
+
+        with self.assertRaises(ra.QuiescenceError):
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-lifecycle")
+
+        # Live file untouched
+        self.assertEqual(live_launcher.read_text(encoding="utf-8"), orig_launcher)
+        act = ra.load_activation_journal(tx_dir)
+        self.assertEqual(act["state"], ra.STATE_RECOVERY_REQUIRED)
+
+    def test_suwayomi_lifecycle_forged_or_omitted_transition_metadata_fails_closed(self):
+        """Activation journal with forged/omitted transition metadata fails closed."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        (bundle / "scripts/start_suwayomi.sh").write_text("# LAUNCHER\n", encoding="utf-8")
+
+        driver = FakeLifecycleDriver()
+        driver.running_processes["suwayomi"] = [(1001, "sw_1001")]
+        driver.healthy_services.add("suwayomi")
+
+        res = ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-lifecycle")
+        self.assertEqual(res["state"], ra.STATE_COMPLETED)
+
+        # Test validation failures on mutated journal
+        journal = ra.load_activation_journal(tx_dir)
+        tx = ra.rt.ReleaseTransaction(tx_dir)
+        tx_journal = tx.load_journal()
+
+        # 1. Missing transition field
+        bad_j1 = dict(journal)
+        del bad_j1["transition"]
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.validate_activation_journal(bad_j1, tx_journal, live, tx_dir, os.getuid())
+        self.assertIn("Missing or invalid transition metadata", str(ctx.exception))
+
+        # 2. Forged transition type
+        bad_j2 = dict(journal, transition=dict(journal["transition"], type="forged_type"))
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.validate_activation_journal(bad_j2, tx_journal, live, tx_dir, os.getuid())
+        self.assertIn("Invalid transition type", str(ctx.exception))
+
+        # 3. Forged candidate_service_count
+        bad_j3 = dict(journal, transition=dict(journal["transition"], candidate_service_count=17))
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.validate_activation_journal(bad_j3, tx_journal, live, tx_dir, os.getuid())
+        self.assertIn("Invalid candidate service count", str(ctx.exception))
+
+        # 4. Forged new_services
+        bad_j4 = dict(journal, transition=dict(journal["transition"], new_services=["wrong_service"]))
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.validate_activation_journal(bad_j4, tx_journal, live, tx_dir, os.getuid())
+        self.assertIn("Invalid new services", str(ctx.exception))
+
+        # 5. Tampered recovery_hashes
+        bad_j5 = dict(journal, transition=dict(journal["transition"], recovery_hashes={"bad": "hash"}))
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.validate_activation_journal(bad_j5, tx_journal, live, tx_dir, os.getuid())
+        self.assertIn("Transition recovery_hashes", str(ctx.exception))
+
+    def test_suwayomi_lifecycle_rollback_never_relaunches_scheduler(self):
+        """Rollback restores prior files and relaunches prior services, NEVER launching scheduler."""
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        (bundle / "scripts/start_suwayomi.sh").write_text("# LAUNCHER\n", encoding="utf-8")
+        (bundle / "scripts/server_supervisor.py").write_text("# SUPERVISOR\n", encoding="utf-8")
+
+        driver = FakeLifecycleDriver()
+        driver.running_processes["suwayomi"] = [(1001, "sw_1001")]
+        driver.running_processes["dashboard"] = [(1002, "dash_1002")]
+        driver.healthy_services.update({"suwayomi", "dashboard", "suwayomi_scheduler"})
+
+        # Fail candidate health for suwayomi
+        driver.fail_candidate_health.add("suwayomi")
+
+        with self.assertRaises(ra.HealthCheckError):
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver, health_timeout=0.2, profile="suwayomi-lifecycle")
+
+        # Rollback was executed:
+        # Check services launched during rollback: suwayomi_scheduler must NOT be launched!
+        rollback_launches = [e[1] for e in driver.events if e[0] == "launch"]
+        self.assertNotIn("suwayomi_scheduler", rollback_launches)
 
 
     
@@ -1565,3 +1949,56 @@ class TestTermuxLifecycleDriverUnit(unittest.TestCase):
         with self.assertRaises(ta.QuiescenceError) as ctx:
             driver.find_daemon_process()
         self.assertIn("Multiple matching supervisor daemon processes found", str(ctx.exception))
+
+    def test_native_scheduler_matching_and_decoy_rejection(self):
+        """Native suwayomi_scheduler matching matches foreground/daemon mode and rejects decoys."""
+        sched_script = self.root / "home/bin/suwayomi_daily_update.py"
+        sched_script.parent.mkdir(parents=True, exist_ok=True)
+        sched_script.write_text("# fake scheduler script\n")
+
+        driver = ta.TermuxLifecycleDriver(namespace_root=self.root, proc_root=self.proc_root)
+
+        # 1. Valid foreground scheduler
+        p1 = self.proc_root / "4001"
+        p1.mkdir()
+        (p1 / "stat").write_text("4001 (python3) S 1 4001 4001 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 40010 1000 200")
+        (p1 / "cmdline").write_bytes(f"/usr/bin/python3\0{sched_script}\0--foreground\0".encode("utf-8"))
+
+        # 2. Valid daemon scheduler
+        p2 = self.proc_root / "4002"
+        p2.mkdir()
+        (p2 / "stat").write_text("4002 (python3) S 1 4002 4002 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 40020 1000 200")
+        (p2 / "cmdline").write_bytes(f"/usr/bin/python3\0{sched_script}\0--daemon\0".encode("utf-8"))
+
+        # 3. Decoy: -c decoy
+        p3 = self.proc_root / "4003"
+        p3.mkdir()
+        (p3 / "stat").write_text("4003 (python3) S 1 4003 4003 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 40030 1000 200")
+        (p3 / "cmdline").write_bytes(b"/usr/bin/python3\0-c\0import time; time.sleep(60)\0--foreground\0")
+
+        # 4. Decoy: -m decoy
+        p4 = self.proc_root / "4004"
+        p4.mkdir()
+        (p4 / "stat").write_text("4004 (python3) S 1 4004 4004 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 40040 1000 200")
+        (p4 / "cmdline").write_bytes(b"/usr/bin/python3\0-m\0suwayomi_daily_update\0--foreground\0")
+
+        # 5. Decoy: --now trigger
+        p5 = self.proc_root / "4005"
+        p5.mkdir()
+        (p5 / "stat").write_text("4005 (python3) S 1 4005 4005 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 40050 1000 200")
+        (p5 / "cmdline").write_bytes(f"/usr/bin/python3\0{sched_script}\0--now\0".encode("utf-8"))
+
+        # 6. Decoy: --status inquiry
+        p6 = self.proc_root / "4006"
+        p6.mkdir()
+        (p6 / "stat").write_text("4006 (python3) S 1 4006 4006 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 40060 1000 200")
+        (p6 / "cmdline").write_bytes(f"/usr/bin/python3\0{sched_script}\0--status\0".encode("utf-8"))
+
+        # 7. Zombie process
+        p7 = self.proc_root / "4007"
+        p7.mkdir()
+        (p7 / "stat").write_text("4007 (python3) Z 1 4007 4007 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 40070 1000 200")
+        (p7 / "cmdline").write_bytes(f"/usr/bin/python3\0{sched_script}\0--foreground\0".encode("utf-8"))
+
+        matches = driver.matching_processes("suwayomi_scheduler")
+        self.assertEqual(matches, [(4001, "40010"), (4002, "40020")])

@@ -137,10 +137,10 @@ while [ "$#" -gt 0 ]; do
                     echo "Error: invalid value for --profile: option-like value '$2' is not allowed" >&2
                     exit 1
                     ;;
-                general|suwayomi-filter)
+                general|suwayomi-filter|suwayomi-lifecycle)
                     ;;
                 *)
-                    echo "Error: invalid value for --profile: '$2'. Expected 'general' or 'suwayomi-filter'." >&2
+                    echo "Error: invalid value for --profile: '$2'. Expected 'general', 'suwayomi-filter', or 'suwayomi-lifecycle'." >&2
                     exit 1
                     ;;
             esac

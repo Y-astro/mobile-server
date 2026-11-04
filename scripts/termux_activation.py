@@ -137,9 +137,144 @@ def extract_python_script_and_args(cmdline: List[str]) -> Tuple[Optional[Path], 
     return None, []
 
 
+def validate_catalog_transition(
+    prior_services: Dict[str, Any],
+    cand_services: Dict[str, Any],
+    home_str: str,
+    prefix_str: str,
+    profile: str = "general",
+) -> None:
+    """
+    Validate candidate runtime services against prior services for the given profile.
+    Strictly verifies prefix, keys, order, and attributes.
+    """
+    prior_keys = list(prior_services.keys()) if prior_services else []
+    cand_keys = list(cand_services.keys()) if cand_services else []
+
+    if profile in ("general", "suwayomi-filter"):
+        if prior_keys != cand_keys:
+            raise RuntimeError(
+                f"Candidate service catalog key order mismatch: expected {prior_keys}, got {cand_keys}"
+            )
+        for sid, p_cfg in prior_services.items():
+            c_cfg = cand_services.get(sid)
+            if c_cfg is None:
+                raise RuntimeError(f"Candidate catalog missing prior service: {sid}")
+            for attr in ("port", "path", "protocol", "cmd", "is_ondemand", "client_port"):
+                p_val = p_cfg.get(attr)
+                c_val = c_cfg.get(attr)
+                if p_val != c_val:
+                    raise RuntimeError(
+                        f"Candidate service {sid} runtime drift on '{attr}': prior={p_val!r}, candidate={c_val!r}"
+                    )
+    elif profile == "suwayomi-lifecycle":
+        if len(prior_keys) != 15:
+            raise RuntimeError(
+                f"suwayomi-lifecycle profile requires exact 15 prior services prefix, found {len(prior_keys)}"
+            )
+        if len(cand_keys) != 16:
+            raise RuntimeError(
+                f"suwayomi-lifecycle profile requires exact 16 candidate services, found {len(cand_keys)}"
+            )
+        if cand_keys[:15] != prior_keys:
+            raise RuntimeError(
+                f"Candidate service catalog first 15 keys mismatch: expected {prior_keys}, got {cand_keys[:15]}"
+            )
+        for sid, p_cfg in prior_services.items():
+            c_cfg = cand_services.get(sid)
+            if c_cfg is None:
+                raise RuntimeError(f"Candidate catalog missing prior service: {sid}")
+            for attr in ("port", "path", "protocol", "cmd", "is_ondemand", "client_port"):
+                p_val = p_cfg.get(attr)
+                c_val = c_cfg.get(attr)
+                if p_val != c_val:
+                    raise RuntimeError(
+                        f"Candidate service {sid} runtime drift on '{attr}': prior={p_val!r}, candidate={c_val!r}"
+                    )
+
+        if cand_keys[15] != "suwayomi_scheduler":
+            raise RuntimeError(
+                f"Candidate service catalog 16th service must be 'suwayomi_scheduler', got {cand_keys[15]!r}"
+            )
+
+        sched_cfg = cand_services.get("suwayomi_scheduler")
+        if not isinstance(sched_cfg, dict):
+            raise RuntimeError("Candidate suwayomi_scheduler configuration must be a dictionary")
+        allowed_attrs = {"cmd"}
+        extra_attrs = set(sched_cfg.keys()) - allowed_attrs
+        if extra_attrs:
+            raise RuntimeError(
+                f"Candidate suwayomi_scheduler introduces unexpected attributes: {sorted(list(extra_attrs))}"
+            )
+
+        expected_cmd = [f"{prefix_str}/bin/python3", f"{home_str}/bin/suwayomi_daily_update.py", "--foreground"]
+        if sched_cfg.get("cmd") != expected_cmd:
+            raise RuntimeError(
+                f"Candidate suwayomi_scheduler cmd drift: expected {expected_cmd!r}, got {sched_cfg.get('cmd')!r}"
+            )
+    else:
+        raise RuntimeError(f"Unsupported profile for catalog validation: {profile!r}")
+
+
+def validate_candidate_catalog_file(
+    candidate_catalog_path: Path,
+    prior_catalog_path: Path,
+    home_dir: Path,
+    prefix_dir: Path,
+    profile: str = "general",
+) -> None:
+    """Validate candidate catalog file directly against prior catalog file."""
+    orig_modules = dict(sys.modules)
+    orig_path = list(sys.path)
+    token = uuid.uuid4().hex
+    cand_mod_name = f"cand_cat_{token}"
+    prior_mod_name = f"prior_cat_{token}"
+    try:
+        home_str = str(home_dir)
+        prefix_str = str(prefix_dir)
+
+        # Prior catalog
+        prior_spec = importlib.util.spec_from_file_location(prior_mod_name, str(prior_catalog_path))
+        if prior_spec is None or prior_spec.loader is None:
+            raise RuntimeError(f"Could not load spec for prior catalog: {prior_catalog_path}")
+        prior_mod = importlib.util.module_from_spec(prior_spec)
+        sys.modules[prior_mod_name] = prior_mod
+        exec(compile(prior_catalog_path.read_bytes(), str(prior_catalog_path), "exec"), prior_mod.__dict__)
+        if not hasattr(prior_mod, "runtime_services"):
+            raise RuntimeError(f"Prior catalog {prior_catalog_path} missing runtime_services function")
+        prior_services = prior_mod.runtime_services(home_str, prefix_str)
+
+        # Candidate catalog
+        cand_spec = importlib.util.spec_from_file_location(cand_mod_name, str(candidate_catalog_path))
+        if cand_spec is None or cand_spec.loader is None:
+            raise RuntimeError(f"Could not load spec for candidate catalog: {candidate_catalog_path}")
+        cand_mod = importlib.util.module_from_spec(cand_spec)
+        sys.modules[cand_mod_name] = cand_mod
+        exec(compile(candidate_catalog_path.read_bytes(), str(candidate_catalog_path), "exec"), cand_mod.__dict__)
+        if not hasattr(cand_mod, "runtime_services"):
+            raise RuntimeError(f"Candidate catalog {candidate_catalog_path} missing runtime_services function")
+        cand_services = cand_mod.runtime_services(home_str, prefix_str)
+
+        validate_catalog_transition(
+            prior_services=prior_services,
+            cand_services=cand_services,
+            home_str=home_str,
+            prefix_str=prefix_str,
+            profile=profile,
+        )
+    finally:
+        sys.path[:] = orig_path
+        for k in list(sys.modules.keys()):
+            if k not in orig_modules:
+                del sys.modules[k]
+            else:
+                sys.modules[k] = orig_modules[k]
+
+
 def validate_candidate_runtime_services(
     bundle_root: Path,
     driver: LifecycleDriver,
+    profile: str = "general",
 ) -> None:
     """
     Preflight verification: assert candidate service catalog matches prior runtime facts
@@ -168,24 +303,13 @@ def validate_candidate_runtime_services(
         prefix_str = str(getattr(driver, "prefix_dir", Path("/data/data/com.termux/files/usr")))
         cand_services = cand_mod.runtime_services(home_str, prefix_str)
 
-        if prior_services:
-            prior_keys = list(prior_services.keys())
-            cand_keys = list(cand_services.keys())
-            if prior_keys != cand_keys:
-                raise RuntimeError(
-                    f"Candidate service catalog key order mismatch: expected {prior_keys}, got {cand_keys}"
-                )
-            for sid, p_cfg in prior_services.items():
-                c_cfg = cand_services.get(sid)
-                if c_cfg is None:
-                    raise RuntimeError(f"Candidate catalog missing prior service: {sid}")
-                for attr in ("port", "path", "protocol", "cmd", "is_ondemand", "client_port"):
-                    p_val = p_cfg.get(attr)
-                    c_val = c_cfg.get(attr)
-                    if p_val != c_val:
-                        raise RuntimeError(
-                            f"Candidate service {sid} runtime drift on '{attr}': prior={p_val!r}, candidate={c_val!r}"
-                        )
+        validate_catalog_transition(
+            prior_services=prior_services,
+            cand_services=cand_services,
+            home_str=home_str,
+            prefix_str=prefix_str,
+            profile=profile,
+        )
     finally:
         sys.path[:] = orig_path
         for k in list(sys.modules.keys()):
@@ -223,8 +347,8 @@ class TermuxLifecycleDriver(LifecycleDriver):
 
         self._sup = supervisor_module or self._load_supervisor()
 
-    def validate_candidate_services(self, bundle_root: Path) -> None:
-        validate_candidate_runtime_services(bundle_root=bundle_root, driver=self)
+    def validate_candidate_services(self, bundle_root: Path, profile: str = "general") -> None:
+        validate_candidate_runtime_services(bundle_root=bundle_root, driver=self, profile=profile)
 
     def _load_supervisor(self) -> Any:
         """Load supervisor module in an isolated context with bound state paths."""
@@ -300,7 +424,85 @@ class TermuxLifecycleDriver(LifecycleDriver):
             yield
 
     def matching_processes(self, sid: str) -> List[Tuple[int, str]]:
-        return self._sup.matching_processes(sid)
+        if sid == "suwayomi_scheduler":
+            return self._match_suwayomi_scheduler()
+        try:
+            return self._sup.matching_processes(sid)
+        except (KeyError, AttributeError):
+            if sid == "suwayomi_scheduler":
+                return self._match_suwayomi_scheduler()
+            raise
+
+    def _match_suwayomi_scheduler(self) -> List[Tuple[int, str]]:
+        """
+        Trusted native matching for owned suwayomi_scheduler processes.
+        Matches owned scheduler Python argv (absolute or cwd-resolved relative),
+        foreground/daemon mode, UID/starttime. Excludes -c/-m decoys, --status, --now, and zombies.
+        Independent of supervisor implementation or catalog presence.
+        """
+        uid = os.getuid()
+        allowed_scripts = {
+            (self.home_dir / "bin/suwayomi_daily_update.py").resolve(),
+        }
+        repo_sched = Path(__file__).resolve().parent.parent / "scripts/suwayomi_daily_update.py"
+        if repo_sched.exists():
+            allowed_scripts.add(repo_sched.resolve())
+        scripts_sched = Path(__file__).resolve().parent / "suwayomi_daily_update.py"
+        if scripts_sched.exists():
+            allowed_scripts.add(scripts_sched.resolve())
+
+        matches: List[Tuple[int, str]] = []
+        if not self.proc_root.exists():
+            return matches
+
+        for proc in self.proc_root.iterdir():
+            if not proc.name.isdigit() or int(proc.name) == os.getpid():
+                continue
+            try:
+                if proc.stat().st_uid != uid:
+                    continue
+
+                cmdline_bytes = (proc / "cmdline").read_bytes()
+                cmdline = cmdline_bytes.decode(errors="replace").rstrip("\0").split("\0")
+                script_path, remaining = extract_python_script_and_args(cmdline)
+                if script_path is None:
+                    continue
+
+                if not script_path.is_absolute():
+                    try:
+                        target_cwd = Path(os.readlink(str(proc / "cwd")))
+                        resolved_script = (target_cwd / script_path).resolve()
+                    except (OSError, ValueError):
+                        continue
+                else:
+                    resolved_script = script_path.resolve()
+
+                if resolved_script not in allowed_scripts:
+                    continue
+
+                # Exclude --now and --status
+                if any(arg in ("--now", "--status") or arg.startswith("--now=") or arg.startswith("--status=") for arg in remaining):
+                    continue
+
+                # Must match foreground or daemon mode
+                has_mode = False
+                for token in remaining:
+                    if token in ("--foreground", "--daemon"):
+                        has_mode = True
+                        break
+                if not has_mode:
+                    continue
+
+                # Exclude zombies and extract starttime identity
+                ident = self.process_identity(int(proc.name))
+                if ident is None:
+                    continue
+
+                matches.append((int(proc.name), ident))
+            except (OSError, IndexError, ValueError):
+                continue
+
+        return sorted(matches, key=lambda m: m[0])
 
     def process_identity(self, pid: int) -> Optional[str]:
         if self.proc_root != Path("/proc"):
@@ -315,12 +517,29 @@ class TermuxLifecycleDriver(LifecycleDriver):
         return self._sup.process_identity(pid)
 
     def terminate(self, records: List[Tuple[int, str]]) -> None:
+        if self.proc_root != Path("/proc"):
+            for sig, deadline in ((signal.SIGTERM, 4.0), (signal.SIGKILL, 1.0)):
+                for pid, ident in records:
+                    if self.process_identity(pid) == ident:
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(pid, sig)
+                end = time.monotonic() + deadline
+                while time.monotonic() < end:
+                    if not any(self.process_identity(pid) == ident for pid, ident in records):
+                        return
+                    time.sleep(0.1)
+            return
         self._sup.terminate(records)
 
     def stop_agy(self) -> None:
         self._sup.stop_agy()
 
     def healthy(self, sid: str, cfg: Dict[str, Any]) -> bool:
+        if sid == "suwayomi_scheduler":
+            try:
+                return self._sup.healthy(sid, cfg)
+            except (KeyError, AttributeError):
+                return bool(self.matching_processes(sid))
         return self._sup.healthy(sid, cfg)
 
     def launch(self, sid: str, cfg: Dict[str, Any]) -> Any:
