@@ -703,8 +703,9 @@ const { chromium } = require('@playwright/test');
       const s = window.getComputedStyle(el);
       const [r1, g1, b1] = parseRgb(s.color);
       const l1 = luminance(r1, g1, b1);
-      // Dark card surface backdrop
-      const l2 = luminance(29, 34, 35);
+      // Measure the error banner's own opaque background, not its parent card.
+      const [r2, g2, b2] = parseRgb(s.backgroundColor);
+      const l2 = luminance(r2, g2, b2);
       return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
     });
     console.log('Login error computed contrast ratio:', errContrast.toFixed(2));
