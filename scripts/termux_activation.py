@@ -10,18 +10,20 @@ algorithms or catalog behavior.
 
 import contextlib
 import fcntl
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 class QuiescenceError(RuntimeError):
-    """Raised when a service or daemon process survives termination."""
+    """Raised when a service or daemon process survives termination or is ambiguous."""
     pass
 
 
@@ -67,6 +69,47 @@ class LifecycleDriver:
     def start_daemon(self) -> None:
         raise NotImplementedError
 
+    def reload_lifecycle(self) -> None:
+        raise NotImplementedError
+
+
+def _compute_sha256(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(65536):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def extract_python_script_and_args(cmdline: List[str]) -> Tuple[Optional[Path], List[str]]:
+    """Parse python command line tokens to extract script path and trailing arguments."""
+    if not cmdline or not cmdline[0]:
+        return None, []
+    base = Path(cmdline[0]).name
+    if not (base.startswith("python") or base.startswith("python3")):
+        return None, []
+    idx = 1
+    n = len(cmdline)
+    while idx < n:
+        arg = cmdline[idx]
+        if arg == "--":
+            idx += 1
+            break
+        if not arg.startswith("-"):
+            break
+        # Option -c or -m executes command or module, not a script file
+        if arg in ("-c", "-m") or arg.startswith("-c") or arg.startswith("-m"):
+            return None, []
+        if arg in ("-W", "-X"):
+            idx += 2
+        else:
+            idx += 1
+    if idx < n:
+        script_path = Path(cmdline[idx])
+        remaining_args = cmdline[idx + 1 :]
+        return script_path, remaining_args
+    return None, []
+
 
 class TermuxLifecycleDriver(LifecycleDriver):
     """Native Termux lifecycle driver backed by scripts/server_supervisor.py."""
@@ -105,18 +148,46 @@ class TermuxLifecycleDriver(LifecycleDriver):
         self._sup = supervisor_module or self._load_supervisor()
 
     def _load_supervisor(self) -> Any:
-        """Load supervisor module with bound state paths."""
-        mod_name = "server_supervisor_native"
-        if mod_name in sys.modules:
-            return sys.modules[mod_name]
+        """Load supervisor module in an isolated context with bound state paths."""
+        orig_path = list(sys.path)
+        orig_modules = dict(sys.modules)
+        try:
+            mod_name = f"server_supervisor_isolated_{id(self)}"
+            spec = importlib.util.spec_from_file_location(mod_name, str(self.supervisor_script))
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Could not load supervisor from {self.supervisor_script}")
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[mod_name] = mod
 
-        spec = importlib.util.spec_from_file_location(mod_name, str(self.supervisor_script))
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"Could not load supervisor from {self.supervisor_script}")
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[mod_name] = mod
-        spec.loader.exec_module(mod)
-        return mod
+            # Bind namespace paths
+            mod.HOME = self.home_dir
+            mod.PREFIX = self.prefix_dir
+            mod.STATE = self.state_dir
+            mod.DISABLED = self.disabled_dir
+            mod.PAUSED = self.paused_path
+            mod.PUBLIC_PAUSED = self.public_paused_path
+            mod.MOBILE_LIB = self.home_dir / ".local/lib/mobile-server"
+
+            spec.loader.exec_module(mod)
+
+            # Re-bind paths in case module top-level initialized defaults
+            mod.HOME = self.home_dir
+            mod.PREFIX = self.prefix_dir
+            mod.STATE = self.state_dir
+            mod.DISABLED = self.disabled_dir
+            mod.PAUSED = self.paused_path
+            mod.PUBLIC_PAUSED = self.public_paused_path
+            mod.MOBILE_LIB = self.home_dir / ".local/lib/mobile-server"
+            return mod
+        finally:
+            sys.path[:] = orig_path
+            for k in list(sys.modules.keys()):
+                if k not in orig_modules and k != mod_name:
+                    del sys.modules[k]
+
+    def reload_lifecycle(self) -> None:
+        """Reload supervisor module to bind newly applied code and configuration."""
+        self._sup = self._load_supervisor()
 
     def services(self) -> Dict[str, Any]:
         return self._sup.services()
@@ -185,7 +256,17 @@ class TermuxLifecycleDriver(LifecycleDriver):
             return True
 
     def find_daemon_process(self) -> Optional[Tuple[int, str]]:
+        """
+        Locate supervisor daemon process by exact script binding and valid python argv.
+        Refuses ambiguous matches and non-matching decoy scripts.
+        """
         uid = os.getuid()
+        allowed_scripts = {
+            self.supervisor_script.resolve(),
+            (self.home_dir / "bin/server_supervisor.py").resolve(),
+        }
+        matches: List[Tuple[int, str]] = []
+
         for proc in self.proc_root.iterdir():
             if not proc.name.isdigit() or int(proc.name) == os.getpid():
                 continue
@@ -194,20 +275,30 @@ class TermuxLifecycleDriver(LifecycleDriver):
                     continue
                 cmdline_bytes = (proc / "cmdline").read_bytes()
                 cmdline = cmdline_bytes.decode(errors="replace").rstrip("\0").split("\0")
-                if not cmdline or not cmdline[0]:
+                script_path, remaining = extract_python_script_and_args(cmdline)
+                if script_path is None:
                     continue
-                base = Path(cmdline[0]).name
-                if (
-                    base.startswith("python")
-                    and any("server_supervisor.py" in arg for arg in cmdline)
-                    and "--daemon" in cmdline
-                ):
+
+                # Must resolve to exact approved supervisor script
+                try:
+                    resolved_script = script_path.resolve()
+                except OSError:
+                    continue
+
+                if resolved_script in allowed_scripts and "--daemon" in remaining:
                     pid = int(proc.name)
                     ident = self.process_identity(pid)
                     if ident:
-                        return (pid, ident)
+                        matches.append((pid, ident))
             except (OSError, IndexError):
                 continue
+
+        if len(matches) > 1:
+            raise QuiescenceError(
+                f"Multiple matching supervisor daemon processes found: {matches} (ambiguity refusal)"
+            )
+        if len(matches) == 1:
+            return matches[0]
         return None
 
     def stop_daemon(self, pid: int, ident: str, timeout: float = 5.0) -> None:
@@ -222,22 +313,30 @@ class TermuxLifecycleDriver(LifecycleDriver):
             if self.process_identity(pid) != ident:
                 return
             time.sleep(0.1)
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline:
-            if self.process_identity(pid) != ident:
+
+        # Re-verify identity immediately before SIGKILL
+        if self.process_identity(pid) == ident:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
                 return
-            time.sleep(0.1)
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if self.process_identity(pid) != ident:
+                    return
+                time.sleep(0.1)
+
         if self.process_identity(pid) == ident:
             raise QuiescenceError(f"Supervisor daemon pid={pid} failed to terminate")
 
     def start_daemon(self) -> None:
+        """Start daemon using the restored LIVE home/bin/server_supervisor.py script."""
+        live_script = self.home_dir / "bin/server_supervisor.py"
+        script_to_run = live_script if live_script.exists() else self.supervisor_script
+        self.state_dir.mkdir(parents=True, exist_ok=True)
         with (self.state_dir / "daemon-console.log").open("ab") as out:
             subprocess.Popen(
-                [sys.executable, str(self.supervisor_script), "--daemon"],
+                [sys.executable, str(script_to_run), "--daemon"],
                 stdin=subprocess.DEVNULL,
                 stdout=out,
                 stderr=out,
@@ -246,37 +345,69 @@ class TermuxLifecycleDriver(LifecycleDriver):
             )
 
 
-def load_isolated_lifecycle(recovery_dir: Path, namespace_root: Optional[Path] = None) -> TermuxLifecycleDriver:
+def load_isolated_lifecycle(
+    recovery_dir: Path,
+    namespace_root: Optional[Path] = None,
+    expected_hashes: Optional[Dict[str, str]] = None,
+) -> TermuxLifecycleDriver:
     """
     Load preserved supervisor and service catalog from recovery directory in an isolated
     module context without importing potentially corrupt live helpers.
+    Validates fixed-name, same-UID, regular recovery files against recorded hashes before execution.
     """
     recovery_dir = Path(recovery_dir).resolve()
+    current_uid = os.getuid()
+
     catalog_path = recovery_dir / "service_catalog.py"
     supervisor_path = recovery_dir / "server_supervisor.py"
 
-    if not supervisor_path.exists():
-        raise FileNotFoundError(f"Preserved supervisor script missing: {supervisor_path}")
+    # Pre-execution validation
+    for name, p in (("service_catalog.py", catalog_path), ("server_supervisor.py", supervisor_path)):
+        if name == "service_catalog.py" and not p.exists():
+            continue
+        if not p.exists():
+            raise FileNotFoundError(f"Preserved recovery asset missing: {p}")
+        st = p.lstat()
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            raise RuntimeError(f"Recovery asset {p} is not a regular file")
+        if st.st_uid != current_uid:
+            raise RuntimeError(f"Recovery asset {p} UID mismatch: expected {current_uid}, got {st.st_uid}")
+        if expected_hashes and name in expected_hashes:
+            actual_sha = _compute_sha256(p)
+            if actual_sha.lower() != expected_hashes[name].lower():
+                raise RuntimeError(
+                    f"Recovery asset {name} hash mismatch: expected {expected_hashes[name]}, got {actual_sha}"
+                )
 
-    # Load service catalog first if present
-    if catalog_path.exists():
-        cat_spec = importlib.util.spec_from_file_location("service_catalog", str(catalog_path))
-        if cat_spec is None or cat_spec.loader is None:
-            raise RuntimeError(f"Could not load recovery catalog from {catalog_path}")
-        cat_mod = importlib.util.module_from_spec(cat_spec)
-        sys.modules["service_catalog"] = cat_mod
-        cat_spec.loader.exec_module(cat_mod)
+    orig_path = list(sys.path)
+    orig_modules = dict(sys.modules)
+    try:
+        if catalog_path.exists():
+            cat_spec = importlib.util.spec_from_file_location("service_catalog", str(catalog_path))
+            if cat_spec is None or cat_spec.loader is None:
+                raise RuntimeError(f"Could not load recovery catalog from {catalog_path}")
+            cat_mod = importlib.util.module_from_spec(cat_spec)
+            sys.modules["service_catalog"] = cat_mod
+            cat_spec.loader.exec_module(cat_mod)
 
-    # Load supervisor
-    sup_spec = importlib.util.spec_from_file_location("server_supervisor_isolated", str(supervisor_path))
-    if sup_spec is None or sup_spec.loader is None:
-        raise RuntimeError(f"Could not load recovery supervisor from {supervisor_path}")
-    sup_mod = importlib.util.module_from_spec(sup_spec)
-    sys.modules["server_supervisor_isolated"] = sup_mod
-    sup_spec.loader.exec_module(sup_mod)
+        sup_spec = importlib.util.spec_from_file_location("server_supervisor_isolated", str(supervisor_path))
+        if sup_spec is None or sup_spec.loader is None:
+            raise RuntimeError(f"Could not load recovery supervisor from {supervisor_path}")
+        sup_mod = importlib.util.module_from_spec(sup_spec)
+        sys.modules["server_supervisor_isolated"] = sup_mod
+        sup_spec.loader.exec_module(sup_mod)
 
-    return TermuxLifecycleDriver(
-        namespace_root=namespace_root,
-        supervisor_module=sup_mod,
-        supervisor_script=supervisor_path,
-    )
+        # Set live supervisor script path so start_daemon restarts live code
+        ns = Path(namespace_root).resolve() if namespace_root else Path("/data/data/com.termux/files")
+        live_supervisor = ns / "home/bin/server_supervisor.py"
+
+        return TermuxLifecycleDriver(
+            namespace_root=ns,
+            supervisor_module=sup_mod,
+            supervisor_script=live_supervisor if live_supervisor.exists() else supervisor_path,
+        )
+    finally:
+        sys.path[:] = orig_path
+        for k in list(sys.modules.keys()):
+            if k not in orig_modules and k not in ("service_catalog", "server_supervisor_isolated"):
+                del sys.modules[k]

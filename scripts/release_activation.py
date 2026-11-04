@@ -5,7 +5,7 @@ release_activation.py: Service-scoped release activation adapter.
 Coordinates the accepted file transaction engine (scripts/release_transaction.py)
 with Termux service lifecycle authority (scripts/server_supervisor.py), ensuring:
 1. Destination-based service mapping (only actually changed files affect services).
-2. Safe flag preservation and temporary guard files with ownership tokens.
+2. Strict flag preservation (metadata, type, raw link, bytes) and temporary guards.
 3. Process quiescence with verified death rechecks before any file write.
 4. Coherent atomic file replacement under lock hierarchy:
    ActivationLock -> services.lock -> NamespaceLock.
@@ -47,6 +47,25 @@ def _load_sibling(module_name: str, filename: str) -> Any:
             return sys.modules[module_name]
         raise RuntimeError(f"Required module {filename} not found in {candidates}")
 
+    # If running from a recovery directory, validate against journal assets if available
+    tx_dir = current_dir.parent if current_dir.name == "recovery_lifecycle" else None
+    if tx_dir and (tx_dir / "activation_journal.json").exists():
+        try:
+            with open(tx_dir / "activation_journal.json", "r", encoding="utf-8") as jf:
+                jdata = json.load(jf)
+            rec_assets = jdata.get("recovery_assets", {})
+            if filename in rec_assets:
+                hasher = hashlib.sha256()
+                with open(file_path, "rb") as sf:
+                    while chunk := sf.read(65536):
+                        hasher.update(chunk)
+                if hasher.hexdigest().lower() != rec_assets[filename].lower():
+                    raise RuntimeError(f"Recovery module {filename} hash mismatch before import")
+        except Exception as exc:
+            if isinstance(exc, RuntimeError):
+                raise
+            pass
+
     spec = importlib.util.spec_from_file_location(module_name, str(file_path))
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load spec for {file_path}")
@@ -54,6 +73,7 @@ def _load_sibling(module_name: str, filename: str) -> Any:
     sys.modules[module_name] = mod
     spec.loader.exec_module(mod)
     return mod
+
 
 rt = _load_sibling("release_transaction", "release_transaction.py")
 ta = _load_sibling("termux_activation", "termux_activation.py")
@@ -70,6 +90,19 @@ STATE_COMPLETED = "COMPLETED"
 STATE_ROLLING_BACK = "ROLLING_BACK"
 STATE_ROLLED_BACK = "ROLLED_BACK"
 STATE_RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
+
+ALLOWED_STATES = {
+    STATE_PREPARED,
+    STATE_GUARDED,
+    STATE_QUIESCED,
+    STATE_APPLYING,
+    STATE_APPLIED,
+    STATE_HEALTHY,
+    STATE_COMPLETED,
+    STATE_ROLLING_BACK,
+    STATE_ROLLED_BACK,
+    STATE_RECOVERY_REQUIRED,
+}
 
 DEPENDENCY_ORDER = [
     "filebrowser",
@@ -90,7 +123,7 @@ class ActivationLockError(ActivationError):
 
 
 class QuiescenceError(ActivationError):
-    """Raised when processes survive quiescence."""
+    """Raised when processes survive quiescence or multiple daemons match."""
     pass
 
 
@@ -154,9 +187,9 @@ def compute_file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def map_destination_to_component(remote_path: str) -> Optional[Tuple[str, bool]]:
+def map_destination_to_component(remote_path: str) -> Optional[Tuple[str, bool, bool]]:
     """
-    Map an owned destination path to (component/service_name, is_suwayomi_violation).
+    Map an owned destination path to (component_name, is_suwayomi_violation, is_agy_violation).
     Returns None if unexplained destination.
     """
     norm = remote_path.replace("\\", "/").rstrip("/")
@@ -164,54 +197,54 @@ def map_destination_to_component(remote_path: str) -> Optional[Tuple[str, bool]]
     # Check for Suwayomi scripts - must NOT change
     for sw in ("start_suwayomi.sh", "suwayomi_daily_update.py", "suwayomi_graphql_filter.py", "suwayomi_update.sh"):
         if norm.endswith(f"home/bin/{sw}"):
-            return ("suwayomi", True)
+            return ("suwayomi", True, False)
 
-    # Dashboard group:
-    if norm.endswith("usr/bin/dashboard"):
-        return ("dashboard", False)
-    if "/home/.config/dashboard/static/" in norm:
-        return ("dashboard", False)
-    if norm.endswith("home/.local/lib/mobile-server/service_catalog.py"):
-        return ("service_catalog", False)
-    if "/home/.local/lib/mobile-server/" in norm:
-        return ("dashboard", False)
-
-    # Gateway:
-    if norm.endswith("home/bin/mobile-gateway"):
-        return ("transfer_gateway", False)
-
-    # Caddy:
-    if norm.endswith("home/.config/caddy/Caddyfile"):
-        return ("caddy", False)
-
-    # Supervisor:
-    if norm.endswith("home/bin/server_supervisor.py"):
-        return ("supervisor", False)
-
-    # Terminal:
-    if norm.endswith("home/bin/termux_session.sh") or norm.endswith("home/.config/ttyd/termux_index.html"):
-        return ("terminal", False)
-
-    # Laptop terminal:
-    if norm.endswith("home/bin/laptop_session.py"):
-        return ("laptop_terminal", False)
-
-    # AGY:
+    # Check for AGY runtime assets - must NOT change
     if (
         norm.endswith("home/bin/agy_session.sh")
         or norm.endswith("home/.config/ttyd/agy_index.html")
         or norm.endswith("usr/bin/agy-resume")
         or "agy-runner-loop" in norm
     ):
-        return ("agy", False)
+        return ("agy", False, True)
+
+    # Dashboard group:
+    if norm.endswith("usr/bin/dashboard"):
+        return ("dashboard", False, False)
+    if "/home/.config/dashboard/static/" in norm:
+        return ("dashboard", False, False)
+    if norm.endswith("home/.local/lib/mobile-server/service_catalog.py"):
+        return ("service_catalog", False, False)
+    if "/home/.local/lib/mobile-server/" in norm:
+        return ("dashboard", False, False)
+
+    # Gateway:
+    if norm.endswith("home/bin/mobile-gateway"):
+        return ("transfer_gateway", False, False)
+
+    # Caddy:
+    if norm.endswith("home/.config/caddy/Caddyfile"):
+        return ("caddy", False, False)
+
+    # Supervisor:
+    if norm.endswith("home/bin/server_supervisor.py"):
+        return ("supervisor", False, False)
+
+    # Terminal:
+    if norm.endswith("home/bin/termux_session.sh") or norm.endswith("home/.config/ttyd/termux_index.html"):
+        return ("terminal", False, False)
+
+    # Laptop terminal:
+    if norm.endswith("home/bin/laptop_session.py"):
+        return ("laptop_terminal", False, False)
 
     # Battery guard:
     if norm.endswith("home/bin/battery_guard.sh"):
-        return ("battery_guard", False)
+        return ("battery_guard", False, False)
 
     # Tor:
     if norm.endswith("home/.config/tor/torrc"):
-        return ("tor", False)
+        return ("tor", False, False)
 
     # CLI tools and boot aliases (no running service to restart):
     cli_tools = (
@@ -226,7 +259,7 @@ def map_destination_to_component(remote_path: str) -> Optional[Tuple[str, bool]]
     )
     for tool in cli_tools:
         if norm.endswith(tool):
-            return ("cli_only", False)
+            return ("cli_only", False, False)
 
     return None
 
@@ -252,9 +285,11 @@ def map_changed_destinations(entries: List[Dict[str, Any]]) -> Tuple[Set[str], b
         if mapping is None:
             raise ActivationError(f"Unexplained changed destination: {remote}")
 
-        comp, is_sw = mapping
+        comp, is_sw, is_agy = mapping
         if is_sw:
             raise ActivationError("Suwayomi launcher/filter/scheduler sources must be unchanged in this release")
+        if is_agy:
+            raise ActivationError("AGY launcher/runner/ttyd runtime-asset changes are prohibited in this release")
 
         if comp == "cli_only":
             continue
@@ -276,23 +311,21 @@ def save_activation_journal(tx_dir: Path, data: Dict[str, Any]) -> None:
     data["updated_at"] = time.time()
     payload = json.dumps(data, indent=2).encode("utf-8")
     journal_path = tx_dir / "activation_journal.json"
-    tmp_path = tx_dir / ".tmp_act_journal.json"
-    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, payload)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(str(tmp_path), str(journal_path))
+    tmp_path = tx_dir / f".tmp_act_{uuid.uuid4().hex[:8]}.json"
 
     try:
-        dfd = os.open(str(tx_dir), os.O_RDONLY)
+        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            os.fsync(dfd)
+            rt.write_all(fd, payload)
+            os.fsync(fd)
         finally:
-            os.close(dfd)
-    except OSError:
-        pass
+            os.close(fd)
+        os.replace(str(tmp_path), str(journal_path))
+        rt.fsync_dir(tx_dir)
+    finally:
+        if tmp_path.exists():
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
 
 
 def load_activation_journal(tx_dir: Path) -> Dict[str, Any]:
@@ -303,7 +336,68 @@ def load_activation_journal(tx_dir: Path) -> Dict[str, Any]:
         data = json.load(f)
     if data.get("version") != JOURNAL_VERSION:
         raise ActivationError(f"Unsupported activation journal version: {data.get('version')}")
+    state = data.get("state")
+    if state not in ALLOWED_STATES:
+        raise ActivationError(f"Invalid activation journal state: {state}")
     return data
+
+
+def validate_activation_journal(
+    act_journal: Dict[str, Any],
+    tx_journal: Dict[str, Any],
+    expected_ns_root: Path,
+    expected_tx_dir: Path,
+    expected_uid: int,
+) -> None:
+    """Strictly validate activation journal bindings against the verified file transaction."""
+    act_ns = Path(act_journal.get("namespace_root", "")).resolve()
+    tx_ns = Path(tx_journal.get("namespace_root", "")).resolve()
+    if act_ns != expected_ns_root or tx_ns != expected_ns_root:
+        raise ActivationError(
+            f"Namespace mismatch: act={act_ns}, tx={tx_ns}, expected={expected_ns_root}"
+        )
+
+    act_dir = Path(act_journal.get("transaction_dir", "")).resolve()
+    if act_dir != expected_tx_dir:
+        raise ActivationError(
+            f"Transaction directory mismatch: act={act_dir}, expected={expected_tx_dir}"
+        )
+
+    top_uid = act_journal.get("top_uid")
+    if top_uid != expected_uid or tx_journal.get("top_uid") != expected_uid:
+        raise ActivationError(
+            f"Top UID mismatch: act={top_uid}, tx={tx_journal.get('top_uid')}, expected={expected_uid}"
+        )
+
+    # Recompute affected services from verified file engine entries
+    recomputed_services, recomputed_sup, _ = map_changed_destinations(tx_journal.get("entries", []))
+    act_services = set(act_journal.get("affected_services", []))
+    if act_services != recomputed_services:
+        raise ActivationError(
+            f"Affected services mismatch: journal={act_services}, recomputed={recomputed_services}"
+        )
+    if act_journal.get("supervisor_affected") != recomputed_sup:
+        raise ActivationError(
+            f"Supervisor affected mismatch: journal={act_journal.get('supervisor_affected')}, recomputed={recomputed_sup}"
+        )
+
+    # Preflight flag structure
+    flags = act_journal.get("flags", {})
+    if not isinstance(flags, dict):
+        raise ActivationError("Malformed flags mapping in activation journal")
+    for sid, info in flags.items():
+        if sid not in act_services:
+            raise ActivationError(f"Flag recorded for non-affected service: {sid}")
+        if not isinstance(info, dict) or "pre_existing" not in info:
+            raise ActivationError(f"Malformed flag info for {sid}")
+        if info["pre_existing"]:
+            for field in ("dev", "ino", "mode", "uid", "gid", "size"):
+                if field not in info:
+                    raise ActivationError(f"Pre-existing flag {sid} missing metadata field: {field}")
+        else:
+            if not info.get("token") or "RELEASE_GUARD_TOKEN=" not in info.get("token", ""):
+                if not info.get("token"):
+                    raise ActivationError(f"Temporary guard {sid} missing token")
 
 
 def install_guards(
@@ -316,8 +410,8 @@ def install_guards(
 ) -> Tuple[List[str], List[str]]:
     """
     Inspect affected services flags under services.lock.
-    Preserve pre-existing flags unchanged.
-    Install temporary guards for originally absent flags with ownership token.
+    Preserve pre-existing flags unchanged with full metadata.
+    Install temporary guards for originally absent flags with ownership token and fsync.
     Returns: (active_affected_services, disabled_affected_services)
     """
     disabled_dir.mkdir(parents=True, exist_ok=True)
@@ -328,22 +422,24 @@ def install_guards(
     for sid in sorted(affected_services):
         flag_path = disabled_dir / sid
         if flag_path.exists() or flag_path.is_symlink():
-            # Pre-existing! Never touch bytes or metadata.
             st = flag_path.lstat()
+            is_link = stat.S_ISLNK(st.st_mode)
+            raw_link = os.readlink(flag_path) if is_link else None
             sha = ""
-            if flag_path.is_file() and not flag_path.is_symlink():
-                try:
-                    with open(flag_path, "rb") as f:
-                        sha = hashlib.sha256(f.read()).hexdigest()
-                except OSError:
-                    pass
+            if not is_link and stat.S_ISREG(st.st_mode):
+                sha = compute_file_sha256(flag_path)
             flags[sid] = {
                 "pre_existing": True,
-                "ino": st.st_ino,
+                "kind": "symlink" if is_link else ("file" if stat.S_ISREG(st.st_mode) else "other"),
+                "raw_link": raw_link,
                 "dev": st.st_dev,
-                "mode": oct(st.st_mode),
+                "ino": st.st_ino,
+                "mode": stat.S_IMODE(st.st_mode),
                 "uid": st.st_uid,
+                "gid": st.st_gid,
                 "size": st.st_size,
+                "mtime_ns": st.st_mtime_ns,
+                "ctime_ns": st.st_ctime_ns,
                 "sha256": sha,
             }
             disabled_services.append(sid)
@@ -358,18 +454,26 @@ def install_guards(
             save_activation_journal(tx_dir, journal)
 
             payload = f"RELEASE_GUARD_TOKEN={token}\nTX_ID={tx_id}\nSID={sid}\n"
-            fd = os.open(str(flag_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            tmp_flag = disabled_dir / f".tmp_guard_{sid}_{uuid.uuid4().hex[:6]}"
             try:
-                os.write(fd, payload.encode("utf-8"))
-                os.fsync(fd)
+                fd = os.open(str(tmp_flag), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                try:
+                    rt.write_all(fd, payload.encode("utf-8"))
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                os.replace(str(tmp_flag), str(flag_path))
+                rt.fsync_dir(disabled_dir)
             finally:
-                os.close(fd)
+                if tmp_flag.exists():
+                    with contextlib.suppress(OSError):
+                        tmp_flag.unlink()
 
             st = flag_path.stat()
             flags[sid]["guard_created"] = True
-            flags[sid]["ino"] = st.st_ino
             flags[sid]["dev"] = st.st_dev
-            flags[sid]["mode"] = oct(st.st_mode)
+            flags[sid]["ino"] = st.st_ino
+            flags[sid]["mode"] = stat.S_IMODE(st.st_mode)
             flags[sid]["uid"] = st.st_uid
             active_services.append(sid)
 
@@ -377,40 +481,73 @@ def install_guards(
     return active_services, disabled_services
 
 
-def remove_guards(
+def revalidate_all_flags(
     disabled_dir: Path,
     flags: Dict[str, Any],
     expected_uid: int,
+    tx_id: str,
 ) -> None:
     """
-    Remove temporary guards after verifying token, regular file, UID, and recorded identity.
-    Refuse concurrent edits fail-closed.
+    Strictly re-verify every affected marker under services.lock.
+    Pre-existing markers: verify existence, type, raw link, UID, mode, device, inode, size, mtime, ctime, and hash.
+    Temporary guards: verify regular file, UID, mode 0600, device, inode, and exact token payload.
+    Fails closed immediately on any mismatch.
     """
+    for sid, info in flags.items():
+        flag_path = disabled_dir / sid
+        if info.get("pre_existing", False):
+            if not flag_path.exists() and not flag_path.is_symlink():
+                raise ConcurrencyError(f"Pre-existing disabled flag {flag_path} vanished before file mutation")
+            st = flag_path.lstat()
+            if st.st_dev != info["dev"] or st.st_ino != info["ino"]:
+                raise ConcurrencyError(f"Pre-existing flag {flag_path} inode/dev replaced concurrently")
+            if stat.S_IMODE(st.st_mode) != info["mode"]:
+                raise ConcurrencyError(f"Pre-existing flag {flag_path} mode changed concurrently")
+            if st.st_uid != info["uid"] or st.st_gid != info["gid"]:
+                raise ConcurrencyError(f"Pre-existing flag {flag_path} UID/GID changed concurrently")
+            if st.st_size != info["size"]:
+                raise ConcurrencyError(f"Pre-existing flag {flag_path} size changed concurrently")
+            if st.st_mtime_ns != info["mtime_ns"] or st.st_ctime_ns != info["ctime_ns"]:
+                raise ConcurrencyError(f"Pre-existing flag {flag_path} timestamps modified concurrently")
+            if info["kind"] == "symlink":
+                if not stat.S_ISLNK(st.st_mode) or os.readlink(flag_path) != info["raw_link"]:
+                    raise ConcurrencyError(f"Pre-existing symlink {flag_path} retargeted concurrently")
+            elif info["kind"] == "file":
+                if not stat.S_ISREG(st.st_mode) or compute_file_sha256(flag_path) != info["sha256"]:
+                    raise ConcurrencyError(f"Pre-existing flag {flag_path} content modified concurrently")
+        else:
+            if not flag_path.exists():
+                raise ConcurrencyError(f"Temporary guard {flag_path} vanished before verification")
+            st = flag_path.lstat()
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                raise ConcurrencyError(f"Guard flag {flag_path} is not a regular file")
+            if st.st_uid != expected_uid:
+                raise ConcurrencyError(f"Guard flag {flag_path} UID mismatch: expected {expected_uid}, got {st.st_uid}")
+            if stat.S_IMODE(st.st_mode) != 0o600:
+                raise ConcurrencyError(f"Guard flag {flag_path} mode mismatch: expected 0o600, got {oct(st.st_mode)}")
+            if info.get("ino") is not None and (st.st_ino != info["ino"] or st.st_dev != info["dev"]):
+                raise ConcurrencyError(f"Guard flag {flag_path} inode/dev mismatch")
+            expected_payload = f"RELEASE_GUARD_TOKEN={info['token']}\nTX_ID={tx_id}\nSID={sid}\n"
+            content = flag_path.read_text(encoding="utf-8")
+            if content != expected_payload:
+                raise ConcurrencyError(f"Guard flag {flag_path} content tampered concurrently")
+
+
+def remove_temporary_guards(
+    disabled_dir: Path,
+    flags: Dict[str, Any],
+    expected_uid: int,
+    tx_id: str,
+) -> None:
+    """Remove temporary guards after full revalidation; never unlink on concurrency failure."""
+    revalidate_all_flags(disabled_dir, flags, expected_uid, tx_id)
     for sid, info in flags.items():
         if info.get("pre_existing", False):
             continue
-        token = info.get("token")
         flag_path = disabled_dir / sid
-        if not flag_path.exists():
-            continue
-
-        st = flag_path.lstat()
-        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-            raise ConcurrencyError(f"Guard flag {flag_path} was modified concurrently (not a regular file)")
-        if st.st_uid != expected_uid:
-            raise ConcurrencyError(f"Guard flag {flag_path} UID mismatch: expected {expected_uid}, found {st.st_uid}")
-        if info.get("ino") is not None and st.st_ino != info["ino"]:
-            raise ConcurrencyError(f"Guard flag {flag_path} inode mismatch: expected {info['ino']}, found {st.st_ino}")
-
-        try:
-            content = flag_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ConcurrencyError(f"Could not read guard flag {flag_path}: {exc}") from exc
-
-        if not token or token not in content:
-            raise ConcurrencyError(f"Guard flag {flag_path} token mismatch: unknown concurrent edit")
-
-        flag_path.unlink()
+        if flag_path.exists():
+            flag_path.unlink()
+    rt.fsync_dir(disabled_dir)
 
 
 def sort_services_by_dependencies(services: List[str]) -> List[str]:
@@ -426,12 +563,12 @@ def verify_prerequisites_before_launch(
     all_cfgs = driver.services()
     if sid == "transfer_gateway":
         fb_cfg = all_cfgs.get("filebrowser")
-        if fb_cfg and "filebrowser" in active_services:
+        if fb_cfg:
             if not driver.healthy("filebrowser", fb_cfg):
                 raise HealthCheckError("FileBrowser must already be healthy before launching transfer_gateway")
     elif sid == "caddy":
         dash_cfg = all_cfgs.get("dashboard")
-        if dash_cfg and "dashboard" in active_services:
+        if dash_cfg:
             if not driver.healthy("dashboard", dash_cfg):
                 raise HealthCheckError("dashboard must already be healthy before launching caddy")
         gw_cfg = all_cfgs.get("transfer_gateway")
@@ -444,11 +581,7 @@ def preserve_recovery_lifecycle_code(
     tx_dir: Path,
     namespace_root: Path,
 ) -> Dict[str, str]:
-    """
-    Preserve standalone copies of server_supervisor.py, service_catalog.py,
-    release_activation.py, and termux_activation.py in tx_dir/recovery_lifecycle.
-    Returns mapping of {filename: sha256}.
-    """
+    """Preserve standalone copies of lifecycle scripts in tx_dir/recovery_lifecycle."""
     rec_dir = tx_dir / "recovery_lifecycle"
     rec_dir.mkdir(parents=True, exist_ok=True)
     hashes: Dict[str, str] = {}
@@ -456,14 +589,12 @@ def preserve_recovery_lifecycle_code(
     scripts_dir = Path(__file__).resolve().parent
     repo_root = scripts_dir.parent
 
-    # 1. Supervisor script (from live if exists, else repo)
     live_sup = namespace_root / "home/bin/server_supervisor.py"
     src_sup = live_sup if live_sup.exists() else scripts_dir / "server_supervisor.py"
     dst_sup = rec_dir / "server_supervisor.py"
     shutil.copy2(src_sup, dst_sup)
     hashes["server_supervisor.py"] = compute_file_sha256(dst_sup)
 
-    # 2. Service catalog (from live if exists, else repo)
     live_cat = namespace_root / "home/.local/lib/mobile-server/service_catalog.py"
     src_cat = live_cat if live_cat.exists() else repo_root / "app/service_catalog.py"
     if src_cat.exists():
@@ -471,7 +602,6 @@ def preserve_recovery_lifecycle_code(
         shutil.copy2(src_cat, dst_cat)
         hashes["service_catalog.py"] = compute_file_sha256(dst_cat)
 
-    # 3. Activation adapter and driver
     dst_act = rec_dir / "release_activation.py"
     shutil.copy2(scripts_dir / "release_activation.py", dst_act)
     hashes["release_activation.py"] = compute_file_sha256(dst_act)
@@ -480,12 +610,40 @@ def preserve_recovery_lifecycle_code(
     shutil.copy2(scripts_dir / "termux_activation.py", dst_drv)
     hashes["termux_activation.py"] = compute_file_sha256(dst_drv)
 
-    # 4. Standalone file transaction engine
     dst_tx = rec_dir / "release_transaction.py"
     shutil.copy2(scripts_dir / "release_transaction.py", dst_tx)
     hashes["release_transaction.py"] = compute_file_sha256(dst_tx)
 
     return hashes
+
+
+def validate_recovery_assets(
+    recovery_dir: Path,
+    expected_hashes: Dict[str, str],
+    current_uid: int,
+) -> None:
+    """Validate all preserved recovery assets before loading or executing them."""
+    rec_dir = Path(recovery_dir).resolve()
+    for name, expected_sha in expected_hashes.items():
+        file_path = rec_dir / name
+        try:
+            resolved = file_path.resolve()
+            resolved.relative_to(rec_dir)
+        except (ValueError, OSError) as exc:
+            raise ActivationError(f"Recovery asset {name} path traversal escape: {exc}") from exc
+
+        if not file_path.exists():
+            raise ActivationError(f"Recovery asset missing: {file_path}")
+        st = file_path.lstat()
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            raise ActivationError(f"Recovery asset {name} is not a regular file")
+        if st.st_uid != current_uid:
+            raise ActivationError(f"Recovery asset {name} UID mismatch: expected {current_uid}, got {st.st_uid}")
+        actual_sha = compute_file_sha256(file_path)
+        if actual_sha.lower() != expected_sha.lower():
+            raise ActivationError(
+                f"Recovery asset {name} hash mismatch: expected {expected_sha}, got {actual_sha}"
+            )
 
 
 def plan(
@@ -570,16 +728,13 @@ def apply(
     if driver is None:
         driver = ta.TermuxLifecycleDriver(namespace_root=ns_root)
 
-    # 1. Acquire ActivationLock
     with ActivationLock(ns_root):
-        # Refuse deliberately paused server
         if driver.is_paused():
             raise ActivationError("Server is deliberately paused; activation refused")
 
         manifest_mod = rt._load_release_manifest_module()
         manifest_entries = manifest_mod.generate_manifest(b_root, require_gateway=True)
 
-        # 2. Prepare file transaction
         tx = rt.prepare(
             bundle_root=b_root,
             candidate_manifest=manifest_entries,
@@ -617,19 +772,25 @@ def apply(
 
         disabled_dir = ns_root / "home/.config/services_disabled"
 
-        # If no services affected (e.g. CLI only or no-op), apply files directly without service disturbance
+        # No-op / CLI-only path wrapped in robust fault boundary
         if not affected_services and not supervisor_affected:
-            act_journal["state"] = STATE_APPLYING
-            save_activation_journal(tx_dir, act_journal)
-            tx.apply(namespace_root=ns_root)
-            act_journal["state"] = STATE_APPLIED
-            save_activation_journal(tx_dir, act_journal)
-            tx.commit(namespace_root=ns_root)
-            act_journal["state"] = STATE_COMPLETED
-            save_activation_journal(tx_dir, act_journal)
-            return {"state": STATE_COMPLETED, "affected_services": [], "status": "completed_noop_services"}
+            try:
+                act_journal["state"] = STATE_APPLYING
+                save_activation_journal(tx_dir, act_journal)
+                tx.apply(namespace_root=ns_root)
+                act_journal["state"] = STATE_APPLIED
+                save_activation_journal(tx_dir, act_journal)
+                tx.commit(namespace_root=ns_root)
+                act_journal["state"] = STATE_COMPLETED
+                save_activation_journal(tx_dir, act_journal)
+                return {"state": STATE_COMPLETED, "affected_services": [], "status": "completed_noop_services"}
+            except Exception:
+                act_journal["state"] = STATE_RECOVERY_REQUIRED
+                save_activation_journal(tx_dir, act_journal)
+                with contextlib.suppress(Exception):
+                    tx.rollback(namespace_root=ns_root)
+                raise
 
-        # 3. Guarding & Quiescence under services.lock
         active_services: List[str] = []
         daemon_proc = None
         daemon_was_running = False
@@ -654,8 +815,8 @@ def apply(
                     quiescence_records[sid] = records
                     if records:
                         driver.terminate(records)
-                        if sid == "agy":
-                            driver.stop_agy()
+                if "agy" in active_services:
+                    driver.stop_agy()
 
                 act_journal["quiescence_records"] = quiescence_records
                 save_activation_journal(tx_dir, act_journal)
@@ -679,57 +840,52 @@ def apply(
                     save_activation_journal(tx_dir, act_journal)
                     if daemon_was_running:
                         daemon_proc = driver.find_daemon_process()
+                        if daemon_proc is None:
+                            raise QuiescenceError(
+                                "Supervisor daemon is running (lock held) but exact process could not be identified"
+                            )
                         act_journal["daemon_record"] = daemon_proc
                         save_activation_journal(tx_dir, act_journal)
 
-            # If supervisor affected and daemon was running, stop daemon outside services.lock
+            # Stop daemon outside services.lock
             if supervisor_affected and daemon_was_running and daemon_proc:
                 driver.stop_daemon(daemon_proc[0], daemon_proc[1])
 
-            # Re-acquire services.lock and re-verify quiescence & guards
+            # Re-acquire services.lock and re-verify everything
             with driver.lock("services", timeout=10.0):
-                # Re-verify paused state
                 if driver.is_paused():
                     raise ActivationError("Server became paused during activation; refusing file mutation")
 
-                # Re-verify guards
-                for sid, info in act_journal["flags"].items():
-                    if info.get("pre_existing", False):
-                        continue
-                    gp = disabled_dir / sid
-                    if not gp.exists():
-                        raise ConcurrencyError(f"Guard flag {gp} vanished before file mutation")
-                    st = gp.lstat()
-                    if st.st_ino != info.get("ino"):
-                        raise ConcurrencyError(f"Guard flag {gp} replaced concurrently")
+                # Revalidate ALL flags (pre-existing and guards)
+                revalidate_all_flags(disabled_dir, act_journal["flags"], current_uid, tx_id)
 
                 # Re-verify active services dead
                 for sid in active_services:
                     if driver.matching_processes(sid):
                         raise QuiescenceError(f"Service {sid} processes reappeared before file mutation")
 
-                if supervisor_affected and daemon_proc:
-                    if driver.process_identity(daemon_proc[0]) == daemon_proc[1]:
-                        raise QuiescenceError("Supervisor daemon survived termination")
+                # Re-verify daemon dead and not replaced
+                if supervisor_affected and daemon_was_running:
+                    if driver.is_daemon_running() or driver.find_daemon_process() is not None:
+                        raise QuiescenceError("Supervisor daemon reappeared or replaced during unlocked gap")
 
-                # 4. Apply file transaction
+                # Apply file transaction
                 act_journal["state"] = STATE_APPLYING
                 save_activation_journal(tx_dir, act_journal)
                 tx.apply(namespace_root=ns_root)
                 act_journal["state"] = STATE_APPLIED
                 save_activation_journal(tx_dir, act_journal)
 
-                # 5. Dependency-ordered reactivation & health checks
-                sorted_active = sort_services_by_dependencies(active_services)
-                launched_services: Set[str] = set()
+                # Reload lifecycle authority to bind candidate configuration
+                driver.reload_lifecycle()
 
+                # Dependency-ordered reactivation & health checks
+                sorted_active = sort_services_by_dependencies(active_services)
                 for sid in sorted_active:
                     verify_prerequisites_before_launch(sid, driver, set(active_services))
                     cfg = driver.services()[sid]
                     driver.launch(sid, cfg)
-                    launched_services.add(sid)
 
-                    # Health probe loop
                     deadline = time.monotonic() + health_timeout
                     is_healthy = False
                     while time.monotonic() < deadline:
@@ -743,7 +899,6 @@ def apply(
 
                 if supervisor_affected and daemon_was_running:
                     driver.start_daemon()
-                    # Verify daemon started
                     d_deadline = time.monotonic() + 3.0
                     d_started = False
                     while time.monotonic() < d_deadline:
@@ -757,10 +912,10 @@ def apply(
                 act_journal["state"] = STATE_HEALTHY
                 save_activation_journal(tx_dir, act_journal)
 
-                # 6. Remove temporary guards
-                remove_guards(disabled_dir, act_journal["flags"], current_uid)
+                # Remove temporary guards
+                remove_temporary_guards(disabled_dir, act_journal["flags"], current_uid, tx_id)
 
-            # 7. Commit
+            # Commit
             tx.commit(namespace_root=ns_root)
             act_journal["state"] = STATE_COMPLETED
             save_activation_journal(tx_dir, act_journal)
@@ -774,21 +929,19 @@ def apply(
             }
 
         except Exception as exc:
-            # If quiescence failed, keep safe guards in place and refuse file mutation
-            if isinstance(exc, QuiescenceError):
+            if isinstance(exc, (QuiescenceError, ConcurrencyError)):
                 act_journal["state"] = STATE_RECOVERY_REQUIRED
                 save_activation_journal(tx_dir, act_journal)
                 raise
 
-            # If failure happened before file apply:
             if act_journal["state"] in (STATE_PREPARED, STATE_GUARDED, STATE_QUIESCED):
                 with driver.lock("services", timeout=10.0):
-                    remove_guards(disabled_dir, act_journal.get("flags", {}), current_uid)
+                    with contextlib.suppress(Exception):
+                        remove_temporary_guards(disabled_dir, act_journal.get("flags", {}), current_uid, tx_id)
                 act_journal["state"] = STATE_RECOVERY_REQUIRED
                 save_activation_journal(tx_dir, act_journal)
                 raise
 
-            # Otherwise, files were applied or being applied: rollback coherently
             act_journal["state"] = STATE_ROLLING_BACK
             save_activation_journal(tx_dir, act_journal)
             _rollback_internal(
@@ -814,43 +967,111 @@ def _rollback_internal(
     current_uid: int,
     health_timeout: float = 10.0,
 ) -> None:
-    """Internal rollback logic executed under ActivationLock."""
+    """Internal rollback logic: reinstall guards, verify candidate death, rollback files, restart prior."""
+    tx_id = act_journal["tx_id"]
+    active_services = [sid for sid, info in act_journal.get("flags", {}).items() if not info.get("pre_existing")]
+
     with driver.lock("services", timeout=10.0):
-        # 1. Quiesce any candidate processes for affected services
-        active_services = [sid for sid, info in act_journal.get("flags", {}).items() if not info.get("pre_existing")]
+        disabled_dir.mkdir(parents=True, exist_ok=True)
+        # 1. Reinstall temporary guards for all active services whose guards are missing
+        for sid in active_services:
+            gp = disabled_dir / sid
+            if not gp.exists():
+                token = act_journal["flags"][sid]["token"]
+                payload = f"RELEASE_GUARD_TOKEN={token}\nTX_ID={tx_id}\nSID={sid}\n"
+                tmp_flag = disabled_dir / f".tmp_rb_guard_{sid}_{uuid.uuid4().hex[:6]}"
+                try:
+                    fd = os.open(str(tmp_flag), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    try:
+                        rt.write_all(fd, payload.encode("utf-8"))
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                    os.replace(str(tmp_flag), str(gp))
+                    rt.fsync_dir(disabled_dir)
+                finally:
+                    if tmp_flag.exists():
+                        with contextlib.suppress(OSError):
+                            tmp_flag.unlink()
+
+        # Revalidate all flags
+        revalidate_all_flags(disabled_dir, act_journal["flags"], current_uid, tx_id)
+
+        # 2. Quiesce candidate processes and verify death
         for sid in active_services:
             cand_records = driver.matching_processes(sid)
             if cand_records:
                 driver.terminate(cand_records)
-                if sid == "agy":
-                    driver.stop_agy()
+            if sid == "agy":
+                driver.stop_agy()
 
-        # If daemon was restarted, stop it
+            # Verify death
+            surviving = [r for r in cand_records if driver.process_identity(r[0]) == r[1]]
+            remaining = driver.matching_processes(sid)
+            if surviving or remaining:
+                act_journal["state"] = STATE_RECOVERY_REQUIRED
+                save_activation_journal(tx_dir, act_journal)
+                raise QuiescenceError(
+                    f"Candidate process {sid} survived termination during rollback: surviving={surviving}, remaining={remaining}"
+                )
+
+        d_proc = None
         if act_journal.get("supervisor_affected") and act_journal.get("daemon_was_running"):
-            d_proc = driver.find_daemon_process()
-            if d_proc:
-                driver.stop_daemon(d_proc[0], d_proc[1])
+            if driver.is_daemon_running():
+                d_proc = driver.find_daemon_process()
+                if d_proc is None:
+                    act_journal["state"] = STATE_RECOVERY_REQUIRED
+                    save_activation_journal(tx_dir, act_journal)
+                    raise QuiescenceError("Daemon lock held during rollback but exact process could not be found")
 
-        # 2. Rollback files
+    # Stop daemon outside services.lock if running
+    if d_proc:
+        driver.stop_daemon(d_proc[0], d_proc[1])
+
+    with driver.lock("services", timeout=10.0):
+        # Revalidate guards before file rollback
+        revalidate_all_flags(disabled_dir, act_journal["flags"], current_uid, tx_id)
+
+        # 3. Rollback files
         tx.rollback(namespace_root=ns_root)
 
-        # 3. Relaunch prior services
+        # Reload prior lifecycle
+        driver.reload_lifecycle()
+
+        # 4. Relaunch prior services
         sorted_active = sort_services_by_dependencies(active_services)
         for sid in sorted_active:
             cfg = driver.services()[sid]
             driver.launch(sid, cfg)
             deadline = time.monotonic() + health_timeout
+            is_healthy = False
             while time.monotonic() < deadline:
                 if driver.healthy(sid, cfg):
+                    is_healthy = True
                     break
                 time.sleep(0.1)
+            if not is_healthy:
+                act_journal["state"] = STATE_RECOVERY_REQUIRED
+                save_activation_journal(tx_dir, act_journal)
+                raise HealthCheckError(f"Prior service {sid} failed health check during rollback")
 
         # Restart prior daemon if it was running
         if act_journal.get("supervisor_affected") and act_journal.get("daemon_was_running"):
             driver.start_daemon()
+            d_deadline = time.monotonic() + 3.0
+            d_started = False
+            while time.monotonic() < d_deadline:
+                if driver.is_daemon_running():
+                    d_started = True
+                    break
+                time.sleep(0.1)
+            if not d_started:
+                act_journal["state"] = STATE_RECOVERY_REQUIRED
+                save_activation_journal(tx_dir, act_journal)
+                raise HealthCheckError("Prior supervisor daemon failed to restart during rollback")
 
-        # 4. Remove temporary guards
-        remove_guards(disabled_dir, act_journal.get("flags", {}), current_uid)
+        # 5. Remove temporary guards
+        remove_temporary_guards(disabled_dir, act_journal.get("flags", {}), current_uid, tx_id)
 
     act_journal["state"] = STATE_ROLLED_BACK
     save_activation_journal(tx_dir, act_journal)
@@ -867,24 +1088,27 @@ def rollback(
     ns_root = Path(namespace_root).resolve() if namespace_root else Path(act_journal["namespace_root"]).resolve()
     current_uid = os.getuid()
 
-    if act_journal.get("top_uid") != current_uid:
-        raise ActivationError(f"Runtime UID {current_uid} does not match journal top_uid {act_journal.get('top_uid')}")
+    tx = rt.ReleaseTransaction(tx_dir)
+    tx_journal = tx.load_journal()
+    validate_activation_journal(act_journal, tx_journal, ns_root, tx_dir, current_uid)
 
     if driver is None:
         rec_dir = tx_dir / "recovery_lifecycle"
         if rec_dir.exists() and (rec_dir / "server_supervisor.py").exists():
-            driver = ta.load_isolated_lifecycle(rec_dir, namespace_root=ns_root)
+            validate_recovery_assets(rec_dir, act_journal.get("recovery_assets", {}), current_uid)
+            driver = ta.load_isolated_lifecycle(
+                recovery_dir=rec_dir,
+                namespace_root=ns_root,
+                expected_hashes=act_journal.get("recovery_assets"),
+            )
         else:
             driver = ta.TermuxLifecycleDriver(namespace_root=ns_root)
 
     with ActivationLock(ns_root):
         if act_journal["state"] == STATE_ROLLED_BACK:
-            # Idempotent verification
-            tx = rt.ReleaseTransaction(tx_dir)
             tx_res = tx.rollback(namespace_root=ns_root)
             return {"state": STATE_ROLLED_BACK, "status": "idempotent_success", "file_status": tx_res}
 
-        tx = rt.ReleaseTransaction(tx_dir)
         disabled_dir = ns_root / "home/.config/services_disabled"
         act_journal["state"] = STATE_ROLLING_BACK
         save_activation_journal(tx_dir, act_journal)
@@ -916,7 +1140,6 @@ def recover(
     ns_root = Path(namespace_root).resolve() if namespace_root else Path(act_journal["namespace_root"]).resolve()
 
     if act_journal["state"] == STATE_COMPLETED:
-        # Idempotent check
         tx = rt.ReleaseTransaction(tx_dir)
         tx_res = tx.recover(namespace_root=ns_root)
         return {"state": STATE_COMPLETED, "status": "idempotent_success", "file_status": tx_res}
@@ -945,30 +1168,25 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # plan
     plan_parser = subparsers.add_parser("plan", help="Dry planning of affected destinations and services")
     plan_parser.add_argument("--bundle", required=True, help="Candidate bundle directory")
     plan_parser.add_argument("--preconditions", required=True, help="Preconditions JSON file")
     plan_parser.add_argument("--namespace-root", help="Live namespace root directory")
 
-    # apply
     apply_parser = subparsers.add_parser("apply", help="Execute service-scoped release activation")
     apply_parser.add_argument("--bundle", required=True, help="Candidate bundle directory")
     apply_parser.add_argument("--preconditions", required=True, help="Preconditions JSON file")
     apply_parser.add_argument("--transaction-dir", required=True, help="Transaction directory")
     apply_parser.add_argument("--namespace-root", help="Live namespace root directory")
 
-    # rollback
     rb_parser = subparsers.add_parser("rollback", help="Roll back activation")
     rb_parser.add_argument("--transaction-dir", required=True, help="Transaction directory")
     rb_parser.add_argument("--namespace-root", help="Live namespace root directory")
 
-    # recover
     rec_parser = subparsers.add_parser("recover", help="Recover interrupted activation")
     rec_parser.add_argument("--transaction-dir", required=True, help="Transaction directory")
     rec_parser.add_argument("--namespace-root", help="Live namespace root directory")
 
-    # status
     st_parser = subparsers.add_parser("status", help="Inspect activation status")
     st_parser.add_argument("--transaction-dir", required=True, help="Transaction directory")
 
