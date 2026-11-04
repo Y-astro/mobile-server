@@ -1,7 +1,7 @@
 # Material 3 home-server portal design
 
 Date: 2026-11-04
-Status: Proposed for user review. No redesign implementation has started.
+Status: Approved by the user on 2026-11-04: “yes continue with dark m3”. Proceed with the recommended full dark Material 3 direction.
 
 ## Scope and intent
 
