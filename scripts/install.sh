@@ -1,121 +1,143 @@
-#!/data/data/com.termux/files/usr/bin/bash
-# Update an already provisioned K20 Pro. Run inside Termux, from this checkout.
-# NOTE: This legacy installer performs preflight manifest validation and file synchronization.
-# It does not provide atomic release activation or rollback. Atomic release switching and live-drift refusal are deferred to a later reviewed stage.
+#!/usr/bin/env bash
+# Update an already provisioned K20 Pro server installation.
+# NOTE: Unsafe legacy file synchronization, unjournaled in-place copies,
+# and ambient supervisor restarts have been completely replaced by the
+# reviewed transactional activation adapter (scripts/release_activation.py)
+# and release transaction engine (scripts/release_transaction.py).
+#
+# This wrapper parses CLI arguments strictly and delegates directly to the
+# reviewed activation adapter. It never performs ad-hoc source writes,
+# service manipulation, or Caddy reloads directly.
 set -euo pipefail
 
-# Fail-fast guard: direct source writes via legacy installer are disabled until reviewed transactional activation adapter takes over.
-echo "Direct source writes via legacy installer are disabled: reviewed transactional activation adapter is required." >&2
-exit 1
-
-cd "$(dirname "$0")/.."
-PREFIX=/data/data/com.termux/files/usr
-export PREFIX
-lib="$HOME/.local/lib/mobile-server"
-state="$HOME/.config/server_recovery"
-for tool in python3 caddy filebrowser tor tmux; do command -v "$tool" >/dev/null; done
-test -f "$HOME/.config/filebrowser/filebrowser.db"
-test -x .work/mobile-gateway || { echo 'Build gateway first: cd gateway && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ../.work/mobile-gateway .' >&2; exit 1; }
-caddy validate --config config/Caddyfile --adapter caddyfile
-
-# --- Candidate release manifest validation (PREFLIGHT BEFORE ANY WRITES) ---
-MANIFEST="${RELEASE_MANIFEST:-${1:-}}"
-CLEANUP_MANIFEST=0
-if [ -z "$MANIFEST" ]; then
-    MANIFEST="$(mktemp "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/release-manifest.XXXXXX.json" 2>/dev/null || mktemp -t release-manifest.XXXXXX.json)"
-    CLEANUP_MANIFEST=1
-    python3 scripts/release-manifest.py generate --root . --include-gateway --output "$MANIFEST"
-fi
-if ! python3 scripts/release-manifest.py validate --root . --manifest "$MANIFEST" --require-gateway; then
-    echo "Preflight release manifest validation failed! Aborting before any source writes." >&2
-    if [ "$CLEANUP_MANIFEST" -eq 1 ]; then rm -f "$MANIFEST"; fi
+# Fail-fast guard: a no-argument invocation must fail immediately before any
+# external commands or path resolution are executed.
+if [ "$#" -eq 0 ]; then
+    echo "Direct source writes via legacy installer are disabled: reviewed transactional activation adapter is required." >&2
     exit 1
 fi
-if [ "$CLEANUP_MANIFEST" -eq 1 ]; then rm -f "$MANIFEST"; fi
-# ---------------------------------------------------------------------------
 
-mkdir -p "$lib" "$HOME/bin" "$state" "$HOME/.config/dashboard/static" "$HOME/.config/ttyd" "$HOME/.config/tor" "$HOME/.local/share/mobile-server-tor" "$HOME/.config/services_disabled"
-chmod 700 "$HOME/.local/share/mobile-server-tor" "$HOME/.config/tor"
-install -m 600 app/auth.py "$lib/auth.py"
-if [ ! -f "$HOME/.config/dashboard/users.json" ]; then
-    python3 scripts/migrate-auth.py --source "$PREFIX/bin/dashboard"
-fi
-# Preserve existing Tor intent on subsequent updates. Default off on first setup.
-if [ ! -f "$HOME/.config/tor/torrc" ]; then touch "$HOME/.config/services_disabled/tor"; fi
-# Revisions contain only sanitized code: never back up the old plaintext dashboard.
-rev="$state/releases/$(date +%Y%m%dT%H%M%S)"
-mkdir -p "$rev"
-chmod 700 "$rev"
-cp app/*.py "$rev/"
-for source in app/*.py; do
-    if [ "$(basename "$source")" != "dashboard.py" ]; then
-        install -m 600 "$source" "$lib/$(basename "$source")"
-    fi
+action="$1"
+shift
+
+case "$action" in
+    plan|apply)
+        ;;
+    *)
+        echo "Error: invalid action '$action'. Expected 'plan' or 'apply'." >&2
+        exit 1
+        ;;
+esac
+
+bundle=""
+preconditions=""
+transaction_dir=""
+namespace_root=""
+
+has_bundle=0
+has_preconditions=0
+has_transaction_dir=0
+has_namespace_root=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --bundle)
+            if [ "$has_bundle" -ne 0 ]; then
+                echo "Error: duplicate flag --bundle" >&2
+                exit 1
+            fi
+            if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+                echo "Error: missing or empty value for --bundle" >&2
+                exit 1
+            fi
+            bundle="$2"
+            has_bundle=1
+            shift 2
+            ;;
+        --preconditions)
+            if [ "$has_preconditions" -ne 0 ]; then
+                echo "Error: duplicate flag --preconditions" >&2
+                exit 1
+            fi
+            if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+                echo "Error: missing or empty value for --preconditions" >&2
+                exit 1
+            fi
+            preconditions="$2"
+            has_preconditions=1
+            shift 2
+            ;;
+        --transaction-dir)
+            if [ "$action" != "apply" ]; then
+                echo "Error: flag --transaction-dir is only allowed for 'apply'" >&2
+                exit 1
+            fi
+            if [ "$has_transaction_dir" -ne 0 ]; then
+                echo "Error: duplicate flag --transaction-dir" >&2
+                exit 1
+            fi
+            if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+                echo "Error: missing or empty value for --transaction-dir" >&2
+                exit 1
+            fi
+            transaction_dir="$2"
+            has_transaction_dir=1
+            shift 2
+            ;;
+        --namespace-root)
+            if [ "$has_namespace_root" -ne 0 ]; then
+                echo "Error: duplicate flag --namespace-root" >&2
+                exit 1
+            fi
+            if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+                echo "Error: missing or empty value for --namespace-root" >&2
+                exit 1
+            fi
+            namespace_root="$2"
+            has_namespace_root=1
+            shift 2
+            ;;
+        *)
+            echo "Error: unknown or unsupported argument '$1'" >&2
+            exit 1
+            ;;
+    esac
 done
-install -m 700 app/dashboard.py "$PREFIX/bin/dashboard.new"
-mv "$PREFIX/bin/dashboard.new" "$PREFIX/bin/dashboard"
-install -m 700 .work/mobile-gateway "$HOME/bin/mobile-gateway.new"
-mv "$HOME/bin/mobile-gateway.new" "$HOME/bin/mobile-gateway"
-for script in server_supervisor.py agy_session.sh battery_guard.sh laptop_session.py termux_session.sh start_suwayomi.sh suwayomi_daily_update.py suwayomi_graphql_filter.py suwayomi_update.sh; do
-    install -m 700 "scripts/$script" "$HOME/bin/$script.new"
-    mv "$HOME/bin/$script.new" "$HOME/bin/$script"
-done
-install -m 700 scripts/start-services.sh "$HOME/start_services.sh"
-if [ -d "$PREFIX/var/lib/proot-distro/containers/debian/rootfs/usr/local/bin" ]; then
-    install -m 755 scripts/agy-runner-loop "$PREFIX/var/lib/proot-distro/containers/debian/rootfs/usr/local/bin/agy-runner-loop"
+
+if [ "$has_bundle" -eq 0 ]; then
+    echo "Error: missing mandatory flag --bundle" >&2
+    exit 1
 fi
-for command in server-user server-status server-health server-up server-down server-restart agy-resume; do
-    install -m 700 "scripts/$command" "$PREFIX/bin/$command"
-done
-install -m 600 web/admin.html "$HOME/.config/dashboard/static/admin.html"
-install -m 600 web/family.html "$HOME/.config/dashboard/static/family.html"
-install -m 600 web/login.html "$HOME/.config/dashboard/static/login.html"
-install -m 600 web/portal.css "$HOME/.config/dashboard/static/portal.css"
-install -m 600 web/agy_index.html "$HOME/.config/ttyd/agy_index.html"
-install -m 600 web/termux_index.html "$HOME/.config/ttyd/termux_index.html"
-install -m 600 web/filebrowser.js "$HOME/.config/dashboard/static/patched_index.js"
-install -m 600 web/laptop.js "$HOME/.config/dashboard/static/laptop.js"
-install -m 600 web/interactive_player.js "$HOME/.config/dashboard/static/interactive_player.js"
-install -m 600 config/torrc "$HOME/.config/tor/torrc"
-install -m 600 config/Caddyfile "$HOME/.config/caddy/Caddyfile"
-# Even a failed reload must leave the service supervisor running.
-recover_services() {
-    result=$?
-    trap - EXIT
-    python3 "$HOME/bin/server_supervisor.py" --ensure || true
-    exit "$result"
-}
-trap recover_services EXIT
-python3 - <<'PY'
-import os,signal,sys,time
-sys.path.insert(0,os.path.expanduser('~/bin'))
-import server_supervisor as s
-s.initialize()
-# Retire the old daemon by exact script identity so it loads the new service set.
-records = []
-for entry in s.Path('/proc').iterdir():
-    if not entry.name.isdigit(): continue
-    try:
-        args=(entry/'cmdline').read_bytes().split(b'\0')
-        if str(s.HOME/'bin/server_supervisor.py').encode() in args and b'--daemon' in args and entry.stat().st_uid==os.getuid():
-            records.append((int(entry.name), s.process_identity(int(entry.name))))
-    except (OSError,ValueError): pass
-s.terminate([(pid, identity) for pid, identity in records if identity is not None])
-s.terminate(s.matching_processes('dashboard'))
-s.terminate(s.matching_processes('transfer_gateway'))
-s.terminate(s.matching_processes('battery_guard'))
-PY
-if ! caddy reload --config "$HOME/.config/caddy/Caddyfile" --adapter caddyfile; then
-    # A stopped/broken admin API cannot reload: retire only our Caddy instance.
-    python3 - <<'PY'
-import os,sys
-sys.path.insert(0,os.path.expanduser('~/bin'))
-import server_supervisor as s
-s.terminate(s.matching_processes('caddy'))
-PY
+
+if [ "$has_preconditions" -eq 0 ]; then
+    echo "Error: missing mandatory flag --preconditions" >&2
+    exit 1
 fi
-# ensure() initializes services immediately and reuses any existing daemon lock.
-python3 "$HOME/bin/server_supervisor.py" --ensure
-sleep 12
-python3 "$HOME/bin/server_supervisor.py" --ensure
-python3 "$HOME/bin/server_supervisor.py" --status
+
+if [ "$action" = "apply" ] && [ "$has_transaction_dir" -eq 0 ]; then
+    echo "Error: missing mandatory flag --transaction-dir for 'apply'" >&2
+    exit 1
+fi
+
+# Locate sibling activation script using safe script-relative path resolution
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+activation_script="$script_dir/release_activation.py"
+
+if [ ! -f "$activation_script" ]; then
+    echo "Error: reviewed release activation adapter not found: $activation_script" >&2
+    echo "This branch requires root integration of the accepted release activation adapter before execution." >&2
+    exit 1
+fi
+
+# Build argv array and exec Python CLI directly
+cmd=(python3 "$activation_script" "$action" --bundle "$bundle" --preconditions "$preconditions")
+
+if [ "$action" = "apply" ]; then
+    cmd+=(--transaction-dir "$transaction_dir")
+fi
+
+if [ "$has_namespace_root" -ne 0 ]; then
+    cmd+=(--namespace-root "$namespace_root")
+fi
+
+exec "${cmd[@]}"
