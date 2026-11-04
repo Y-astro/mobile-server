@@ -285,6 +285,7 @@ def healthy(sid, cfg):
             )
             cand_pid = cand_proc.pid
             prior_pid = None
+            driver_candidate = None
 
             try:
                 # Allow candidate process to initialize and appear in /proc
@@ -436,20 +437,16 @@ def healthy(sid, cfg):
                     except Exception:
                         pass
 
-                if prior_pid is not None:
-                    try:
-                        os.kill(prior_pid, signal.SIGTERM)
-                        deadline = time.monotonic() + 2.0
-                        while time.monotonic() < deadline:
-                            try:
-                                os.kill(prior_pid, 0)
-                                time.sleep(0.05)
-                            except OSError:
-                                break
-                        else:
-                            os.kill(prior_pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                if driver_candidate is not None:
+                    # Discover only this temporary script's processes, even if a
+                    # failed assertion prevented capturing the restored PID.
+                    remaining = driver_candidate.matching_processes("dashboard")
+                    driver_candidate.terminate(remaining)
+                    surviving = [
+                        record for record in remaining
+                        if driver_candidate.process_identity(record[0]) == record[1]
+                    ]
+                    self.assertEqual(surviving, [], "Temporary processes survived identity-checked cleanup")
 
 
 if __name__ == "__main__":
