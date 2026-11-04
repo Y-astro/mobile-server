@@ -358,6 +358,134 @@ class ReleaseInstallerTests(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, code)
 
+    def test_profile_flag_validation(self):
+        """Profile flag checks: missing value, empty, option-like, duplicate, and invalid value."""
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            staged_scripts = tdp / "scripts"
+            staged_scripts.mkdir()
+            shutil.copy2(INSTALL_SCRIPT, staged_scripts / "install.sh")
+            fake_adapter = staged_scripts / "release_activation.py"
+            fake_adapter.write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+
+            cases = [
+                # Missing value at end
+                ["plan", "--bundle", "/tmp/b", "--preconditions", "/tmp/p", "--profile"],
+                # Empty string value
+                ["plan", "--bundle", "/tmp/b", "--preconditions", "/tmp/p", "--profile", ""],
+                # Option-like values
+                ["plan", "--bundle", "/tmp/b", "--preconditions", "/tmp/p", "--profile", "-general"],
+                ["plan", "--bundle", "/tmp/b", "--preconditions", "/tmp/p", "--profile", "--bundle"],
+                # Duplicate flag
+                ["plan", "--bundle", "/tmp/b", "--preconditions", "/tmp/p", "--profile", "general", "--profile", "suwayomi-filter"],
+                # Invalid profile values
+                ["plan", "--bundle", "/tmp/b", "--preconditions", "/tmp/p", "--profile", "unknown"],
+                ["plan", "--bundle", "/tmp/b", "--preconditions", "/tmp/p", "--profile", "suwayomi"],
+                ["apply", "--bundle", "/tmp/b", "--preconditions", "/tmp/p", "--transaction-dir", "/tmp/t", "--profile", "all"],
+            ]
+
+            for argv in cases:
+                proc = subprocess.run(
+                    ["bash", str(staged_scripts / "install.sh")] + argv,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                self.assertNotEqual(proc.returncode, 0, f"Malformed profile invocation {argv} unexpectedly succeeded")
+
+    def test_profile_flag_forwarding(self):
+        """Valid profile flags are forwarded accurately to release_activation.py."""
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            staged_scripts = tdp / "scripts"
+            staged_scripts.mkdir()
+            shutil.copy2(INSTALL_SCRIPT, staged_scripts / "install.sh")
+
+            log_path = tdp / "received_argv.json"
+            fake_adapter = staged_scripts / "release_activation.py"
+            with open(fake_adapter, "w", encoding="utf-8") as f:
+                f.write(
+                    "import json, sys\n"
+                    f"with open('{log_path}', 'w', encoding='utf-8') as f:\n"
+                    "    json.dump(sys.argv[1:], f)\n"
+                    "sys.exit(0)\n"
+                )
+
+            # Test explicit --profile suwayomi-filter on plan
+            proc_plan = subprocess.run(
+                [
+                    "bash",
+                    str(staged_scripts / "install.sh"),
+                    "plan",
+                    "--bundle",
+                    "/tmp/bundle_dir",
+                    "--preconditions",
+                    "/tmp/pre.json",
+                    "--profile",
+                    "suwayomi-filter",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(proc_plan.returncode, 0, f"Plan failed: {proc_plan.stderr}")
+            with open(log_path, "r", encoding="utf-8") as f:
+                received = json.load(f)
+            self.assertEqual(
+                received,
+                ["plan", "--bundle", "/tmp/bundle_dir", "--preconditions", "/tmp/pre.json", "--profile", "suwayomi-filter"],
+            )
+
+            # Test explicit --profile general on apply
+            proc_apply = subprocess.run(
+                [
+                    "bash",
+                    str(staged_scripts / "install.sh"),
+                    "apply",
+                    "--bundle",
+                    "/tmp/bundle_dir",
+                    "--preconditions",
+                    "/tmp/pre.json",
+                    "--transaction-dir",
+                    "/tmp/tx_dir",
+                    "--profile",
+                    "general",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(proc_apply.returncode, 0, f"Apply failed: {proc_apply.stderr}")
+            with open(log_path, "r", encoding="utf-8") as f:
+                received = json.load(f)
+            self.assertEqual(
+                received,
+                ["apply", "--bundle", "/tmp/bundle_dir", "--preconditions", "/tmp/pre.json", "--transaction-dir", "/tmp/tx_dir", "--profile", "general"],
+            )
+
+            # Test omitted profile (default)
+            proc_omit = subprocess.run(
+                [
+                    "bash",
+                    str(staged_scripts / "install.sh"),
+                    "plan",
+                    "--bundle",
+                    "/tmp/bundle_dir",
+                    "--preconditions",
+                    "/tmp/pre.json",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertEqual(proc_omit.returncode, 0, f"Plan omitted profile failed: {proc_omit.stderr}")
+            with open(log_path, "r", encoding="utf-8") as f:
+                received = json.load(f)
+            self.assertEqual(
+                received,
+                ["plan", "--bundle", "/tmp/bundle_dir", "--preconditions", "/tmp/pre.json"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
