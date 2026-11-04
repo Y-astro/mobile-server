@@ -16,7 +16,7 @@ The server manages 15 background services via [`scripts/server_supervisor.py`](.
 | `caddy` | Ingress reverse proxy & TLS termination | [`config/Caddyfile`](../config/Caddyfile) | `$PREFIX/bin/caddy run --config $HOME/.config/caddy/Caddyfile` | Ports `:8000`, `:8443`, `:8444`, `:4567` (bound per Caddyfile) | `GET /healthz` (proxies to :8001; supervisor accepts 200, redirects, 401/403, 502–504) | Config: `$HOME/.config/caddy/Caddyfile`<br>TLS/CA keys: `$HOME/.local/share/caddy/` |
 | `filebrowser` | Cloud storage & media browser | Native FileBrowser binary ([licenses/filebrowser.txt](../licenses/filebrowser.txt)) | `$PREFIX/bin/filebrowser -d $HOME/.config/filebrowser/filebrowser.db -a 127.0.0.1 -p 8085 -c $HOME/.config/filebrowser/fb_config.json --cacheDir $HOME/.cache/filebrowser --disableImageResolutionCalc --imageProcessors 2` | `127.0.0.1:8085` (HTTP, pinned loopback via `-a`) | `GET /drive/` (supervisor accepts 200, redirects, 401/403) | DB: FileBrowser application database `$HOME/.config/filebrowser/filebrowser.db` (format unverified)<br>Config: `$HOME/.config/filebrowser/fb_config.json`<br>Cache: `$HOME/.cache/filebrowser`<br>Media: `/storage/emulated/0/` |
 | `transfer_gateway` | Bounded streaming admission proxy | [`gateway/`](../gateway/) (Go source) | `$HOME/bin/mobile-gateway -backend http://127.0.0.1:8085` | `127.0.0.1:8081` (HTTP, loopback default in main.go) | `GET /healthz` (supervisor accepts 200, redirects, 401/403) | Stateless admission proxy; no durable DB |
-| `suwayomi` | Manga server backend | [`scripts/start_suwayomi.sh`](../scripts/start_suwayomi.sh) | `$HOME/bin/start_suwayomi.sh` (executes `Suwayomi-Server.jar` via OpenJDK 21 or Debian PRoot fallback) | Port `:4569` (HTTP backend, loopback); client port `:4567` | `GET /suwayomi/` on :4569 or :4567 (supervisor accepts 200, redirects, 401/403) | Data dir: `$HOME/suwayomi/data/`<br>DB: Suwayomi database files in `$HOME/suwayomi/data/` (format unverified)<br>Downloads: `$HOME/suwayomi/data/downloads/`<br>Logs: `$HOME/suwayomi/data/logs/` |
+| `suwayomi` | Manga server backend | [`scripts/start_suwayomi.sh`](../scripts/start_suwayomi.sh) | `$HOME/bin/start_suwayomi.sh` (executes `Suwayomi-Server.jar` via OpenJDK 21 or Debian PRoot fallback) | Port `:4569` (HTTP backend, loopback); client port `:4567` | Supervisor: `GET /suwayomi/` on :4569 (accepts 200, redirects, 401/403); dashboard reachability may fall back to :4567 | Data dir: `$HOME/suwayomi/data/`<br>DB: Suwayomi database files in `$HOME/suwayomi/data/` (format unverified)<br>Downloads: `$HOME/suwayomi/data/downloads/`<br>Logs: `$HOME/suwayomi/data/logs/` |
 | `suwayomi_filter` | Suwayomi GraphQL reading-feed filter | [`scripts/suwayomi_graphql_filter.py`](../scripts/suwayomi_graphql_filter.py) | `$PREFIX/bin/python3 $HOME/bin/suwayomi_graphql_filter.py` | `127.0.0.1:4566` (HTTP, pinned loopback in source) | `GET /healthz` (supervisor accepts 200, redirects, 401/403) | Logs: `$HOME/suwayomi/data/logs/graphql_filter.log` |
 | `ssh` | Remote administrative shell | Termux OpenSSH package | `$PREFIX/bin/sshd -D` | Port `:8022` (TCP, OpenSSH listener) | TCP probe on 8022 (banner `SSH-`) | Config: `$PREFIX/etc/ssh/`<br>Keys: `$HOME/.ssh/authorized_keys` |
 | `agy` | Autonomous AI coding agent | [`scripts/agy_session.sh`](../scripts/agy_session.sh), [`scripts/agy-runner-loop`](../scripts/agy-runner-loop), [`web/agy_index.html`](../web/agy_index.html), [`app/agy_sessions.py`](../app/agy_sessions.py) | `$PREFIX/bin/ttyd -W -a -m 8 -i 127.0.0.1 -p 7682 -b /agy -I $HOME/.config/ttyd/agy_index.html $HOME/bin/agy_session.sh` | `127.0.0.1:7682` (HTTP/WS, pinned loopback via `-i`) | `GET /agy/` (supervisor accepts 200, redirects, 401/403) | Config: `$HOME/.config/ttyd/agy_index.html`<br>tmux socket: `$PREFIX/var/run/tmux-10505/default`<br>Lock: `$HOME/.config/server_recovery/agy*.lock`<br>History: PRoot Debian `/root/.local/state/` |
@@ -58,7 +58,7 @@ The server manages 15 background services via [`scripts/server_supervisor.py`](.
 
 Tracked repository assets and deployment mapping:
 - **Source trees**: `app/`, `config/`, `gateway/`, `laptop/`, `scripts/`, `web/`.
-- **Audited baseline vs candidate manifests**: Historical [`config/deployment-files.json`](../config/deployment-files.json) is a frozen 35-row baseline capturing original audited installed files. Current candidate manifests are generated via [`scripts/release-manifest.py`](../scripts/release-manifest.py), which dynamically discovers all reviewed flat runtime helpers in `app/` (excluding `dashboard.py`), web/ttyd assets, and the compiled Go gateway (`.work/mobile-gateway`).
+- **Audited baseline vs candidate manifests**: Historical [`config/deployment-files.json`](../config/deployment-files.json) is a frozen 35-row baseline capturing original audited installed files. Current candidate manifests are generated via [`scripts/release-manifest.py`](../scripts/release-manifest.py). The generator discovers flat runtime helpers in `app/` (excluding `dashboard.py`), includes explicitly mapped web/ttyd assets, and optionally includes the compiled Go gateway (`.work/mobile-gateway`). A complete deployment requires the gateway. New web assets require explicit reviewed mappings.
 - **Runtime helpers**: Installed to `$HOME/.local/lib/mobile-server/`:
   - `agy_sessions.py` (tmux session manager)
   - `auth.py` (credential validation and store)
@@ -99,7 +99,7 @@ Sensitive credentials, databases, keys, user content, and session records are ex
 
 ## 3. Supervisor Authority and Lifecycle Contracts
 
-All server processes run under the control of [`scripts/server_supervisor.py`](../scripts/server_supervisor.py).
+The 15 managed services listed above use [`scripts/server_supervisor.py`](../scripts/server_supervisor.py). This does not establish ownership of every unmanaged process on the phone.
 
 ### Supervisor Locks
 
@@ -109,7 +109,7 @@ All server processes run under the control of [`scripts/server_supervisor.py`](.
 ### Exact Process Matching
 
 - **Command-Line Matching**: [`matching_processes(sid)`](../scripts/server_supervisor.py#L96-L139) parses `/proc`, checks `proc.stat().st_uid == os.getuid()`, and matches explicit argv tokens. Broad `pkill` patterns and the invoking SSH session are never matched.
-- **Starttime Identity**: [`process_identity(pid)`](../scripts/server_supervisor.py#L86-L93) reads `/proc/{pid}/stat`, skips zombies (`Z`), and captures `stat[19]` (field 22, starttime). Signals and health checks require matching this exact identity to prevent PID-reuse races.
+- **Starttime Identity**: [`process_identity(pid)`](../scripts/server_supervisor.py#L86-L93) reads `/proc/{pid}/stat`, skips zombies (`Z`), and captures `stat[19]` (field 22, starttime). Process termination rechecks this identity to reduce PID-reuse risk. HTTP and socket health probes check endpoint responses rather than process starttime.
 
 ### Process Termination Reality
 
@@ -121,7 +121,7 @@ All server processes run under the control of [`scripts/server_supervisor.py`](.
 
 - Presence markers stored at `$HOME/.config/services_disabled/<sid>`.
 - The supervisor cycle inspects flag existence ([`scripts/server_supervisor.py:266`](../scripts/server_supervisor.py#L266)); flagged services are skipped and marked `disabled`.
-- Touching disables; unlinking enables. File contents and permissions are preserved without truncation.
+- Touching disables; unlinking enables. Touching an existing marker preserves its contents and permissions but changes timestamps. Release activation must preserve pre-existing markers without touching them.
 
 ### Global Pause Semantics
 
@@ -164,7 +164,7 @@ This snapshot records observed intent as of that date, not a permanent rule to o
 ### Supervisor Status CLI vs. Read-Only Probes
 
 - **Supervisor Status CLI**: Running `python3 $HOME/bin/server_supervisor.py --status` (or wrappers `server-health` / `server-status`) inspects supervisor state and reports service health. Note that while it does not stop, start, or signal services, **it is not strictly a zero-filesystem-write command**: its entrypoint invokes [`initialize()`](../scripts/server_supervisor.py#L51-L60), which creates missing directories (`.config/server_recovery`, `.config/services_disabled`, `.cache/filebrowser`, `.config/battery_guard`) and initializes a rotating file log handler on disk.
-- **Read-Only Network Probes**: In contrast, direct HTTP requests and socket checks are purely read-only queries with zero filesystem writes.
+- **Read-Only Network Probes**: Direct health requests and socket checks do not request configuration or lifecycle changes. Serving these requests may still write normal access logs or update caches; zero filesystem writes are not guaranteed.
 
 Supervisor [`healthy(sid, cfg)`](../scripts/server_supervisor.py#L191-L217) accepts HTTP status `200, 204, 301, 302, 303, 307, 308, 401, 403` (and for `caddy`, additionally `502, 503, 504` during backend recovery).
 
@@ -185,7 +185,7 @@ Supervisor [`healthy(sid, cfg)`](../scripts/server_supervisor.py#L191-L217) acce
 | `tor` *(if enabled)* | Send SOCKS5 greeting `\x05\x01\x00` to `127.0.0.1:9050` | Response matches `\x05\x00` |
 | `syncthing` *(if enabled)* | `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8384/rest/noauth/health` | Accepts 200, redirects, 401/403 |
 | `vaultwarden` *(if enabled)* | `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8082/alive` | Accepts 200, redirects, 401/403 |
-| `battery_guard` | Check `$HOME/.config/battery_guard/status.json` | File exists and modified within 360s |
+| `battery_guard` | Check matching daemon process and `$HOME/.config/battery_guard/status.json` | Matching process exists and status file was modified within 360s |
 
 ---
 
