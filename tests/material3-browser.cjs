@@ -30,12 +30,12 @@ const { chromium } = require('@playwright/test');
   const runtimeOverrides = {
     filebrowser: { running: true, ondemand: false, pid: 1234, rss_mb: 24.5, status_badge: 'Active (24.5 MB)', memory_complete: true },
     suwayomi: { running: true, ondemand: false, pid: 1400, rss_mb: 120.0, status_badge: 'Active (120 MB)', unread_updates: 3, memory_complete: true },
-    vaultwarden: { running: false, ondemand: false, pid: null, rss_mb: null, status_badge: 'Disabled', memory_complete: true },
+    vaultwarden: { running: false, ondemand: false, pid: null, rss_mb: 0, status_badge: 'Disabled', memory_complete: true },
     adguard: { running: true, ondemand: false, pid: 1550, rss_mb: 45.2, status_badge: 'Active (45.2 MB)', memory_complete: true },
-    terminal: { running: false, ondemand: false, pid: null, rss_mb: null, status_badge: 'Disabled', memory_complete: true },
+    terminal: { running: false, ondemand: false, pid: null, rss_mb: 0, status_badge: 'Disabled', memory_complete: true },
     agy: { running: true, ondemand: false, pid: 1800, rss_mb: 85.0, status_badge: 'Active (85 MB)', memory_complete: true },
-    converter: { running: false, ondemand: true, pid: null, rss_mb: null, status_badge: 'Idle (0 MB)', memory_complete: true },
-    syncthing: { running: false, ondemand: false, pid: null, rss_mb: null, status_badge: 'Disabled', memory_complete: true },
+    converter: { running: false, ondemand: true, pid: null, rss_mb: 0, status_badge: 'Idle (0 MB)', memory_complete: true },
+    syncthing: { running: false, ondemand: false, pid: null, rss_mb: 0, status_badge: 'Disabled', memory_complete: true },
     battery_guard: { running: true, ondemand: false, pid: 2100, rss_mb: null, status_badge: 'Active (daemon)', memory_complete: false }
   };
 
@@ -134,10 +134,10 @@ const { chromium } = require('@playwright/test');
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         services: fullServices,
-        active_memory_mb: 274.7,
-        total_active_mem_mb: 274.7,
+        active_memory_mb: null,
+        total_active_mem_mb: null,
         memory_complete: false,
-        estimated_saved_mem_mb: 320,
+        estimated_saved_mem_mb: null,
         sleeping_count: 4
       }));
     } else if (pathname === '/api/agy/sessions') {
@@ -205,6 +205,14 @@ const { chromium } = require('@playwright/test');
 
   try {
     const context = await browser.newContext();
+    const pageErrors = [];
+    const externalRequests = [];
+    context.on('page', page => page.on('pageerror', error => pageErrors.push(error.message)));
+    await context.route('**/*', route => {
+      if (new URL(route.request().url()).origin === baseUrl) return route.continue();
+      externalRequests.push(route.request().url());
+      return route.abort();
+    });
 
     // -------------------------------------------------------------
     // PASS 1: DESKTOP ADMIN (1280x900)
@@ -218,7 +226,7 @@ const { chromium } = require('@playwright/test');
     await desktopPage.waitForFunction(() => {
       const memEl = document.getElementById('svc-active-mem');
       const gridEl = document.getElementById('services-grid');
-      return memEl && memEl.textContent.includes('274.7 MB') && gridEl && gridEl.children.length === 9;
+      return memEl && memEl.textContent.includes('N/A') && gridEl && gridEl.children.length === 9;
     });
 
     // 1. Verify computed Material 3 theme colors
@@ -308,6 +316,9 @@ const { chromium } = require('@playwright/test');
       return pairs;
     });
     console.log('Measured Contrast Ratios:', contrastChecks);
+    for (const name of ['Primary Button', 'Card Title vs Card Bg', 'Card Desc vs Card Bg', 'Tonal Button']) {
+      assert(contrastChecks.some(item => item.name === name), `Missing rendered contrast pair: ${name}`);
+    }
     for (const item of contrastChecks) {
       assert(item.ratio >= item.min, `${item.name} contrast ratio ${item.ratio.toFixed(2)} must be >= ${item.min}`);
     }
@@ -363,7 +374,7 @@ const { chromium } = require('@playwright/test');
     const gridText = await desktopPage.locator('#services-grid').textContent();
     assert(!gridText.includes('undefined'), 'Services grid must not contain literal undefined text');
     const activeMemoryBadge = await desktopPage.textContent('#svc-active-mem');
-    assert(activeMemoryBadge.includes('274.7 MB'), 'Active memory must reflect 274.7 MB');
+    assert(activeMemoryBadge.includes('N/A'), 'Incomplete active-service memory must render N/A');
 
     // 8. Test Tor Toggle: Input-driven verification (click, 1 POST with boolean enabled, no status, truthful state, no spurious alert, re-enabled button, non-success path)
     console.log('Testing Tor Proxy Toggle (input-driven)...');
@@ -418,6 +429,19 @@ const { chromium } = require('@playwright/test');
       return modal && modal.contains(document.activeElement);
     });
     assert(initialFocusInside, 'Focus must be placed inside modal upon opening');
+
+    // Activate the real native file picker from the keyboard, without internal UI helpers.
+    await desktopPage.keyboard.press('Tab');
+    assert.equal(await desktopPage.locator('#convert-file-input').evaluate(el => el === document.activeElement), true);
+    const fileFocusOutline = await desktopPage.locator('#convert-dropzone').evaluate(el => getComputedStyle(el).outlineStyle);
+    assert.equal(fileFocusOutline, 'solid', 'File picker keyboard focus must remain visible');
+    const [desktopChooser] = await Promise.all([
+      desktopPage.waitForEvent('filechooser', { timeout: 3000 }),
+      desktopPage.keyboard.press('Enter')
+    ]);
+    await desktopChooser.setFiles({ name: 'keyboard-proof.txt', mimeType: 'text/plain', buffer: Buffer.from('Synthetic keyboard selection') });
+    await desktopPage.locator('#convert-file-list-container:not(.hidden)').waitFor();
+    assert((await desktopPage.textContent('#convert-file-list')).includes('keyboard-proof.txt'));
 
     // Traverse Tab forward
     for (let i = 0; i < 5; i++) {
@@ -493,7 +517,7 @@ const { chromium } = require('@playwright/test');
 
     await mobileAdminPage.waitForFunction(() => {
       const memEl = document.getElementById('svc-active-mem');
-      return memEl && memEl.textContent.includes('274.7 MB');
+      return memEl && memEl.textContent.includes('N/A');
     });
 
     const overflow412 = await mobileAdminPage.evaluate(() => {
@@ -529,6 +553,17 @@ const { chromium } = require('@playwright/test');
     });
     console.log('Mobile 390px touch target deviations count (>=48px):', mobile390Targets.length);
     assert(mobile390Targets.length === 0, `All interactive controls at 390px must meet >=48px hit area: ${JSON.stringify(mobile390Targets)}`);
+
+    await mobileAdminPage.locator('a[href="javascript:openConverterModal()"]').click();
+    const mobileDialogTargets = await mobileAdminPage.locator('#converter-modal').evaluate(modal => {
+      return Array.from(modal.querySelectorAll('button, label[for]')).filter(el => {
+        if (el.closest('.hidden') || el.getClientRects().length === 0) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width < 48 || rect.height < 48 || rect.left < 0 || rect.right > innerWidth;
+      }).map(el => el.id || el.textContent.trim());
+    });
+    assert.deepEqual(mobileDialogTargets, [], '390px dialog controls must remain visible with 48px hit targets');
+    await mobileAdminPage.keyboard.press('Escape');
 
     // Verify 360px viewport
     await mobileAdminPage.setViewportSize({ width: 360, height: 800 });
@@ -581,6 +616,16 @@ const { chromium } = require('@playwright/test');
     await familyConverterOpener.click();
     assert(await familyPage.locator('#converter-modal').isVisible(), 'Family converter modal must open');
 
+    await familyPage.keyboard.press('Tab');
+    assert.equal(await familyPage.locator('#convert-file-input').evaluate(el => el === document.activeElement), true);
+    assert.equal(await familyPage.locator('#convert-dropzone').evaluate(el => getComputedStyle(el).outlineStyle), 'solid');
+    const [familyChooser] = await Promise.all([
+      familyPage.waitForEvent('filechooser', { timeout: 3000 }),
+      familyPage.keyboard.press('Enter')
+    ]);
+    await familyChooser.setFiles({ name: 'family-keyboard.txt', mimeType: 'text/plain', buffer: Buffer.from('Synthetic family selection') });
+    await familyPage.locator('#convert-file-list-container:not(.hidden)').waitFor();
+
     for (let i = 0; i < 4; i++) {
       await familyPage.keyboard.press('Tab');
       const inside = await familyPage.evaluate(() => {
@@ -589,9 +634,14 @@ const { chromium } = require('@playwright/test');
       });
       assert(inside, 'Tab in family converter modal must remain trapped');
     }
+    for (let i = 0; i < 8; i++) {
+      await familyPage.keyboard.press('Shift+Tab');
+      assert.equal(await familyPage.locator('#converter-modal').evaluate(modal => modal.contains(document.activeElement)), true);
+    }
     await familyPage.keyboard.press('Escape');
     await familyPage.waitForTimeout(200);
     assert(await familyPage.locator('#converter-modal').isHidden(), 'Family converter modal must dismiss on Escape');
+    assert.equal(await familyConverterOpener.evaluate(el => el === document.activeElement), true, 'Family modal must return focus to its opener');
 
     const mobileFamilyScreenshot = path.join(sddDir, 'm3-family-mobile.png');
     await familyPage.screenshot({ path: mobileFamilyScreenshot, fullPage: true });
@@ -665,6 +715,10 @@ const { chromium } = require('@playwright/test');
     console.log('Saved screenshot:', loginErrorScreenshot, `(${fs.statSync(loginErrorScreenshot).size} bytes)`);
 
     await loginPage.close();
+
+    await context.close();
+    assert.deepEqual(pageErrors, [], 'Actual role templates must produce no uncaught page errors');
+    assert.deepEqual(externalRequests, [], 'Role templates must not depend on external page resources');
 
     console.log('====================================================');
     console.log('MATERIAL 3 ACCEPTANCE PASS: All visual, interaction, and responsive assertions succeeded.');

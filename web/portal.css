@@ -168,6 +168,13 @@ h3 {
   outline-offset: 2px;
 }
 
+/* Show the clipped native file input's keyboard focus on its visible label. */
+#convert-file-input:focus-visible + #convert-dropzone,
+#convert-file-input:focus-visible ~ #convert-file-list-container label[for="convert-file-input"] {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
 ::selection {
   background-color: var(--md-sys-color-primary-container);
   color: var(--md-sys-color-on-primary-container);
