@@ -29,49 +29,122 @@ import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Sibling module dynamic loaders
+MANDATORY_RECOVERY_ASSETS = (
+    "release_activation.py",
+    "termux_activation.py",
+    "release_transaction.py",
+    "server_supervisor.py",
+    "service_catalog.py",
+)
+
+
+def _compute_sha256(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(65536):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 def _load_sibling(module_name: str, filename: str) -> Any:
     current_dir = Path(__file__).resolve().parent
-    candidates = [
-        current_dir / filename,
-        current_dir.parent / filename,
-        current_dir.parent / "scripts" / filename,
-    ]
-    file_path = None
-    for cand in candidates:
-        if cand.exists():
-            file_path = cand
-            break
+    is_recovery = (current_dir.name == "recovery_lifecycle")
 
-    if file_path is None:
-        if module_name in sys.modules:
-            return sys.modules[module_name]
-        raise RuntimeError(f"Required module {filename} not found in {candidates}")
-
-    # If running from a recovery directory, validate against journal assets if available
-    tx_dir = current_dir.parent if current_dir.name == "recovery_lifecycle" else None
-    if tx_dir and (tx_dir / "activation_journal.json").exists():
+    if is_recovery:
+        tx_dir = current_dir.parent
+        journal_path = tx_dir / "activation_journal.json"
+        if not journal_path.exists():
+            raise RuntimeError(f"Recovery bootstrap refused: activation journal missing at {journal_path}")
         try:
-            with open(tx_dir / "activation_journal.json", "r", encoding="utf-8") as jf:
+            jst = journal_path.lstat()
+        except OSError as exc:
+            raise RuntimeError(f"Recovery bootstrap refused: cannot stat journal: {exc}") from exc
+        if stat.S_ISLNK(jst.st_mode) or not stat.S_ISREG(jst.st_mode):
+            raise RuntimeError("Recovery bootstrap refused: activation journal is not a regular file")
+        if jst.st_uid != os.getuid():
+            raise RuntimeError(f"Recovery bootstrap refused: journal UID mismatch: expected {os.getuid()}, got {jst.st_uid}")
+
+        try:
+            with open(journal_path, "r", encoding="utf-8") as jf:
                 jdata = json.load(jf)
-            rec_assets = jdata.get("recovery_assets", {})
-            if filename in rec_assets:
-                hasher = hashlib.sha256()
-                with open(file_path, "rb") as sf:
-                    while chunk := sf.read(65536):
-                        hasher.update(chunk)
-                if hasher.hexdigest().lower() != rec_assets[filename].lower():
-                    raise RuntimeError(f"Recovery module {filename} hash mismatch before import")
         except Exception as exc:
-            if isinstance(exc, RuntimeError):
-                raise
-            pass
+            raise RuntimeError(f"Recovery bootstrap refused: invalid journal JSON: {exc}") from exc
+
+        if not isinstance(jdata, dict) or type(jdata.get("version")) is not int or jdata["version"] != 1:
+            raise RuntimeError("Recovery bootstrap refused: invalid journal version or shape")
+        if type(jdata.get("top_uid")) is not int or jdata["top_uid"] != os.getuid():
+            raise RuntimeError("Recovery bootstrap refused: invalid journal top_uid")
+
+        tx_id = jdata.get("tx_id")
+        tx_path_str = jdata.get("transaction_dir")
+        if not isinstance(tx_id, str) or not tx_id or not isinstance(tx_path_str, str) or not tx_path_str:
+            raise RuntimeError("Recovery bootstrap refused: journal missing transaction binding")
+        if Path(tx_path_str).resolve() != tx_dir.resolve():
+            raise RuntimeError(f"Recovery bootstrap refused: journal transaction_dir {tx_path_str} does not match {tx_dir}")
+
+        if jdata.get("top_uid") is not None and jdata.get("top_uid") != os.getuid():
+            raise RuntimeError(f"Recovery bootstrap refused: journal top_uid mismatch: expected {os.getuid()}, got {jdata.get('top_uid')}")
+
+        rec_assets = jdata.get("recovery_assets")
+        if not isinstance(rec_assets, dict):
+            raise RuntimeError("Recovery bootstrap refused: recovery_assets missing or invalid schema")
+
+        verified_bytes: Dict[str, bytes] = {}
+        for req_asset in MANDATORY_RECOVERY_ASSETS:
+            if req_asset not in rec_assets or not isinstance(rec_assets[req_asset], str) or not rec_assets[req_asset]:
+                raise RuntimeError(f"Recovery bootstrap refused: omitted recorded hash for {req_asset}")
+            asset_file = current_dir / req_asset
+            if not asset_file.exists():
+                raise RuntimeError(f"Recovery bootstrap refused: missing preserved code {req_asset}")
+            try:
+                ast = asset_file.lstat()
+            except OSError as exc:
+                raise RuntimeError(f"Recovery bootstrap refused: cannot stat {req_asset}: {exc}") from exc
+            if stat.S_ISLNK(ast.st_mode) or not stat.S_ISREG(ast.st_mode):
+                raise RuntimeError(f"Recovery bootstrap refused: {req_asset} is not a regular file")
+            try:
+                asset_res = asset_file.resolve()
+                asset_res.relative_to(current_dir.resolve())
+            except (ValueError, OSError) as exc:
+                raise RuntimeError(f"Recovery bootstrap refused: path escape for {req_asset}: {exc}") from exc
+            if ast.st_uid != os.getuid():
+                raise RuntimeError(f"Recovery bootstrap refused: UID mismatch for {req_asset}: expected {os.getuid()}, got {ast.st_uid}")
+
+            raw_bytes = asset_file.read_bytes()
+            actual_sha = hashlib.sha256(raw_bytes).hexdigest()
+            if actual_sha.lower() != rec_assets[req_asset].lower():
+                raise RuntimeError(f"Recovery bootstrap refused: hash mismatch for {req_asset}")
+            verified_bytes[req_asset] = raw_bytes
+
+        file_path = current_dir / filename
+        if not file_path.exists():
+            raise RuntimeError(f"Recovery bootstrap refused: target sibling {filename} does not exist in recovery dir")
+        source_bytes = verified_bytes[filename]
+    else:
+        candidates = [
+            current_dir / filename,
+            current_dir.parent / filename,
+            current_dir.parent / "scripts" / filename,
+        ]
+        file_path = None
+        for cand in candidates:
+            if cand.exists():
+                file_path = cand
+                break
+        if file_path is None:
+            if module_name in sys.modules:
+                return sys.modules[module_name]
+            raise RuntimeError(f"Required module {filename} not found in {candidates}")
+        source_bytes = file_path.read_bytes()
 
     spec = importlib.util.spec_from_file_location(module_name, str(file_path))
-    if spec is None or spec.loader is None:
+    if spec is None:
         raise RuntimeError(f"Could not load spec for {file_path}")
     mod = importlib.util.module_from_spec(spec)
+    mod.__file__ = str(file_path)
     sys.modules[module_name] = mod
-    spec.loader.exec_module(mod)
+    code_obj = compile(source_bytes, str(file_path), "exec")
+    exec(code_obj, mod.__dict__)
     return mod
 
 
@@ -779,30 +852,38 @@ def preserve_recovery_lifecycle_code(
     scripts_dir = Path(__file__).resolve().parent
     repo_root = scripts_dir.parent
 
+    # 1. server_supervisor.py
     live_sup = namespace_root / "home/bin/server_supervisor.py"
     src_sup = live_sup if live_sup.exists() else scripts_dir / "server_supervisor.py"
     dst_sup = rec_dir / "server_supervisor.py"
     shutil.copy2(src_sup, dst_sup)
-    hashes["server_supervisor.py"] = compute_file_sha256(dst_sup)
 
+    # 2. service_catalog.py
     live_cat = namespace_root / "home/.local/lib/mobile-server/service_catalog.py"
-    src_cat = live_cat if live_cat.exists() else repo_root / "app/service_catalog.py"
-    if src_cat.exists():
-        dst_cat = rec_dir / "service_catalog.py"
-        shutil.copy2(src_cat, dst_cat)
-        hashes["service_catalog.py"] = compute_file_sha256(dst_cat)
+    src_cat = live_cat if live_cat.exists() else (repo_root / "app/service_catalog.py" if (repo_root / "app/service_catalog.py").exists() else scripts_dir / "service_catalog.py")
+    dst_cat = rec_dir / "service_catalog.py"
+    shutil.copy2(src_cat, dst_cat)
 
+    # 3. release_activation.py
     dst_act = rec_dir / "release_activation.py"
     shutil.copy2(scripts_dir / "release_activation.py", dst_act)
-    hashes["release_activation.py"] = compute_file_sha256(dst_act)
 
-    dst_drv = rec_dir / "termux_activation.py"
-    shutil.copy2(scripts_dir / "termux_activation.py", dst_drv)
-    hashes["termux_activation.py"] = compute_file_sha256(dst_drv)
+    # 4. termux_activation.py
+    dst_ta = rec_dir / "termux_activation.py"
+    shutil.copy2(scripts_dir / "termux_activation.py", dst_ta)
 
-    dst_tx = rec_dir / "release_transaction.py"
-    shutil.copy2(scripts_dir / "release_transaction.py", dst_tx)
-    hashes["release_transaction.py"] = compute_file_sha256(dst_tx)
+    # 5. release_transaction.py
+    dst_rt = rec_dir / "release_transaction.py"
+    shutil.copy2(scripts_dir / "release_transaction.py", dst_rt)
+
+    # Flush copies and directory before recording hashes/publishing journal
+    for fname in MANDATORY_RECOVERY_ASSETS:
+        fpath = rec_dir / fname
+        with open(fpath, "rb") as f:
+            os.fsync(f.fileno())
+        hashes[fname] = compute_file_sha256(fpath)
+
+    rt.fsync_dir(rec_dir)
 
     return hashes
 
@@ -814,7 +895,15 @@ def validate_recovery_assets(
 ) -> None:
     """Validate all preserved recovery assets before loading or executing them."""
     rec_dir = Path(recovery_dir).resolve()
-    for name, expected_sha in expected_hashes.items():
+    if not isinstance(expected_hashes, dict):
+        raise ActivationError("Recovery expected_hashes must be a dictionary")
+
+    for name in MANDATORY_RECOVERY_ASSETS:
+        if name not in expected_hashes or not expected_hashes[name]:
+            raise ActivationError(f"Mandatory recovery asset {name} missing from expected_hashes")
+
+    for name in MANDATORY_RECOVERY_ASSETS:
+        expected_sha = expected_hashes[name]
         file_path = rec_dir / name
         try:
             resolved = file_path.resolve()
@@ -932,6 +1021,9 @@ def apply(
             transaction_dir=tx_dir,
             namespace_root=ns_root,
         )
+
+        if hasattr(driver, "validate_candidate_services"):
+            driver.validate_candidate_services(b_root)
 
         tx_journal = tx.load_journal()
         entries = tx_journal.get("entries", [])
