@@ -20,4 +20,4 @@ Canonical modes are derived strictly from a centralized destination override tab
 - `/data/data/com.termux/files/home/bin/termux_session.sh`: `0755`
 - `/data/data/com.termux/files/home/.config/ttyd/termux_index.html`: `0644`
 
-Any manifest or precondition declaring non-canonical modes is rejected upfront before any staging or journal operations.
+Any candidate manifest declaring a non-canonical target mode is rejected before staging. Preconditions record the reviewed original mode, which may differ from the candidate target mode. The engine verifies the original mode against live metadata and binds journal actions to both the reviewed preimage and canonical target policy.
