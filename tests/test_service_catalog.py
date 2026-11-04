@@ -71,31 +71,57 @@ class ServiceCatalogTests(unittest.TestCase):
         self.assertNotEqual(d1['filebrowser']['port'], d2['filebrowser']['port'])
 
     def test_runtime_services_characterization_and_order(self):
-        """Preserve all 15 services, order, commands, arguments, ports, paths, and protocols."""
+        """Preserve all 15 services prefix, order, commands, arguments, ports, paths, protocols, and 16th scheduler."""
         char_file = ROOT / 'tests/fixtures/service-catalog-baseline.json'
         # Fixture is tracked; missing fixture must fail immediately
         self.assertTrue(char_file.is_file(), f"Missing required baseline fixture: {char_file}")
         with open(char_file) as f:
             char = json.load(f)
 
+        baseline_keys = list(char['supervisor_default'].keys())
+        self.assertEqual(len(baseline_keys), 15)
+
         rt_default = service_catalog.runtime_services('/data/data/com.termux/files/home', '/data/data/com.termux/files/usr')
-        self.assertEqual(rt_default, char['supervisor_default'])
-        # Assert full order matches baseline keys exactly
-        self.assertEqual(list(rt_default.keys()), list(char['supervisor_default'].keys()))
+        self.assertEqual(len(rt_default), 16)
+        rt_default_prefix = {k: rt_default[k] for k in baseline_keys}
+        self.assertEqual(rt_default_prefix, char['supervisor_default'])
+        self.assertEqual(list(rt_default.keys())[:15], baseline_keys)
+        self.assertEqual(list(rt_default.keys())[15], 'suwayomi_scheduler')
+        self.assertEqual(rt_default['suwayomi_scheduler'], {
+            'cmd': [
+                '/data/data/com.termux/files/usr/bin/python3',
+                '/data/data/com.termux/files/home/bin/suwayomi_daily_update.py',
+                '--foreground'
+            ]
+        })
 
         rt_alt = service_catalog.runtime_services('/custom/home', '/custom/usr')
-        self.assertEqual(rt_alt, char['supervisor_alt'])
-        self.assertEqual(list(rt_alt.keys()), list(char['supervisor_alt'].keys()))
+        self.assertEqual(len(rt_alt), 16)
+        rt_alt_prefix = {k: rt_alt[k] for k in baseline_keys}
+        self.assertEqual(rt_alt_prefix, char['supervisor_alt'])
+        self.assertEqual(list(rt_alt.keys())[:15], list(char['supervisor_alt'].keys()))
+        self.assertEqual(list(rt_alt.keys())[15], 'suwayomi_scheduler')
+        self.assertEqual(rt_alt['suwayomi_scheduler'], {
+            'cmd': [
+                '/custom/usr/bin/python3',
+                '/custom/home/bin/suwayomi_daily_update.py',
+                '--foreground'
+            ]
+        })
 
         # Explicit order & count check
         services = service_catalog.runtime_services('/h', '/p')
         expected_keys = [
             'ssh', 'dashboard', 'caddy', 'filebrowser', 'transfer_gateway',
             'adguard', 'syncthing', 'vaultwarden', 'terminal', 'agy',
-            'laptop_terminal', 'tor', 'suwayomi', 'suwayomi_filter', 'battery_guard'
+            'laptop_terminal', 'tor', 'suwayomi', 'suwayomi_filter', 'battery_guard',
+            'suwayomi_scheduler'
         ]
         self.assertEqual(list(services.keys()), expected_keys)
-        self.assertEqual(len(services), 15)
+        self.assertEqual(len(services), 16)
+        self.assertNotIn('port', services['suwayomi_scheduler'])
+        self.assertNotIn('path', services['suwayomi_scheduler'])
+        self.assertNotIn('protocol', services['suwayomi_scheduler'])
 
     def test_dashboard_services_characterization_and_order(self):
         """Preserve all 9 dashboard cards, order, IDs, URLs, and verify absence of start_cmd/env."""
@@ -174,8 +200,13 @@ class ServiceCatalogTests(unittest.TestCase):
         spec.loader.exec_module(sup)
         self.assertTrue(callable(sup.services))
         s = sup.services()
-        self.assertEqual(len(s), 15)
+        self.assertEqual(len(s), 16)
         self.assertEqual(s['caddy']['port'], 8000)
+        self.assertEqual(s['suwayomi_scheduler']['cmd'], [
+            '/data/data/com.termux/files/usr/bin/python3',
+            '/data/data/com.termux/files/home/bin/suwayomi_daily_update.py',
+            '--foreground'
+        ])
         # Verify supervisor HOME and PREFIX globals remain unmodified
         self.assertEqual(sup.HOME, Path('/data/data/com.termux/files/home'))
         self.assertEqual(sup.PREFIX, Path('/data/data/com.termux/files/usr'))

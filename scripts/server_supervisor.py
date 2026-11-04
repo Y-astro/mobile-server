@@ -13,6 +13,7 @@ except Exception:
     pass
 import argparse
 import contextlib
+import errno
 import fcntl
 import http.client
 import json
@@ -29,6 +30,8 @@ import time
 
 HOME = Path('/data/data/com.termux/files/home')
 PREFIX = Path('/data/data/com.termux/files/usr')
+PROC = Path('/proc')
+SCHEDULER_PID_FILE = HOME / 'suwayomi/data/scheduler.pid'
 MOBILE_LIB = Path.home() / '.local/lib/mobile-server'
 _lib_dir = MOBILE_LIB if MOBILE_LIB.is_dir() else (HOME / '.local/lib/mobile-server' if (HOME / '.local/lib/mobile-server').is_dir() else Path(__file__).resolve().parents[1] / 'app')
 if str(_lib_dir) not in sys.path:
@@ -46,6 +49,12 @@ FAILURES = 3
 
 def services():
     return runtime_services(str(HOME), str(PREFIX))
+
+
+def get_scheduler_pid_file():
+    if SCHEDULER_PID_FILE != HOME / 'suwayomi/data/scheduler.pid':
+        return SCHEDULER_PID_FILE
+    return HOME / 'suwayomi/data/scheduler.pid'
 
 
 def initialize():
@@ -85,7 +94,7 @@ def atomic_json(path, data):
 
 def process_identity(pid):
     try:
-        stat = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+        stat = (PROC / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()
         if stat[0] == 'Z':
             return None
         return stat[19]  # starttime, field 22
@@ -96,7 +105,7 @@ def process_identity(pid):
 def matching_processes(sid):
     """Match argv tokens, never a broad pkill or the invoking SSH command."""
     found = []
-    for proc in Path('/proc').iterdir():
+    for proc in PROC.iterdir():
         if not proc.name.isdigit() or int(proc.name) == os.getpid():
             continue
         try:
@@ -121,6 +130,38 @@ def matching_processes(sid):
                 match = base.startswith('python') and str(HOME / 'bin/suwayomi_graphql_filter.py') in args
             elif sid == 'suwayomi':
                 match = (base == 'java' and any('suwayomi' in a.lower() for a in args)) or any('start_suwayomi' in a for a in args) or ('proot' in base and any('suwayomi' in a.lower() for a in args))
+            elif sid == 'suwayomi_scheduler':
+                match = False
+                if base.startswith('python') and not any(a in ('-c', '-m', '--now', '--status') for a in args):
+                    if ('--foreground' in args) ^ ('--daemon' in args):
+                        target = HOME / 'bin/suwayomi_daily_update.py'
+                        targets = {str(target)}
+                        with contextlib.suppress(OSError):
+                            targets.add(str(target.resolve()))
+                        if any(a in targets for a in args):
+                            match = True
+                        else:
+                            try:
+                                if (proc / 'cwd').is_symlink():
+                                    proc_cwd = os.readlink(proc / 'cwd')
+                                elif (proc / 'cwd').is_file():
+                                    proc_cwd = (proc / 'cwd').read_text().strip()
+                                else:
+                                    proc_cwd = str((proc / 'cwd').resolve())
+                                for a in args[1:]:
+                                    if a.startswith('-'):
+                                        continue
+                                    if not os.path.isabs(a) and (a == 'suwayomi_daily_update.py' or a.endswith('/suwayomi_daily_update.py')):
+                                        candidate = os.path.normpath(os.path.join(proc_cwd, a))
+                                        if candidate in targets:
+                                            match = True
+                                            break
+                                        with contextlib.suppress(OSError):
+                                            if str(Path(candidate).resolve()) in targets:
+                                                match = True
+                                                break
+                            except OSError:
+                                pass
             else:
                 owned_argument = {
                     'adguard': str(HOME / 'adguard/data/AdGuardHome.yaml'),
@@ -157,7 +198,7 @@ def stop_agy():
     # processes/descendants before removing the pane, then stop them by identity.
     processes = {}
     owned = set()
-    for proc in Path('/proc').iterdir():
+    for proc in PROC.iterdir():
         if not proc.name.isdigit():
             continue
         try:
@@ -189,6 +230,31 @@ def stop_agy():
 
 
 def healthy(sid, cfg):
+    if sid == 'suwayomi_scheduler':
+        procs = matching_processes(sid)
+        if len(procs) != 1:
+            return False
+        proc_pid, _ = procs[0]
+        pid_path = get_scheduler_pid_file()
+        try:
+            fd = os.open(pid_path, os.O_RDONLY)
+        except OSError:
+            return False
+        try:
+            raw = os.read(fd, 64).decode(errors='replace').strip()
+            if not raw.isdigit() or int(raw) != proc_pid:
+                return False
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                return False
+            except (BlockingIOError, OSError) as e:
+                if isinstance(e, BlockingIOError) or getattr(e, 'errno', None) in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    return True
+                return False
+        finally:
+            os.close(fd)
+
     if not cfg.get('port'):
         status = HOME / '.config/battery_guard/status.json'
         try:
@@ -218,7 +284,7 @@ def healthy(sid, cfg):
 
 def get_tracer_pid():
     try:
-        with open(f"/proc/{os.getpid()}/status") as fh:
+        with open(PROC / str(os.getpid()) / 'status') as fh:
             for line in fh:
                 if line.startswith("TracerPid:"):
                     return int(line.split()[1])
@@ -331,7 +397,7 @@ def control(sid, enabled):
     try:
         with lock('daemon', blocking=False):
             pass
-        with open(f"/proc/{os.getpid()}/status") as fh:
+        with open(PROC / str(os.getpid()) / 'status') as fh:
             for line in fh:
                 if line.startswith("TracerPid:"):
                     if int(line.split()[1]) == 0:

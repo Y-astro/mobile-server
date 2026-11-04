@@ -7,15 +7,7 @@ export PATH="$PREFIX/bin:$PREFIX/bin/applets:$PATH"
 export TMPDIR="$PREFIX/tmp"
 cd "$HOME/suwayomi"
 
-# Ensure Suwayomi 12:00 AM daily reading list scheduler daemon is active
-if ! pgrep -f "suwayomi_daily_update.py --daemon" >/dev/null 2>&1; then
-    /data/data/com.termux/files/usr/bin/python3 /data/data/com.termux/files/home/bin/suwayomi_daily_update.py --daemon >> /data/data/com.termux/files/home/suwayomi/data/logs/scheduler_daemon.log 2>&1 &
-fi
-
-# Ensure Suwayomi GraphQL transparent filter daemon is active
-if ! pgrep -f "suwayomi_graphql_filter.py" >/dev/null 2>&1; then
-    /data/data/com.termux/files/usr/bin/python3 /data/data/com.termux/files/home/bin/suwayomi_graphql_filter.py >> /data/data/com.termux/files/home/suwayomi/data/logs/graphql_filter.log 2>&1 &
-fi
+# Suwayomi filter and daily update scheduler are supervised separately by server_supervisor.
 
 JVM_ARGS=(
     -XX:+UseSerialGC

@@ -69,6 +69,7 @@ def runtime_services(home: str, prefix: str) -> Dict[str, Dict[str, Any]]:
         'suwayomi': dict(port=SERVICE_ENDPOINTS['suwayomi']['port'], path=SERVICE_ENDPOINTS['suwayomi']['path'], cmd=[f'{h}/bin/start_suwayomi.sh']),
         'suwayomi_filter': dict(port=SERVICE_ENDPOINTS['suwayomi_filter']['port'], path=SERVICE_ENDPOINTS['suwayomi_filter']['path'], cmd=[f'{p}/bin/python3', f'{h}/bin/suwayomi_graphql_filter.py']),
         'battery_guard': dict(cmd=[f'{p}/bin/bash', f'{h}/bin/battery_guard.sh', '--daemon']),
+        'suwayomi_scheduler': dict(cmd=[f'{p}/bin/python3', f'{h}/bin/suwayomi_daily_update.py', '--foreground']),
     }
 
 
