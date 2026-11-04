@@ -422,8 +422,53 @@ def validate_journal(journal: Any, transaction_dir: Path) -> None:
             f"Journal entry count mismatch: {len(entries)} entries, {len(manifest)} manifest items, {len(preconds)} preconditions"
         )
 
+    # 1. Index and strictly validate candidate manifest records (unique destinations and unique local paths)
+    manifest_map: Dict[str, Dict[str, Any]] = {}
+    manifest_locals: Set[str] = set()
+    for idx, m in enumerate(manifest):
+        if not isinstance(m, dict):
+            raise TransactionError(f"Candidate manifest record at index {idx} is not an object")
+        m_remote = m.get("remote")
+        if not isinstance(m_remote, str) or not m_remote.startswith(TERMUX_ROOT_PREFIX):
+            raise TransactionError(f"Candidate manifest record at index {idx} has invalid remote: {m_remote!r}")
+        norm_m_remote = os.path.normpath(m_remote)
+        if norm_m_remote in manifest_map:
+            raise TransactionError(f"Duplicate candidate manifest destination: {norm_m_remote}")
+
+        m_local = m.get("local")
+        if not isinstance(m_local, str) or not m_local.strip():
+            raise TransactionError(f"Candidate manifest record for {norm_m_remote} missing valid 'local'")
+        if ".." in Path(m_local).parts or os.path.isabs(m_local):
+            raise TransactionError(f"Candidate manifest record for {norm_m_remote} has invalid traversal in local: {m_local!r}")
+        if m_local in manifest_locals:
+            raise TransactionError(f"Duplicate candidate manifest local source: {m_local}")
+        manifest_locals.add(m_local)
+
+        m_sha = m.get("sha256")
+        if not isinstance(m_sha, str) or len(m_sha) != 64 or not all(c in "0123456789abcdefABCDEF" for c in m_sha):
+            raise TransactionError(f"Candidate manifest record for {norm_m_remote} has invalid sha256: {m_sha!r}")
+
+        m_bytes = m.get("bytes")
+        if type(m_bytes) is not int or isinstance(m_bytes, bool) or m_bytes < 0:
+            raise TransactionError(f"Candidate manifest record for {norm_m_remote} has invalid bytes: {m_bytes!r}")
+
+        manifest_map[norm_m_remote] = m
+
+    # 2. Validate precondition dictionary destinations and records
+    for p_remote, p_val in preconds.items():
+        if not isinstance(p_remote, str) or not p_remote.startswith(TERMUX_ROOT_PREFIX):
+            raise TransactionError(f"Precondition destination invalid: {p_remote!r}")
+        norm_p = os.path.normpath(p_remote)
+        if norm_p != p_remote:
+            raise TransactionError(f"Precondition destination is not normalized: {p_remote!r}")
+        if not isinstance(p_val, dict):
+            raise TransactionError(f"Precondition record for {p_remote} must be a dict")
+        if norm_p not in manifest_map:
+            raise TransactionError(f"Precondition destination not in candidate manifest: {norm_p}")
+
+    # 3. Validate entries and strictly bind to manifest, preconditions, canonical modes, and derived actions
     seen_remotes: Set[str] = set()
-    manifest_remotes = {os.path.normpath(m.get("remote", "")) for m in manifest if isinstance(m, dict)}
+    seen_locals: Set[str] = set()
 
     for idx, entry in enumerate(entries):
         if not isinstance(entry, dict):
@@ -433,71 +478,237 @@ def validate_journal(journal: Any, transaction_dir: Path) -> None:
         if not isinstance(remote, str) or not remote.startswith(TERMUX_ROOT_PREFIX):
             raise TransactionError(f"Journal entry at index {idx} has invalid remote path: {remote!r}")
         norm_remote = os.path.normpath(remote)
+        if norm_remote != remote:
+            raise TransactionError(f"Journal entry remote is not normalized: {remote!r}")
         if norm_remote in seen_remotes:
             raise TransactionError(f"Duplicate journal entry destination: {norm_remote}")
         seen_remotes.add(norm_remote)
 
-        if norm_remote not in manifest_remotes:
+        local = entry.get("local")
+        if not isinstance(local, str) or not local.strip():
+            raise TransactionError(f"Journal entry for {norm_remote} has invalid local path: {local!r}")
+        if local in seen_locals:
+            raise TransactionError(f"Duplicate journal entry local source: {local}")
+        seen_locals.add(local)
+
+        if norm_remote not in manifest_map:
             raise TransactionError(f"Journal entry destination not in candidate manifest: {norm_remote}")
         if norm_remote not in preconds:
             raise TransactionError(f"Journal entry destination not in preconditions: {norm_remote}")
 
+        manifest_rec = manifest_map[norm_remote]
+        precond = preconds[norm_remote]
+
+        # Bind local source, candidate SHA and byte count to matching manifest record
+        if local != manifest_rec.get("local"):
+            raise TransactionError(
+                f"Journal entry local mismatch for {norm_remote}: entry has {local!r}, manifest has {manifest_rec.get('local')!r}"
+            )
+
+        cand_sha = entry.get("candidate_sha256")
+        if not isinstance(cand_sha, str) or len(cand_sha) != 64 or not all(c in "0123456789abcdefABCDEF" for c in cand_sha):
+            raise TransactionError(f"Invalid candidate_sha256 in journal entry for {norm_remote}")
+
+        cand_bytes = entry.get("candidate_bytes")
+        if type(cand_bytes) is not int or isinstance(cand_bytes, bool) or cand_bytes < 0:
+            raise TransactionError(f"Invalid candidate_bytes in journal entry for {norm_remote}")
+
+        if cand_sha.lower() != str(manifest_rec.get("sha256", "")).lower():
+            raise TransactionError(
+                f"Journal entry candidate_sha256 mismatch with manifest for {norm_remote}: "
+                f"entry={cand_sha}, manifest={manifest_rec.get('sha256')}"
+            )
+
+        if cand_bytes != manifest_rec.get("bytes"):
+            raise TransactionError(
+                f"Journal entry candidate_bytes mismatch with manifest for {norm_remote}: "
+                f"entry={cand_bytes}, manifest={manifest_rec.get('bytes')}"
+            )
+
+        target_mode = normalize_mode(entry.get("target_mode"))
+        canonical_mode = get_canonical_target_mode(norm_remote)
+        if target_mode != canonical_mode:
+            raise TransactionError(
+                f"Journal entry target mode {mode_to_octal_str(target_mode)} does not match canonical {mode_to_octal_str(canonical_mode)} for {norm_remote}"
+            )
+        if "mode" in manifest_rec:
+            m_mode = normalize_mode(manifest_rec["mode"])
+            if m_mode != canonical_mode:
+                raise TransactionError(
+                    f"Candidate manifest declares non-canonical mode {mode_to_octal_str(m_mode)} for {norm_remote}"
+                )
+
+        # Derive known alias identity/type from destination; verify stored alias flag and identity fields agree
+        is_known_alias = (norm_remote == KNOWN_BOOT_ALIAS_REMOTE)
+        stored_is_alias = entry.get("is_alias")
+        if type(stored_is_alias) is not bool or stored_is_alias is not is_known_alias:
+            raise TransactionError(
+                f"Journal entry is_alias flag mismatch for {norm_remote}: expected {is_known_alias}, got {stored_is_alias!r}"
+            )
+
+        # Derive and bind is_entrypoint flag
+        if entry.get("is_entrypoint") is not is_entrypoint(norm_remote):
+            raise TransactionError(
+                f"Journal entry is_entrypoint flag mismatch for {norm_remote}: entry={entry.get('is_entrypoint')!r}, expected={is_entrypoint(norm_remote)!r}"
+            )
+
+        # Bind original UID to precondition and top_uid
+        expected_uid = validate_uid(precond.get("uid", top_uid), f"precondition UID for {norm_remote}")
+        orig_uid = entry.get("original_uid")
+        if type(orig_uid) is not int or isinstance(orig_uid, bool) or orig_uid < 0:
+            raise TransactionError(f"Invalid original_uid in journal entry for {norm_remote}")
+        if orig_uid != expected_uid:
+            raise TransactionError(
+                f"Journal entry original_uid mismatch for {norm_remote}: entry has {orig_uid}, precondition has {expected_uid}"
+            )
+
+        kind = precond.get("kind", "file")
+        if kind not in ("file", "absent", "symlink"):
+            raise TransactionError(f"Invalid precondition kind {kind!r} for {norm_remote}")
+
+        if kind == "absent":
+            if is_known_alias:
+                raise TransactionError(f"Known boot alias destination {norm_remote} cannot have absent precondition")
+            if (
+                entry.get("original_sha256") is not None
+                or entry.get("original_bytes") is not None
+                or entry.get("original_mode") is not None
+            ):
+                raise TransactionError(f"Journal entry for absent destination {norm_remote} must not have original file metadata")
+            expected_action = ACTION_CREATE
+
+        elif kind == "symlink":
+            if not is_known_alias:
+                raise TransactionError(
+                    f"Unauthorized symlink precondition for {norm_remote}: only known boot alias is permitted"
+                )
+            prec_orig_sha = precond.get("target_sha256", AUDITED_BOOT_SCRIPT_SHA256)
+            prec_orig_bytes = precond.get("target_bytes", AUDITED_BOOT_SCRIPT_BYTES)
+            prec_orig_mode = normalize_mode(precond.get("target_mode", AUDITED_BOOT_SCRIPT_MODE))
+
+            orig_sha = entry.get("original_sha256")
+            if not isinstance(orig_sha, str) or len(orig_sha) != 64 or orig_sha.lower() != prec_orig_sha.lower():
+                raise TransactionError(
+                    f"Journal entry original_sha256 mismatch for alias target {norm_remote}: "
+                    f"entry={orig_sha!r}, precondition={prec_orig_sha!r}"
+                )
+            orig_bytes = entry.get("original_bytes")
+            if type(orig_bytes) is not int or isinstance(orig_bytes, bool) or orig_bytes != prec_orig_bytes:
+                raise TransactionError(
+                    f"Journal entry original_bytes mismatch for alias target {norm_remote}: "
+                    f"entry={orig_bytes!r}, precondition={prec_orig_bytes!r}"
+                )
+            orig_mode = normalize_mode(entry.get("original_mode"))
+            if orig_mode != prec_orig_mode:
+                raise TransactionError(
+                    f"Journal entry original_mode mismatch for alias target {norm_remote}: "
+                    f"entry={mode_to_octal_str(orig_mode)}, precondition={mode_to_octal_str(prec_orig_mode)}"
+                )
+
+            # Validate alias identity fields
+            raw_link = entry.get("alias_raw_link")
+            if not isinstance(raw_link, str) or not raw_link.strip():
+                raise TransactionError(f"Missing or invalid alias_raw_link for {norm_remote}")
+            if "raw_link" in precond and raw_link != precond["raw_link"]:
+                raise TransactionError(
+                    f"Alias raw_link mismatch for {norm_remote}: entry has {raw_link!r}, precondition has {precond['raw_link']!r}"
+                )
+            for fld in ("alias_dev", "alias_ino", "alias_mode", "alias_uid"):
+                val = entry.get(fld)
+                if type(val) is not int or isinstance(val, bool):
+                    raise TransactionError(f"Missing or invalid {fld} for {norm_remote}: {val!r}")
+            if "dev" in precond and entry["alias_dev"] != precond["dev"]:
+                raise TransactionError(f"Alias dev mismatch for {norm_remote}: entry={entry['alias_dev']}, precondition={precond['dev']}")
+            if "ino" in precond and entry["alias_ino"] != precond["ino"]:
+                raise TransactionError(f"Alias ino mismatch for {norm_remote}: entry={entry['alias_ino']}, precondition={precond['ino']}")
+            if "mode" in precond and entry["alias_mode"] != normalize_mode(precond["mode"]):
+                raise TransactionError(f"Alias mode mismatch for {norm_remote}: entry={entry['alias_mode']}, precondition={normalize_mode(precond['mode'])}")
+            if entry["alias_uid"] != expected_uid:
+                raise TransactionError(f"Alias uid mismatch for {norm_remote}: entry={entry['alias_uid']}, precondition={expected_uid}")
+
+            if (
+                cand_sha.lower() == prec_orig_sha.lower()
+                and cand_bytes == prec_orig_bytes
+                and canonical_mode == prec_orig_mode
+            ):
+                expected_action = ACTION_UNTOUCHED
+            else:
+                expected_action = ACTION_REPLACE
+
+        else:  # kind == "file"
+            if is_known_alias:
+                raise TransactionError(f"Known boot alias destination {norm_remote} must have symlink precondition kind, got 'file'")
+            prec_orig_sha = precond.get("sha256")
+            if not isinstance(prec_orig_sha, str) or len(prec_orig_sha) != 64 or not all(c in "0123456789abcdefABCDEF" for c in prec_orig_sha):
+                raise TransactionError(f"Precondition missing or invalid sha256 for {norm_remote}")
+            prec_orig_bytes = precond.get("bytes")
+            if type(prec_orig_bytes) is not int or isinstance(prec_orig_bytes, bool) or prec_orig_bytes < 0:
+                raise TransactionError(f"Precondition missing or invalid bytes for {norm_remote}")
+            prec_orig_mode = normalize_mode(precond.get("mode"))
+
+            orig_sha = entry.get("original_sha256")
+            if not isinstance(orig_sha, str) or len(orig_sha) != 64 or orig_sha.lower() != prec_orig_sha.lower():
+                raise TransactionError(
+                    f"Journal entry original_sha256 mismatch for {norm_remote}: "
+                    f"entry={orig_sha!r}, precondition={prec_orig_sha!r}"
+                )
+            orig_bytes = entry.get("original_bytes")
+            if type(orig_bytes) is not int or isinstance(orig_bytes, bool) or orig_bytes != prec_orig_bytes:
+                raise TransactionError(
+                    f"Journal entry original_bytes mismatch for {norm_remote}: "
+                    f"entry={orig_bytes!r}, precondition={prec_orig_bytes!r}"
+                )
+            orig_mode = normalize_mode(entry.get("original_mode"))
+            if orig_mode != prec_orig_mode:
+                raise TransactionError(
+                    f"Journal entry original_mode mismatch for {norm_remote}: "
+                    f"entry={mode_to_octal_str(orig_mode)}, precondition={mode_to_octal_str(prec_orig_mode)}"
+                )
+
+            if (
+                cand_sha.lower() == prec_orig_sha.lower()
+                and cand_bytes == prec_orig_bytes
+                and canonical_mode == prec_orig_mode
+            ):
+                expected_action = ACTION_UNTOUCHED
+            else:
+                expected_action = ACTION_REPLACE
+
+        # Derive and bind required action
         action = entry.get("action")
         if action not in VALID_ACTIONS:
             raise TransactionError(f"Invalid action {action!r} in journal entry for {remote}")
+        if action != expected_action:
+            raise TransactionError(
+                f"Journal entry action mismatch for {norm_remote}: stored={action!r}, "
+                f"derived={expected_action!r} from reviewed precondition and candidate metadata"
+            )
 
         status = entry.get("status")
         if status not in VALID_STATUSES:
             raise TransactionError(f"Invalid status {status!r} in journal entry for {remote}")
-
-        cand_sha = entry.get("candidate_sha256")
-        if not isinstance(cand_sha, str) or len(cand_sha) != 64 or not all(c in "0123456789abcdefABCDEF" for c in cand_sha):
-            raise TransactionError(f"Invalid candidate_sha256 in journal entry for {remote}")
-
-        cand_bytes = entry.get("candidate_bytes")
-        if type(cand_bytes) is not int or isinstance(cand_bytes, bool) or cand_bytes < 0:
-            raise TransactionError(f"Invalid candidate_bytes in journal entry for {remote}")
-
-        target_mode = normalize_mode(entry.get("target_mode"))
-        canonical_mode = get_canonical_target_mode(remote)
-        if target_mode != canonical_mode:
-            raise TransactionError(
-                f"Journal entry target mode {mode_to_octal_str(target_mode)} does not match canonical {mode_to_octal_str(canonical_mode)} for {remote}"
-            )
-
-        orig_uid = entry.get("original_uid")
-        if type(orig_uid) is not int or isinstance(orig_uid, bool) or orig_uid < 0:
-            raise TransactionError(f"Invalid original_uid in journal entry for {remote}")
-
-        if action in (ACTION_REPLACE, ACTION_UNTOUCHED):
-            orig_sha = entry.get("original_sha256")
-            if not isinstance(orig_sha, str) or len(orig_sha) != 64:
-                raise TransactionError(f"Invalid original_sha256 in journal entry for {remote}")
-            orig_bytes = entry.get("original_bytes")
-            if type(orig_bytes) is not int or isinstance(orig_bytes, bool) or orig_bytes < 0:
-                raise TransactionError(f"Invalid original_bytes in journal entry for {remote}")
-            normalize_mode(entry.get("original_mode"))
 
         if action == ACTION_REPLACE:
             bk_rel = entry.get("backup_file")
             if not bk_rel:
                 raise TransactionError(f"Missing backup_file in REPLACE entry for {remote}")
             validate_tx_relpath(bk_rel, transaction_dir)
-
-        if action in (ACTION_REPLACE, ACTION_CREATE):
             stg_rel = entry.get("staged_file")
             if not stg_rel:
-                raise TransactionError(f"Missing staged_file in {action} entry for {remote}")
+                raise TransactionError(f"Missing staged_file in REPLACE entry for {remote}")
             validate_tx_relpath(stg_rel, transaction_dir)
-
-        if entry.get("is_alias"):
-            raw_link = entry.get("alias_raw_link")
-            if not isinstance(raw_link, str) or not raw_link.strip():
-                raise TransactionError(f"Missing or invalid alias_raw_link for {remote}")
-            for fld in ("alias_dev", "alias_ino", "alias_mode", "alias_uid"):
-                val = entry.get(fld)
-                if type(val) is not int or isinstance(val, bool):
-                    raise TransactionError(f"Missing or invalid {fld} for {remote}: {val!r}")
+        elif action == ACTION_CREATE:
+            if entry.get("backup_file") is not None:
+                raise TransactionError(f"Unexpected backup_file in CREATE entry for {remote}")
+            stg_rel = entry.get("staged_file")
+            if not stg_rel:
+                raise TransactionError(f"Missing staged_file in CREATE entry for {remote}")
+            validate_tx_relpath(stg_rel, transaction_dir)
+        elif action == ACTION_UNTOUCHED:
+            if entry.get("backup_file") is not None:
+                raise TransactionError(f"Unexpected backup_file in UNTOUCHED entry for {remote}")
+            if entry.get("staged_file") is not None:
+                raise TransactionError(f"Unexpected staged_file in UNTOUCHED entry for {remote}")
 
 
 def get_canonical_target_mode(remote_path: str) -> int:
@@ -1801,6 +2012,14 @@ def prepare(
 
     # Acquire namespace lock for the entire preparation phase
     with NamespaceLock(ns_root):
+        # Authoritative guard: check transaction directory emptiness under namespace lock
+        if tx_dir.exists():
+            existing_items = list(tx_dir.iterdir())
+            if len(existing_items) > 0:
+                raise TransactionError(
+                    f"Transaction directory is not empty: {tx_dir}. Refusing to overwrite existing transaction."
+                )
+
         verify_live_preconditions(
             manifest_entries=manifest_entries,
             precond_map=precond_map,
@@ -1808,6 +2027,14 @@ def prepare(
             namespace_root=ns_root,
             strict_match_count=True,
         )
+
+        # Re-check transaction directory emptiness immediately before creating/writing any transaction artifacts
+        if tx_dir.exists():
+            existing_items = list(tx_dir.iterdir())
+            if len(existing_items) > 0:
+                raise TransactionError(
+                    f"Transaction directory is not empty: {tx_dir}. Refusing to overwrite existing transaction."
+                )
 
         # Setup transaction directories with restricted permissions (0700)
         tx_dir.mkdir(parents=True, exist_ok=True)

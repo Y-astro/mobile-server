@@ -999,8 +999,12 @@ class TestReleaseTransaction(unittest.TestCase):
         journal = tx.load_journal()
         journal["state"] = rt.STATE_APPLYING
         journal["top_uid"] = 99999
+        for p in journal.get("preconditions", {}).values():
+            p["uid"] = 99999
         for e in journal["entries"]:
             e["original_uid"] = 99999
+            if "alias_uid" in e:
+                e["alias_uid"] = 99999
         tx.save_journal(journal)
 
         with self.assertRaises(rt.RecoveryError) as ctx:
@@ -1448,6 +1452,214 @@ class TestReleaseTransaction(unittest.TestCase):
             )
         self.assertIn("non-canonical mode", str(ctx.exception))
         self.assertFalse(clean_tx.exists())
+
+    def test_journal_action_flip_refused_before_writes_and_cannot_commit(self):
+        """Proof: One-field action flip (REPLACE -> UNTOUCHED) is refused before writes and cannot commit."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture(
+            modify_auth_in_candidate=True
+        )
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+
+        live_auth = live_dir / "home/.local/lib/mobile-server/auth.py"
+        orig_auth_bytes = live_auth.read_bytes()
+
+        # Mutate ONLY app/auth.py journal entry action from REPLACE to UNTOUCHED
+        journal = tx.load_journal()
+        auth_entry = next(e for e in journal["entries"] if e["local"] == "app/auth.py")
+        self.assertEqual(auth_entry["action"], rt.ACTION_REPLACE)
+        auth_entry["action"] = rt.ACTION_UNTOUCHED
+        rt.write_atomic_json(tx.journal_path, journal)
+
+        # Operational refusal: apply() must fail before live writes
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.apply(tx_dir, namespace_root=live_dir)
+        self.assertIn("action mismatch", str(ctx.exception).lower())
+        self.assertEqual(live_auth.read_bytes(), orig_auth_bytes)
+
+        # Operational refusal: commit() must fail
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.commit(tx_dir, namespace_root=live_dir)
+        self.assertIn("action mismatch", str(ctx.exception).lower())
+        self.assertEqual(live_auth.read_bytes(), orig_auth_bytes)
+
+        # Operational refusal: status() must fail
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.status(tx_dir)
+        self.assertIn("action mismatch", str(ctx.exception).lower())
+
+    def test_journal_candidate_manifest_mismatch_refused(self):
+        """Proof: Candidate SHA, byte count, and local source mismatches are refused operationally."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture(
+            modify_auth_in_candidate=True
+        )
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+        orig_journal = tx.load_journal()
+
+        # 1. Candidate SHA mismatch with valid 64-hex string
+        bad_j = copy.deepcopy(orig_journal)
+        auth_entry = next(e for e in bad_j["entries"] if e["local"] == "app/auth.py")
+        auth_entry["candidate_sha256"] = "a" * 64
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.apply(tx_dir, namespace_root=live_dir)
+        self.assertIn("candidate_sha256 mismatch", str(ctx.exception).lower())
+
+        # 2. Candidate bytes mismatch
+        bad_j = copy.deepcopy(orig_journal)
+        auth_entry = next(e for e in bad_j["entries"] if e["local"] == "app/auth.py")
+        auth_entry["candidate_bytes"] = auth_entry["candidate_bytes"] + 42
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.apply(tx_dir, namespace_root=live_dir)
+        self.assertIn("candidate_bytes mismatch", str(ctx.exception).lower())
+
+        # 3. Local source mismatch
+        bad_j = copy.deepcopy(orig_journal)
+        auth_entry = next(e for e in bad_j["entries"] if e["local"] == "app/auth.py")
+        auth_entry["local"] = "app/tampered_source.py"
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.apply(tx_dir, namespace_root=live_dir)
+        self.assertIn("local mismatch", str(ctx.exception).lower())
+
+    def test_journal_precondition_metadata_disagreement_refused(self):
+        """Proof: Original SHA, bytes, mode, and UID disagreements with preconditions are refused."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture(
+            modify_auth_in_candidate=True
+        )
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+        orig_journal = tx.load_journal()
+
+        # 1. Original SHA disagreement
+        bad_j = copy.deepcopy(orig_journal)
+        auth_entry = next(e for e in bad_j["entries"] if e["local"] == "app/auth.py")
+        auth_entry["original_sha256"] = "b" * 64
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.apply(tx_dir, namespace_root=live_dir)
+        self.assertIn("original_sha256 mismatch", str(ctx.exception).lower())
+
+        # 2. Original bytes disagreement
+        bad_j = copy.deepcopy(orig_journal)
+        auth_entry = next(e for e in bad_j["entries"] if e["local"] == "app/auth.py")
+        auth_entry["original_bytes"] = auth_entry["original_bytes"] + 10
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.apply(tx_dir, namespace_root=live_dir)
+        self.assertIn("original_bytes mismatch", str(ctx.exception).lower())
+
+        # 3. Original mode disagreement
+        bad_j = copy.deepcopy(orig_journal)
+        auth_entry = next(e for e in bad_j["entries"] if e["local"] == "app/auth.py")
+        auth_entry["original_mode"] = "0o777"
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.apply(tx_dir, namespace_root=live_dir)
+        self.assertIn("original_mode mismatch", str(ctx.exception).lower())
+
+        # 4. Original UID disagreement
+        bad_j = copy.deepcopy(orig_journal)
+        auth_entry = next(e for e in bad_j["entries"] if e["local"] == "app/auth.py")
+        auth_entry["original_uid"] = auth_entry["original_uid"] + 1
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.apply(tx_dir, namespace_root=live_dir)
+        self.assertIn("original_uid mismatch", str(ctx.exception).lower())
+
+    def test_journal_alias_flag_and_identity_inconsistency_refused(self):
+        """Proof: False is_alias flags and identity field corruptions are refused fail-closed."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        tx = rt.prepare(
+            bundle_root=bundle_dir,
+            candidate_manifest=manifest,
+            preconditions=preconds,
+            transaction_dir=tx_dir,
+            namespace_root=live_dir,
+        )
+        orig_journal = tx.load_journal()
+
+        # 1. Boot alias entry with false is_alias flag
+        bad_j = copy.deepcopy(orig_journal)
+        boot_entry = next(e for e in bad_j["entries"] if e["remote"] == rt.KNOWN_BOOT_ALIAS_REMOTE)
+        boot_entry["is_alias"] = False
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.apply(tx_dir, namespace_root=live_dir)
+        self.assertIn("is_alias flag mismatch", str(ctx.exception).lower())
+
+        # 2. Regular file entry with is_alias set to True
+        bad_j = copy.deepcopy(orig_journal)
+        auth_entry = next(e for e in bad_j["entries"] if e["local"] == "app/auth.py")
+        auth_entry["is_alias"] = True
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.apply(tx_dir, namespace_root=live_dir)
+        self.assertIn("is_alias flag mismatch", str(ctx.exception).lower())
+
+        # 3. Boot alias identity field mismatch (raw link drift)
+        bad_j = copy.deepcopy(orig_journal)
+        boot_entry = next(e for e in bad_j["entries"] if e["remote"] == rt.KNOWN_BOOT_ALIAS_REMOTE)
+        boot_entry["alias_raw_link"] = ".termux/boot/tampered-services.sh"
+        rt.write_atomic_json(tx.journal_path, bad_j)
+        with self.assertRaises(rt.TransactionError) as ctx:
+            rt.apply(tx_dir, namespace_root=live_dir)
+        self.assertIn("alias raw_link mismatch", str(ctx.exception).lower())
+
+    def test_prepare_directory_injected_at_lock_entry_refused_preserving_prior(self):
+        """Proof: Directory injected at lock __enter__ is refused under lock and preserved byte-for-byte."""
+        bundle_dir, manifest, preconds, live_dir, tx_dir = self._build_test_fixture()
+
+        prior_journal_bytes = b'{"version": 1, "state": "PREPARED", "prior_probe": true}\n'
+        prior_backup_bytes = b"prior_backup_artifact_preserved_byte_for_byte_012345"
+
+        orig_enter = rt.NamespaceLock.__enter__
+
+        def fake_lock_enter(lock_self):
+            res = orig_enter(lock_self)
+            # Inject existing transaction artifacts into tx_dir immediately after lock acquisition
+            tx_dir.mkdir(parents=True, exist_ok=True)
+            (tx_dir / "journal.json").write_bytes(prior_journal_bytes)
+            b_dir = tx_dir / "backups"
+            b_dir.mkdir(parents=True, exist_ok=True)
+            (b_dir / "prior.bak").write_bytes(prior_backup_bytes)
+            return res
+
+        with patch.object(rt.NamespaceLock, "__enter__", fake_lock_enter):
+            with self.assertRaises(rt.TransactionError) as ctx:
+                rt.prepare(
+                    bundle_root=bundle_dir,
+                    candidate_manifest=manifest,
+                    preconditions=preconds,
+                    transaction_dir=tx_dir,
+                    namespace_root=live_dir,
+                )
+            self.assertIn("Transaction directory is not empty", str(ctx.exception))
+
+        # Assert prior journal and backup are preserved byte-for-byte
+        self.assertEqual((tx_dir / "journal.json").read_bytes(), prior_journal_bytes)
+        self.assertEqual((tx_dir / "backups/prior.bak").read_bytes(), prior_backup_bytes)
 
 
 if __name__ == "__main__":
