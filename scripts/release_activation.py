@@ -539,8 +539,8 @@ def validate_activation_journal(
             if intent not in ("create_guard", "recreate_guard", "guarded", "remove_guard", "removed"):
                 raise ActivationError(f"Temporary guard {sid} invalid intent: {intent}")
             if guard_created:
-                if info.get("ino") is not None:
-                    for field in ("dev", "ino", "mode", "uid"):
+                if info.get("ino") is not None and info.get("dev") is not None:
+                    for field in ("dev", "ino", "mode", "uid", "mtime_ns", "ctime_ns"):
                         val = info.get(field)
                         if val is None or not isinstance(val, int) or isinstance(val, bool):
                             raise ActivationError(f"Created guard {sid} missing or invalid metadata field: {field}={val}")
@@ -549,7 +549,7 @@ def validate_activation_journal(
                     if info.get("uid") != expected_uid:
                         raise ActivationError(f"Created guard {sid} UID mismatch: expected {expected_uid}, got {info.get('uid')}")
                 else:
-                    if intent not in ("create_guard", "recreate_guard"):
+                    if intent not in ("create_guard", "recreate_guard") or info.get("ino") is not None or info.get("dev") is not None:
                         raise ActivationError(f"Created guard {sid} missing ino/dev without active creation intent")
 
 
@@ -592,6 +592,8 @@ def _recognize_interrupted_guard(
     info["ino"] = int(st.st_ino)
     info["mode"] = int(stat.S_IMODE(st.st_mode))
     info["uid"] = int(st.st_uid)
+    info["mtime_ns"] = int(st.st_mtime_ns)
+    info["ctime_ns"] = int(st.st_ctime_ns)
     save_activation_journal(tx_dir, act_journal)
     return True
 
@@ -618,6 +620,8 @@ def _create_or_recreate_guard(
         info["intent"] = "recreate_guard"
         info["ino"] = None
         info["dev"] = None
+        info["mtime_ns"] = None
+        info["ctime_ns"] = None
         info["guard_created"] = False
         save_activation_journal(tx_dir, act_journal)
     else:
@@ -626,7 +630,7 @@ def _create_or_recreate_guard(
 
     # Check if a crash happened after file creation but before inode persistence
     if flag_path.exists() or flag_path.is_symlink():
-        if _recognize_interrupted_guard(disabled_dir, sid, info, tx_id, current_uid, tx_dir, act_journal):
+        if info.get("ino") is None and _recognize_interrupted_guard(disabled_dir, sid, info, tx_id, current_uid, tx_dir, act_journal):
             return
         raise ConcurrencyError(f"Marker {flag_path} already exists and is not recognized as our guard")
 
@@ -643,13 +647,15 @@ def _create_or_recreate_guard(
         os.close(fd)
     rt.fsync_dir(disabled_dir)
 
-    st = flag_path.stat()
+    st = flag_path.lstat()
     info["guard_created"] = True
     info["intent"] = "guarded"
     info["dev"] = int(st.st_dev)
     info["ino"] = int(st.st_ino)
     info["mode"] = int(stat.S_IMODE(st.st_mode))
     info["uid"] = int(st.st_uid)
+    info["mtime_ns"] = int(st.st_mtime_ns)
+    info["ctime_ns"] = int(st.st_ctime_ns)
     save_activation_journal(tx_dir, act_journal)
 
 
@@ -710,6 +716,8 @@ def install_guards(
                 "ino": None,
                 "mode": 0o600,
                 "uid": uid,
+                "mtime_ns": None,
+                "ctime_ns": None,
             }
             active_services.append(sid)
 
@@ -741,12 +749,32 @@ def revalidate_all_flags(
     """
     Strictly re-verify every affected marker under services.lock.
     Pre-existing markers: verify existence, type, raw link, UID, mode, device, inode, size, mtime, ctime, and hash.
-    Temporary guards: verify regular file, UID, mode 0600, device, inode, and exact token payload.
+    Temporary guards: verify regular file, UID, mode 0600, device, inode, exact token payload, and timestamps.
     Fails closed immediately on any mismatch.
     """
     for sid, info in flags.items():
+        if not isinstance(info, dict):
+            raise ActivationError(f"Malformed flag info for {sid}: must be dict")
+        pre_existing = info.get("pre_existing")
+        if not isinstance(pre_existing, bool):
+            raise ActivationError(f"Flag {sid} pre_existing must be boolean: {pre_existing}")
+
         flag_path = disabled_dir / sid
-        if info.get("pre_existing", False):
+        if pre_existing:
+            for field in ("dev", "ino", "mode", "uid", "gid", "size", "mtime_ns", "ctime_ns"):
+                val = info.get(field)
+                if val is None or not isinstance(val, int) or isinstance(val, bool):
+                    raise ActivationError(f"Pre-existing flag {sid} missing or non-integer metadata field: {field}={val}")
+            kind = info.get("kind")
+            if kind not in ("symlink", "file", "other"):
+                raise ActivationError(f"Pre-existing flag {sid} invalid kind: {kind}")
+            if kind == "symlink" and not isinstance(info.get("raw_link"), str):
+                raise ActivationError(f"Pre-existing symlink flag {sid} missing string raw_link")
+            if kind == "file":
+                sha = info.get("sha256")
+                if not isinstance(sha, str) or len(sha) != 64:
+                    raise ActivationError(f"Pre-existing file flag {sid} missing or invalid sha256: {sha}")
+
             if not flag_path.exists() and not flag_path.is_symlink():
                 raise ConcurrencyError(f"Pre-existing disabled flag {flag_path} vanished before file mutation")
             st = flag_path.lstat()
@@ -767,6 +795,11 @@ def revalidate_all_flags(
                 if not stat.S_ISREG(st.st_mode) or compute_file_sha256(flag_path) != info["sha256"]:
                     raise ConcurrencyError(f"Pre-existing flag {flag_path} content modified concurrently")
         else:
+            token = info.get("token")
+            expected_token = f"release_guard:{tx_id}:{sid}"
+            if token != expected_token:
+                raise ActivationError(f"Temporary guard {sid} token forged or invalid: expected {expected_token}, got {token}")
+
             if not flag_path.exists():
                 raise ConcurrencyError(f"Temporary guard {flag_path} vanished before verification")
             st = flag_path.lstat()
@@ -776,12 +809,24 @@ def revalidate_all_flags(
                 raise ConcurrencyError(f"Guard flag {flag_path} UID mismatch: expected {expected_uid}, got {st.st_uid}")
             if stat.S_IMODE(st.st_mode) != 0o600:
                 raise ConcurrencyError(f"Guard flag {flag_path} mode mismatch: expected 0o600, got {oct(st.st_mode)}")
-            if info.get("ino") is not None and (st.st_ino != info["ino"] or st.st_dev != info["dev"]):
-                raise ConcurrencyError(f"Guard flag {flag_path} inode/dev mismatch")
             expected_payload = f"RELEASE_GUARD_TOKEN={info['token']}\nTX_ID={tx_id}\nSID={sid}\n"
             content = flag_path.read_text(encoding="utf-8")
             if content != expected_payload:
                 raise ConcurrencyError(f"Guard flag {flag_path} content tampered concurrently")
+
+            for field in ("dev", "ino", "mode", "uid", "mtime_ns", "ctime_ns"):
+                val = info.get(field)
+                if val is None or not isinstance(val, int) or isinstance(val, bool):
+                    raise ActivationError(f"Created guard {sid} missing or invalid metadata field: {field}={val}")
+            if info.get("mode") != 0o600:
+                raise ActivationError(f"Created guard {sid} mode is not 0o600: {oct(info.get('mode', 0))}")
+            if info.get("uid") != expected_uid:
+                raise ActivationError(f"Created guard {sid} UID mismatch: expected {expected_uid}, got {info.get('uid')}")
+
+            if st.st_ino != info["ino"] or st.st_dev != info["dev"]:
+                raise ConcurrencyError(f"Guard flag {flag_path} inode/dev mismatch")
+            if st.st_mtime_ns != info["mtime_ns"] or st.st_ctime_ns != info["ctime_ns"]:
+                raise ConcurrencyError(f"Guard flag {flag_path} timestamps modified concurrently")
 
 
 def remove_temporary_guards(
@@ -809,6 +854,8 @@ def remove_temporary_guards(
                 info["intent"] = "removed"
                 info["ino"] = None
                 info["dev"] = None
+                info["mtime_ns"] = None
+                info["ctime_ns"] = None
                 save_activation_journal(tx_dir, act_journal)
     rt.fsync_dir(disabled_dir)
 

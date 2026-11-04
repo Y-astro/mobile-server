@@ -416,6 +416,50 @@ class TestReleaseActivation(unittest.TestCase):
                 ra.apply(bundle, preconds, tx_dir, live, driver=driver)
             self.assertIn("content tampered concurrently", str(ctx.exception))
 
+    def test_concurrent_guard_touch_refused_before_apply(self):
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
+        disabled_dir = live / "home/.config/services_disabled"
+        disabled_dir.mkdir(parents=True, exist_ok=True)
+
+        driver = FakeLifecycleDriver()
+        driver.running_processes["dashboard"] = [(101, "start_101")]
+        driver.healthy_services.add("dashboard")
+
+        live_auth = live / "home/.local/lib/mobile-server/auth.py"
+        orig_auth_content = live_auth.read_text(encoding="utf-8")
+        recorded_inode = [None]
+        recorded_bytes = [None]
+
+        orig_install_guards = ra.install_guards
+        def _touching_install_guards(*args, **kwargs):
+            active, disabled = orig_install_guards(*args, **kwargs)
+            flag_path = disabled_dir / "dashboard"
+            st = flag_path.lstat()
+            recorded_inode[0] = st.st_ino
+            recorded_bytes[0] = flag_path.read_bytes()
+            # Deterministic touch with os.utime using a different ns, original bytes/inode unchanged
+            os.utime(flag_path, ns=(st.st_atime_ns, st.st_mtime_ns + 100_000_000))
+            return active, disabled
+
+        with unittest.mock.patch.object(ra, "install_guards", _touching_install_guards):
+            with self.assertRaises(ra.ConcurrencyError) as ctx:
+                ra.apply(bundle, preconds, tx_dir, live, driver=driver)
+            self.assertIn("timestamps modified concurrently", str(ctx.exception))
+
+        # Refuses before file writes: live file unchanged
+        self.assertEqual(live_auth.read_text(encoding="utf-8"), orig_auth_content)
+
+        # Leaves marker: guard file exists with unchanged inode and bytes
+        guard_path = disabled_dir / "dashboard"
+        self.assertTrue(guard_path.exists())
+        st_after = guard_path.lstat()
+        self.assertEqual(st_after.st_ino, recorded_inode[0])
+        self.assertEqual(guard_path.read_bytes(), recorded_bytes[0])
+
+        # Activation journal recorded failure
+        journal = ra.load_activation_journal(tx_dir)
+        self.assertEqual(journal["state"], ra.STATE_RECOVERY_REQUIRED)
+
     def test_pre_existing_flag_deletion_refused_before_apply(self):
         bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
         disabled_dir = live / "home/.config/services_disabled"
@@ -836,9 +880,14 @@ class TestReleaseActivation(unittest.TestCase):
                     "ino": 5678,
                     "mode": 0o600,
                     "uid": os.getuid(),
+                    "mtime_ns": 123456789,
+                    "ctime_ns": 123456789,
                 }
             },
         }
+
+        # Base journal validates cleanly
+        ra.validate_activation_journal(base_journal, tx_journal, live, tx_dir, os.getuid())
 
         # Extra flag
         bad1 = dict(base_journal)
@@ -852,6 +901,8 @@ class TestReleaseActivation(unittest.TestCase):
             "ino": 5679,
             "mode": 0o600,
             "uid": os.getuid(),
+            "mtime_ns": 123456789,
+            "ctime_ns": 123456789,
         }
         with self.assertRaises(ra.ActivationError):
             ra.validate_activation_journal(bad1, tx_journal, live, tx_dir, os.getuid())
@@ -879,6 +930,144 @@ class TestReleaseActivation(unittest.TestCase):
         }
         with self.assertRaises(ra.ActivationError):
             ra.validate_activation_journal(bad4, tx_journal, live, tx_dir, os.getuid())
+
+        # Bad mtime_ns type
+        bad5 = dict(base_journal)
+        bad5["flags"] = {
+            "dashboard": dict(base_journal["flags"]["dashboard"], mtime_ns="123456789")
+        }
+        with self.assertRaises(ra.ActivationError):
+            ra.validate_activation_journal(bad5, tx_journal, live, tx_dir, os.getuid())
+
+        # Bad ctime_ns type (boolean)
+        bad6 = dict(base_journal)
+        bad6["flags"] = {
+            "dashboard": dict(base_journal["flags"]["dashboard"], ctime_ns=True)
+        }
+        with self.assertRaises(ra.ActivationError):
+            ra.validate_activation_journal(bad6, tx_journal, live, tx_dir, os.getuid())
+
+        # Missing mtime_ns
+        bad7 = dict(base_journal)
+        bad7_d = dict(base_journal["flags"]["dashboard"])
+        del bad7_d["mtime_ns"]
+        bad7["flags"] = {"dashboard": bad7_d}
+        with self.assertRaises(ra.ActivationError):
+            ra.validate_activation_journal(bad7, tx_journal, live, tx_dir, os.getuid())
+
+        # Missing ctime_ns
+        bad8 = dict(base_journal)
+        bad8_d = dict(base_journal["flags"]["dashboard"])
+        del bad8_d["ctime_ns"]
+        bad8["flags"] = {"dashboard": bad8_d}
+        with self.assertRaises(ra.ActivationError):
+            ra.validate_activation_journal(bad8, tx_journal, live, tx_dir, os.getuid())
+
+    def test_remove_temporary_guards_refuses_touched_marker(self):
+        live = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(live, ignore_errors=True))
+        disabled_dir = live / "home/.config/services_disabled"
+        disabled_dir.mkdir(parents=True, exist_ok=True)
+
+        tx_id = "act_test_rm_guard"
+        sid = "dashboard"
+        guard_path = disabled_dir / sid
+        token = f"release_guard:{tx_id}:{sid}"
+        payload = f"RELEASE_GUARD_TOKEN={token}\nTX_ID={tx_id}\nSID={sid}\n".encode("utf-8")
+        guard_path.write_bytes(payload)
+        os.chmod(guard_path, 0o600)
+
+        st = guard_path.lstat()
+        flags = {
+            sid: {
+                "pre_existing": False,
+                "intent": "guarded",
+                "token": token,
+                "guard_created": True,
+                "dev": int(st.st_dev),
+                "ino": int(st.st_ino),
+                "mode": 0o600,
+                "uid": os.getuid(),
+                "mtime_ns": int(st.st_mtime_ns),
+                "ctime_ns": int(st.st_ctime_ns),
+            }
+        }
+
+        # Deterministic touch with os.utime using different ns
+        os.utime(guard_path, ns=(st.st_atime_ns, st.st_mtime_ns + 50_000_000))
+
+        # Directly prove remove_temporary_guards refuses touched marker
+        with self.assertRaises(ra.ConcurrencyError) as ctx:
+            ra.remove_temporary_guards(disabled_dir, flags, os.getuid(), tx_id)
+        self.assertIn("timestamps modified concurrently", str(ctx.exception))
+        self.assertTrue(guard_path.exists())
+
+    def test_remove_temporary_guards_malformed_metadata_fails_closed(self):
+        live = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(live, ignore_errors=True))
+        disabled_dir = live / "home/.config/services_disabled"
+        disabled_dir.mkdir(parents=True, exist_ok=True)
+
+        tx_id = "act_test_rm_malformed"
+        sid = "dashboard"
+        guard_path = disabled_dir / sid
+        token = f"release_guard:{tx_id}:{sid}"
+        payload = f"RELEASE_GUARD_TOKEN={token}\nTX_ID={tx_id}\nSID={sid}\n".encode("utf-8")
+        guard_path.write_bytes(payload)
+        os.chmod(guard_path, 0o600)
+
+        st = guard_path.lstat()
+        valid_flags = {
+            sid: {
+                "pre_existing": False,
+                "intent": "guarded",
+                "token": token,
+                "guard_created": True,
+                "dev": int(st.st_dev),
+                "ino": int(st.st_ino),
+                "mode": 0o600,
+                "uid": os.getuid(),
+                "mtime_ns": int(st.st_mtime_ns),
+                "ctime_ns": int(st.st_ctime_ns),
+            }
+        }
+
+        # Test various malformed metadata schemas:
+        malformed_cases = [
+            # Missing mtime_ns
+            {k: v for k, v in valid_flags[sid].items() if k != "mtime_ns"},
+            # Non-integer mtime_ns
+            dict(valid_flags[sid], mtime_ns="not_an_int"),
+            # Boolean mtime_ns
+            dict(valid_flags[sid], mtime_ns=True),
+            # Missing ctime_ns
+            {k: v for k, v in valid_flags[sid].items() if k != "ctime_ns"},
+            # None ctime_ns
+            dict(valid_flags[sid], ctime_ns=None),
+            # Missing ino
+            dict(valid_flags[sid], ino=None),
+            # Missing dev
+            dict(valid_flags[sid], dev=None),
+            # Bad mode
+            dict(valid_flags[sid], mode=0o644),
+            # Bad UID
+            dict(valid_flags[sid], uid=os.getuid() + 9999),
+            # Forged token
+            dict(valid_flags[sid], token="forged_token"),
+            # Non-boolean pre_existing
+            dict(valid_flags[sid], pre_existing="false"),
+        ]
+
+        for bad_info in malformed_cases:
+            with self.subTest(bad_info=bad_info):
+                with self.assertRaises(ra.ActivationError):
+                    ra.remove_temporary_guards(disabled_dir, {sid: bad_info}, os.getuid(), tx_id)
+                # Fails closed: marker still on disk!
+                self.assertTrue(guard_path.exists())
+
+        # When valid metadata is supplied, removal succeeds
+        ra.remove_temporary_guards(disabled_dir, valid_flags, os.getuid(), tx_id)
+        self.assertFalse(guard_path.exists())
 
     def test_guard_removal_interruption_repeatable_recovery(self):
         bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
