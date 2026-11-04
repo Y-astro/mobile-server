@@ -31,11 +31,14 @@ JVM_ARGS=(
     -Dsuwayomi.tachidesk.config.server.rootDir="$HOME/suwayomi/data"
 )
 
-# Prefer native Termux OpenJDK 21; fall back to Debian PRoot if missing
+# Intercept Android Bionic dnsproxyd via lightweight UDP DNS resolver
+# Fixes getaddrinfo hang caused by Android netd / VPN routing
+export LD_PRELOAD="$HOME/suwayomi/libdns_fix.so${LD_PRELOAD:+:$LD_PRELOAD}"
+
 if [ -x "$PREFIX/bin/java" ]; then
     exec "$PREFIX/bin/java" "${JVM_ARGS[@]}" -jar "$HOME/suwayomi/bin/Suwayomi-Server.jar"
 else
-    exec "$PREFIX/bin/proot-distro" login debian --bind /storage/emulated/0:/storage/emulated/0 -- \
+    exec "$PREFIX/bin/proot-distro" login debian --bind /storage/emulated/0:/storage/emulated/0 --work-dir "$HOME/suwayomi" -- \
         /usr/bin/env LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/bin/java \
         "${JVM_ARGS[@]}" \
         -jar "$HOME/suwayomi/bin/Suwayomi-Server.jar"
