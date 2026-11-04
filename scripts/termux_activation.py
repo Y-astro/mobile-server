@@ -35,6 +35,10 @@ MANDATORY_RECOVERY_ASSETS = (
 )
 
 
+class QuiescenceError(RuntimeError):
+    """Raised when exact process selection or verified shutdown is unsafe."""
+
+
 class LifecycleDriver:
     """Abstract base interface for service lifecycle authority."""
 
@@ -398,7 +402,7 @@ class TermuxLifecycleDriver(LifecycleDriver):
                 continue
 
         if len(matches) > 1:
-            raise RuntimeError(f"Multiple supervisor daemon processes detected: {matches}; refusing ambiguous match")
+            raise QuiescenceError(f"Multiple matching supervisor daemon processes found: {matches}; refusing ambiguous match")
         return matches[0] if matches else None
 
     def stop_daemon(self, pid: int, ident: str, timeout: float = 5.0) -> None:
@@ -412,7 +416,7 @@ class TermuxLifecycleDriver(LifecycleDriver):
         except ProcessLookupError:
             return
 
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + min(timeout, 4.0)
         while time.monotonic() < deadline:
             cur_ident = self.process_identity(pid)
             if cur_ident != ident:
@@ -425,7 +429,13 @@ class TermuxLifecycleDriver(LifecycleDriver):
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 return
-            time.sleep(0.1)
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if self.process_identity(pid) != ident:
+                    return
+                time.sleep(0.1)
+            if self.process_identity(pid) == ident:
+                raise QuiescenceError(f"Supervisor daemon pid={pid} survived termination")
 
     def start_daemon(self) -> None:
         """Start daemon using the restored LIVE home/bin/server_supervisor.py script."""

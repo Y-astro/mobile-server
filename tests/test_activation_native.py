@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from typing import List
 
 from scripts.release_activation import (
@@ -294,13 +295,27 @@ class DaemonProcessMatchingTests(unittest.TestCase):
         )
         with self.assertRaises(RuntimeError) as ctx:
             self.driver.find_daemon_process()
-        self.assertIn("Multiple supervisor daemon processes detected", str(ctx.exception))
+        self.assertIn("Multiple matching supervisor daemon processes found", str(ctx.exception))
 
     def test_start_daemon_refuses_when_live_supervisor_missing(self):
         self.sup_path.unlink()
         with self.assertRaises(RuntimeError) as ctx:
             self.driver.start_daemon()
         self.assertIn("Restored live supervisor script not found", str(ctx.exception))
+
+    def test_surviving_daemon_raises_quiescence_error(self):
+        from itertools import count
+        clock = count(step=0.1)
+        with mock.patch.object(self.driver, "process_identity", return_value="still-alive"), \
+             mock.patch.object(ta.os, "kill") as send_signal, \
+             mock.patch.object(ta.time, "monotonic", side_effect=lambda: next(clock)), \
+             mock.patch.object(ta.time, "sleep"):
+            with self.assertRaises(ta.QuiescenceError):
+                self.driver.stop_daemon(123456789, "still-alive", timeout=0.2)
+        self.assertEqual(send_signal.call_args_list, [
+            mock.call(123456789, signal.SIGTERM),
+            mock.call(123456789, signal.SIGKILL),
+        ])
 
     def test_real_child_process_matching_and_termination(self):
         child_script = self.ns / "home/bin/server_supervisor.py"

@@ -1211,7 +1211,7 @@ def apply(
             }
 
         except Exception as exc:
-            if isinstance(exc, (QuiescenceError, ConcurrencyError)):
+            if isinstance(exc, (QuiescenceError, ta.QuiescenceError, ConcurrencyError)):
                 act_journal["state"] = STATE_RECOVERY_REQUIRED
                 save_activation_journal(tx_dir, act_journal)
                 raise
