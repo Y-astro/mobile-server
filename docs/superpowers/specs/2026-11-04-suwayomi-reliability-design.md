@@ -75,6 +75,13 @@ semantics before acceptance. Keep non-feed queries and mutations unchanged.
 Validate the expected request object/variables/filter shapes; malformed matching
 requests receive controlled errors rather than silently bypassing restrictions.
 
+Root's read-only installed-backend check on 2026-11-04 established that `in: []`
+is ignored and can return chapters. Use the verified contradiction
+`mangaId: {equalTo: 0, notEqualTo: 0}` for a known-empty Reading snapshot instead.
+The installed backend returned no nodes and no GraphQL errors for that condition.
+This does not assume that ID zero is absent. Nonempty snapshots retain the
+existing `mangaId.in` representation; preserve the other request fields.
+
 Forward upstream HTTP error status, body and relevant headers consistently for
 GET and POST. Remove conflicting length, connection and generated server/date
 headers; set the final content length once. Retain existing HTTP version unless
