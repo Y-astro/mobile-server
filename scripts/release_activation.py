@@ -281,7 +281,7 @@ def map_destination_to_component(remote_path: str) -> Optional[Tuple[str, bool, 
     norm = remote_path.replace("\\", "/").rstrip("/")
 
     # Check for Suwayomi scripts
-    if norm == SUWAYOMI_FILTER_REMOTE or norm.endswith("home/bin/suwayomi_graphql_filter.py"):
+    if norm == SUWAYOMI_FILTER_REMOTE:
         return ("suwayomi_filter", True, False)
 
     for sw in ("start_suwayomi.sh", "suwayomi_daily_update.py", "suwayomi_update.sh"):
@@ -399,11 +399,11 @@ def map_changed_destinations(
 
         elif profile == PROFILE_SUWAYOMI_FILTER:
             norm = remote.replace("\\", "/").rstrip("/")
-            if norm != SUWAYOMI_FILTER_REMOTE and not norm.endswith("home/bin/suwayomi_graphql_filter.py"):
+            if norm != SUWAYOMI_FILTER_REMOTE:
                 raise ActivationError(
                     f"Profile '{PROFILE_SUWAYOMI_FILTER}' permits only {SUWAYOMI_FILTER_REMOTE} to change, found: {remote}"
                 )
-            if action not in (None, rt.ACTION_REPLACE):
+            if action != rt.ACTION_REPLACE:
                 raise ActivationError(
                     f"Profile '{PROFILE_SUWAYOMI_FILTER}' permits only modifying existing {SUWAYOMI_FILTER_REMOTE}"
                 )

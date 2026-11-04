@@ -1312,6 +1312,22 @@ class TestReleaseActivation(unittest.TestCase):
         with self.assertRaises(ra.ActivationError):
             ra.map_changed_destinations(duplicate_filter, profile="suwayomi-filter")
 
+    def test_filter_profile_requires_exact_destination_and_replace_action(self):
+        for remote in (
+            "/tmp/home/bin/suwayomi_graphql_filter.py",
+            "/data/data/com.termux/files/other/home/bin/suwayomi_graphql_filter.py",
+            "relative/home/bin/suwayomi_graphql_filter.py",
+        ):
+            with self.subTest(remote=remote), self.assertRaises(ra.ActivationError):
+                ra.map_changed_destinations(
+                    [{"remote": remote, "action": ra.rt.ACTION_REPLACE}], profile="suwayomi-filter"
+                )
+        for action in (None, ra.rt.ACTION_CREATE, "REMOVE"):
+            with self.subTest(action=action), self.assertRaises(ra.ActivationError):
+                ra.map_changed_destinations(
+                    [{"remote": ra.SUWAYOMI_FILTER_REMOTE, "action": action}], profile="suwayomi-filter"
+                )
+
     def test_journal_profile_validation_forgery_and_mismatch(self):
         """Activation journal profile validation: legacy absence valid, invalid/forged refused."""
         bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)

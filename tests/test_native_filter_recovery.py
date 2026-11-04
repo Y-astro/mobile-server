@@ -6,7 +6,7 @@ Verifies:
 1. Copied standalone recovery CLI (`recovery_lifecycle/release_activation.py recover`) runs
    in a clean subprocess without repository PYTHONPATH or cwd.
 2. Real TermuxLifecycleDriver executes with verified preserved code and native /proc inspection.
-3. Candidate filter process is matched and terminated (verified dead in /proc before prior bytes return).
+3. Candidate filter process is matched and confirmed dead after copied recovery.
 4. Restored prior disk bytes and 0o755 permissions for suwayomi_graphql_filter.py reinstated.
 5. Inactive/pre-existing disabled flags retain inode, mode, and bytes.
 6. Temporary service guard flag for suwayomi_filter is cleanly removed.
@@ -15,11 +15,11 @@ Verifies:
 9. Cleanup terminates relaunched prior process cleanly.
 """
 
+import contextlib
 import json
 import os
 from pathlib import Path
 import shutil
-import signal
 import stat
 import subprocess
 import sys
@@ -388,15 +388,14 @@ def healthy(sid, cfg):
 
             finally:
                 # Cleanup: ensure any remaining child processes are killed
-                for proc, pid in ((cand_proc, cand_pid), (None, prior_pid)):
-                    if pid:
-                        try:
-                            os.kill(pid, signal.SIGKILL)
-                        except OSError:
-                            pass
-                if cand_proc.poll() is None:
-                    with contextlib.suppress(Exception):
+                try:
+                    cleanup_driver = driver_candidate or ta.TermuxLifecycleDriver(namespace_root=live_dir)
+                    cleanup_driver.terminate(cleanup_driver.matching_processes("suwayomi_filter"))
+                    self.assertEqual(cleanup_driver.matching_processes("suwayomi_filter"), [])
+                finally:
+                    if cand_proc.poll() is None:
                         cand_proc.kill()
+                    with contextlib.suppress(Exception):
                         cand_proc.wait(timeout=1.0)
 
 
