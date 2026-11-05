@@ -7,5 +7,13 @@
     "main/Downloader.kt": "01f9a70da7ba39e1e7bbb8b08effc7d063b3479bcc8ccdb7c21b779aa8ebf89d",
     "main/DownloaderNetworkBudget.kt": "6c82adee19abbd331b97287f6cde1b48b0e132b16008160cc1f9734980971e18",
     "test/BoundedParallelDownloaderTest.kt": "dd254e3820bfc5e42805009406f93d961416382cb244d45c12981bca8ee6225c"
+  },
+  "verified_compiled_jar_sha256": "730d85811bbbe310a61308cc1591d874670e05104d081edc296628963dbf7c0f",
+  "toolchain": {
+    "host_java": "27.0.1.0.3",
+    "gradle": "9.7.1",
+    "kotlin": "2.4.10",
+    "target_java": 21,
+    "test_heap_mib": 384
   }
 }
