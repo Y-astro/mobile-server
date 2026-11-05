@@ -46,6 +46,27 @@ class TestReleaseManifest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_public_theme_stylesheet_exception_is_exact(self):
+        for allowed in (
+            "web/theme-tokens.css",
+            "/data/data/com.termux/files/home/.config/dashboard/static/theme-tokens.css",
+        ):
+            with self.subTest(path=allowed):
+                self.assertFalse(is_forbidden_secret_or_runtime_path(allowed))
+        for forbidden in (
+            "web/theme-tokens.css.env",
+            "web/theme-tokens.js",
+            "web/THEME-TOKENS.css",
+            "web\\theme-tokens.css",
+            "app/theme-tokens.py",
+            "web/private/theme-tokens.css",
+            "../web/theme-tokens.css",
+            "/data/data/com.termux/files/home/.config/theme-tokens.css",
+            "/data/data/com.termux/files/home/.config/dashboard/static/theme-tokens.css/secret.key",
+        ):
+            with self.subTest(path=forbidden):
+                self.assertTrue(is_forbidden_secret_or_runtime_path(forbidden))
+
     def _create_minimal_bundle(self) -> Path:
         """Create a complete valid fixture bundle containing all baseline release assets."""
         bundle_root = self.test_root / "bundle"

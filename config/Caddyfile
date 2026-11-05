@@ -37,13 +37,35 @@
         file_server
     }
 
+    @appearanceAssets path /theme-tokens.css /appearance.css /appearance.js
+    handle @appearanceAssets {
+        root * /data/data/com.termux/files/home/.config/dashboard/static
+        header Cache-Control "no-cache"
+        file_server
+    }
+
+    handle /drive/static/custom.css {
+        root * /data/data/com.termux/files/home/.config/dashboard/static
+        rewrite * /filebrowser.css
+        header Cache-Control "no-cache"
+        file_server
+    }
+
     handle /wealth* {
         redir https://{host}:8444/wealth/ 303
     }
 
 	handle /drive/static/assets/index-BqkXVoMb.js {
 		root * /data/data/com.termux/files/home/.config/dashboard/static
+		rewrite * /filebrowser-entry.js
+		header Cache-Control "no-cache"
+		file_server
+	}
+
+	handle /drive/static/assets/mobile-filebrowser.js {
+		root * /data/data/com.termux/files/home/.config/dashboard/static
 		rewrite * /patched_index.js
+		header Cache-Control "no-cache"
 		file_server
 	}
 
