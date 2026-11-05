@@ -43,6 +43,7 @@ rm -f "${PROOF_ROOT}/.superpowers/sdd/resource-proof.md"
 rm -f "${UPSTREAM_DIR}/server/build/test-results/test/TEST-suwayomi.tachidesk.manga.impl.download.PairedResourceProofTest.xml"
 rm -f "${UPSTREAM_DIR}/server/build/test-results/test/TEST-PackagedClassOriginTest.xml"
 
+(cd "${UPSTREAM_DIR}"
 "${UPSTREAM_DIR}/gradlew" \
   -p "${UPSTREAM_DIR}" \
   --no-daemon --max-workers=2 -Dorg.gradle.jvmargs=-Xmx2g \
@@ -56,6 +57,7 @@ rm -f "${UPSTREAM_DIR}/server/build/test-results/test/TEST-PackagedClassOriginTe
   --tests PackagedClassOriginTest \
   --tests suwayomi.tachidesk.manga.impl.download.PairedResourceProofTest \
   > "${PROOF_ROOT}/.superpowers/sdd/resource-proof-build.log" 2>&1
+)
 
 REPORT_JSON="${PROOF_ROOT}/.superpowers/sdd/resource-proof.json"
 if [ ! -f "${REPORT_JSON}" ]; then
