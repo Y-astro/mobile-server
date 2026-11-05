@@ -16,7 +16,7 @@ Ready sources receive a first lane before spare second lanes. The existing
 two chapters, within the independent six-chapter cap.
 
 A shared six-permit budget covers metadata and full image streaming/closure.
-Pages remain serial. Reorder revokes work at a safe checkpoint without charging a
+Up to two pages per chapter share the six-operation network budget. Reorder revokes work at a safe checkpoint without charging a
 retry; stop settles claims and returns permits. Existing queue persistence, paths,
 image clients and archive behavior remain in use.
 
@@ -74,10 +74,10 @@ installed base. Include all five reviewed class owners explicitly:
 
 Verification must load production classes and dependencies from the packaged JAR,
 then run paired resource checks. Host compilation and focused tests alone do not
-prove phone suitability. Page concurrency stays disabled until its additional
-resource gate passes. Deploy only through the separately reviewed JAR-only profile
-with a retained prior package and source/health checks. No custom JAR deployment is
-claimed by this source change.
+prove phone suitability. The additional native resource gate passed before enabling
+page concurrency. Deploy only through the separately reviewed JAR-only profile
+with a retained prior package and source/health checks. The accepted deployment and
+rollback are documented in `docs/SUWAYOMI-PAGE-RELEASE.md`.
 
 
 The packaged-runtime gate adds `PackagedClassOriginTest`: it checks the origins of
@@ -111,6 +111,6 @@ source pin records the verified compilation input. The packaged candidate passed
 activation acceptance. See `docs/SUWAYOMI-PARALLEL-RELEASE.md` for exact artifact,
 remaining limits, and retained rollback.
 
-## Conditional Page Concurrency Candidate Status
+## Bounded Page Concurrency Release
 
-The conditional two-page-worker slice in `ChaptersFilesProvider.kt` bounds page worker concurrency to at most 2 coroutines per chapter within structured `coroutineScope`. It ensures siblings and progress collectors settle before ComicInfo or archive finalization. The updated packaged candidate (`3dd150705d07486e4f890711a2d01a1a67a35d71a0fdc444cf7d5661473c221e`) passed 29/29 packaged-runtime unit tests and the 24-trial host native paired probe matrix (`org.probe.MainNativeProbe`). It remains local pending root phone paired execution and activation.
+The conditional two-page-worker slice in `ChaptersFilesProvider.kt` bounds page worker concurrency to at most 2 coroutines per chapter within structured `coroutineScope`. It ensures siblings and progress collectors settle before ComicInfo or archive finalization. The updated packaged candidate (`3dd150705d07486e4f890711a2d01a1a67a35d71a0fdc444cf7d5661473c221e`) passed 29/29 packaged-runtime unit tests and the 24-trial host native paired probe matrix (`org.probe.MainNativeProbe`). Root additionally passed 24 native phone trials and activated this exact candidate on 2026-11-05 at 16:40:40 UTC. See `docs/SUWAYOMI-PAGE-RELEASE.md` for native metrics, provenance and rollback.

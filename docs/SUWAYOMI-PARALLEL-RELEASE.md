@@ -2,7 +2,8 @@
 
 Chapter parallelism is deployed on the Redmi Termux server. The release admits
 up to two chapters per source, six chapters globally, and six downloader network
-operations. Pages within each chapter remain serial. The existing six-source
+operations. This chapter-only release kept pages serial; the later
+[page parallelism release](SUWAYOMI-PAGE-RELEASE.md) enables two page workers. The existing six-source
 setting, extension HTTP clients and rate limits remain in use.
 
 Activation completed on 2026-11-05 at 13:57:31 UTC. It took 15.244 seconds and
