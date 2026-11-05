@@ -1,0 +1,236 @@
+/* =========================================================================
+   MATERIAL 3 DARK & FROSTED GLASS THEME FOR FILEBROWSER
+   Full Dark M3: Surface #111414 · Container #1d2223 · Teal #70d6c5 · Gold #e5c46c
+   Restyles chrome, lists, grids, actions, menus, dialogs, progress, editor
+   Preserves file capabilities, Ace syntax highlighting, DOM/Vue bindings
+   ========================================================================= */
+
+@import "/theme-tokens.css";
+@import "/appearance.css";
+
+/* Global Body & Root App Layer */
+html, body {
+  background-color: var(--md-sys-color-surface, #111414) !important;
+  color: var(--md-sys-color-on-surface, #e1e3e3) !important;
+  font-family: Roboto, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+}
+
+#app {
+  background: transparent !important;
+  min-height: 100vh;
+}
+
+/* Header & Navigation Bar */
+header, .header {
+  background: rgba(17, 20, 20, var(--app-panel-alpha, 0.65)) !important;
+  backdrop-filter: blur(var(--app-blur, 15px)) !important;
+  -webkit-backdrop-filter: blur(var(--app-blur, 15px)) !important;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3) !important;
+  color: var(--md-sys-color-on-surface, #e1e3e3) !important;
+}
+
+header h1, header h2, .breadcrumbs, .breadcrumbs a, .breadcrumbs span {
+  color: var(--md-sys-color-on-surface, #e1e3e3) !important;
+  font-weight: 500 !important;
+}
+
+.breadcrumbs a:hover {
+  color: var(--md-sys-color-primary, #70d6c5) !important;
+}
+
+/* Sidebar */
+nav, #sidebar, .sidebar {
+  background: rgba(23, 28, 29, 0.96) !important;
+  backdrop-filter: blur(var(--app-blur, 15px)) !important;
+  -webkit-backdrop-filter: blur(var(--app-blur, 15px)) !important;
+  border-right: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
+}
+
+nav .action, #sidebar .action {
+  color: var(--md-sys-color-on-surface, #e1e3e3) !important;
+}
+
+nav .action:hover, #sidebar .action:hover {
+  background: rgba(112, 214, 197, 0.12) !important;
+  color: var(--md-sys-color-primary, #70d6c5) !important;
+}
+
+/* Action Buttons */
+.action, button, .button {
+  min-height: 48px;
+  min-width: 48px;
+  border-radius: var(--md-shape-corner-small, 8px) !important;
+  color: var(--md-sys-color-on-surface, #e1e3e3) !important;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
+  box-sizing: border-box;
+}
+
+.action:hover, .button--flat:hover {
+  background: rgba(112, 214, 197, 0.12) !important;
+  color: var(--md-sys-color-primary, #70d6c5) !important;
+}
+
+.action:focus-visible, button:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary, #70d6c5) !important;
+  outline-offset: 2px;
+}
+
+/* Primary Action Buttons (Upload / Confirm) */
+.button--blue,
+.button--primary,
+[aria-label="upload"],
+.action[aria-label="Upload"] {
+  background: var(--md-sys-color-primary, #70d6c5) !important;
+  color: var(--md-sys-color-on-primary, #003734) !important;
+  font-weight: 600 !important;
+  border: none !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+.button--blue:hover,
+.button--primary:hover,
+[aria-label="upload"]:hover,
+.action[aria-label="Upload"]:hover {
+  filter: brightness(1.08) !important;
+  background: var(--md-sys-color-on-primary-container, #8bf2e1) !important;
+  color: var(--md-sys-color-on-primary, #003734) !important;
+}
+
+/* File Listing: List & Mosaic (Grid) */
+.item, .list .item, .mosaic .item {
+  background: rgba(29, 34, 35, var(--app-panel-alpha, 0.65)) !important;
+  backdrop-filter: blur(var(--app-blur, 15px)) !important;
+  -webkit-backdrop-filter: blur(var(--app-blur, 15px)) !important;
+  border: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
+  border-radius: var(--md-shape-corner-medium, 12px) !important;
+  transition: border-color 0.15s ease, background-color 0.15s ease !important;
+  margin-bottom: 6px !important;
+}
+
+.item:hover, .list .item:hover, .mosaic .item:hover {
+  border-color: var(--md-sys-color-outline, #899392) !important;
+  background: rgba(39, 44, 45, var(--app-panel-alpha, 0.75)) !important;
+}
+
+/* Selected File State */
+.item.selected,
+.item[aria-selected="true"] {
+  border-color: var(--md-sys-color-primary, #70d6c5) !important;
+  background: rgba(112, 214, 197, 0.18) !important;
+  box-shadow: 0 0 0 1px var(--md-sys-color-primary, #70d6c5) !important;
+}
+
+.item.selected .material-icons,
+.item[aria-selected="true"] .material-icons {
+  color: var(--md-sys-color-primary, #70d6c5) !important;
+}
+
+/* Item Typography & Details */
+.item .name, .item-name {
+  color: var(--md-sys-color-on-surface, #e1e3e3) !important;
+  font-weight: 500 !important;
+}
+
+.item .size, .item .modified, .item-size, .item-modified {
+  color: var(--md-sys-color-on-surface-variant, #bfc8c7) !important;
+  font-size: 0.8rem !important;
+}
+
+/* Icons */
+.material-icons, i {
+  color: var(--md-sys-color-on-surface-variant, #bfc8c7);
+}
+
+/* Search Bar & Text Inputs */
+input[type="text"], input[type="search"], .input, select {
+  background: var(--md-sys-color-surface, #111414) !important;
+  border: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
+  color: var(--md-sys-color-on-surface, #e1e3e3) !important;
+  border-radius: var(--md-shape-corner-small, 8px) !important;
+  padding: 8px 12px !important;
+  font-family: inherit !important;
+}
+
+input[type="text"]:focus, input[type="search"]:focus, .input:focus, select:focus {
+  outline: none !important;
+  border-color: var(--md-sys-color-primary, #70d6c5) !important;
+  box-shadow: 0 0 0 2px rgba(112, 214, 197, 0.25) !important;
+}
+
+/* Dropdown / More Menu / Context Menu */
+#dropdown, .context-menu, .dropdown {
+  background: rgba(29, 34, 35, 0.96) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
+  border-radius: var(--md-shape-corner-medium, 12px) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6) !important;
+}
+
+#dropdown .action, .context-menu .action {
+  color: var(--md-sys-color-on-surface, #e1e3e3) !important;
+}
+
+#dropdown .action:hover, .context-menu .action:hover {
+  background: rgba(112, 214, 197, 0.12) !important;
+  color: var(--md-sys-color-primary, #70d6c5) !important;
+}
+
+/* Native Prompts & Dialogs (Rename, Delete, Info, Share) */
+.card, .card-title, .card-content, .card-action, .prompt {
+  background: rgba(29, 34, 35, 0.96) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
+  border-radius: var(--md-shape-corner-large, 16px) !important;
+  color: var(--md-sys-color-on-surface, #e1e3e3) !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7) !important;
+}
+
+/* Upload Progress Bar */
+.vue-simple-progress-bar {
+  background: var(--md-sys-color-primary, #70d6c5) !important;
+}
+
+.upload-fraction {
+  color: var(--md-sys-color-on-surface-variant, #bfc8c7) !important;
+  font-family: monospace !important;
+}
+
+/* Ace Code Editor: Keep syntax readable, background dark M3 */
+#editor, .ace_editor {
+  background: var(--md-sys-color-surface, #111414) !important;
+}
+
+.ace_gutter {
+  background: var(--md-sys-color-surface-dim, #0f1112) !important;
+  color: var(--md-sys-color-outline, #899392) !important;
+  border-right: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
+}
+
+/* Preview Surface: Unblurred image/video rendering */
+.preview, .preview img, .preview video {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(17, 20, 20, 0.5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--md-sys-color-outline-variant, #3f4948);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--md-sys-color-outline, #899392);
+}

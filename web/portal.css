@@ -4,6 +4,9 @@
    Strict 4px grid rhythm · 48px minimum touch targets · System sans typography
    ========================================================================= */
 
+@import "/theme-tokens.css";
+@import "/appearance.css";
+
 :root {
   color-scheme: dark;
 

@@ -1,0 +1,84 @@
+/* =========================================================================
+   MATERIAL 3 DARK THEME · REDMI K20 PRO PORTAL DESIGN SYSTEM
+   Full Dark M3: Surface #111414 · Container #1d2223 · Teal #70d6c5 · Gold #e5c46c
+   Strict 4px grid rhythm · 48px minimum touch targets · System sans typography
+   ========================================================================= */
+
+:root {
+  color-scheme: dark;
+
+  /* --- Material 3 Dark Surface Ramp --- */
+  --md-sys-color-surface: #111414;
+  --md-sys-color-surface-dim: #0f1112;
+  --md-sys-color-surface-bright: #363a3a;
+  --md-sys-color-surface-container-lowest: #0c0e0f;
+  --md-sys-color-surface-container-low: #171c1d;
+  --md-sys-color-surface-container: #1d2223;
+  --md-sys-color-surface-container-high: #272c2d;
+  --md-sys-color-surface-container-highest: #323738;
+
+  /* --- Text & Outlines --- */
+  --md-sys-color-on-surface: #e1e3e3;
+  --md-sys-color-on-surface-variant: #bfc8c7;
+  --md-sys-color-outline: #899392;
+  --md-sys-color-outline-variant: #3f4948;
+
+  /* --- Primary: Teal --- */
+  --md-sys-color-primary: #70d6c5;
+  --md-sys-color-on-primary: #003734;
+  --md-sys-color-primary-container: #004f4a;
+  --md-sys-color-on-primary-container: #8bf2e1;
+
+  /* --- Tertiary: Restrained Warm Gold --- */
+  --md-sys-color-tertiary: #e5c46c;
+  --md-sys-color-on-tertiary: #3c2f00;
+  --md-sys-color-tertiary-container: #574400;
+  --md-sys-color-on-tertiary-container: #ffe08b;
+
+  /* --- Semantic Error --- */
+  --md-sys-color-error: #ffb4ab;
+  --md-sys-color-on-error: #690005;
+  --md-sys-color-error-container: #93000a;
+  --md-sys-color-on-error-container: #ffdad6;
+
+  /* --- Semantic Positive --- */
+  --md-sys-color-positive: #70d6c5;
+  --md-sys-color-positive-container: #004f4a;
+  --md-sys-color-on-positive-container: #8bf2e1;
+
+  /* --- M3 Shapes --- */
+  --md-shape-corner-extra-small: 4px;
+  --md-shape-corner-small: 8px;
+  --md-shape-corner-medium: 12px;
+  --md-shape-corner-large: 16px;
+  --md-shape-corner-extra-large: 24px;
+  --md-shape-corner-full: 9999px;
+
+  /* --- Backward Compatibility Aliases --- */
+  --bg: var(--md-sys-color-surface);
+  --bg2: var(--md-sys-color-surface-container-low);
+  --surface: var(--md-sys-color-surface-container);
+  --surface-2: var(--md-sys-color-surface-container-high);
+  --surface-3: var(--md-sys-color-surface-container-highest);
+  --line: var(--md-sys-color-outline-variant);
+  --line-subtle: #272c2d;
+  --text-primary: var(--md-sys-color-on-surface);
+  --text-secondary: var(--md-sys-color-on-surface-variant);
+  --text-muted: var(--md-sys-color-outline);
+  --teal: var(--md-sys-color-primary);
+  --teal-deep: var(--md-sys-color-primary-container);
+  --teal-ink: var(--md-sys-color-on-primary);
+  --gold: var(--md-sys-color-tertiary);
+  --gold-soft: #ffe08b;
+  --gold-wash: rgba(229, 196, 108, 0.1);
+  --radius: var(--md-shape-corner-medium);
+  --radius-sm: var(--md-shape-corner-small);
+  --radius-md: var(--md-shape-corner-medium);
+
+  /* --- Dynamic Appearance Tokens --- */
+  --app-blur: 15px;
+  --app-translucency: 35%;
+  --app-panel-alpha: 0.65;
+  --app-tint-alpha: 0.55;
+  --app-wallpaper-image: none;
+}

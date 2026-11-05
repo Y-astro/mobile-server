@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('@playwright/test');
+const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
 
 (async () => {
   const adminHtmlPath = path.resolve(__dirname, '../web/admin.html');
@@ -43,6 +44,7 @@ const portalPollingJs = fs.readFileSync(portalPollingJsPath, 'utf8');
   let servicePollCount = 0;
 
   const server = http.createServer((req, res) => {
+    if (appearanceHelper.handleSharedAssetHttp(req, res)) return;
     const url = req.url.split('?')[0];
     if (url === '/' || url === '/admin') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });

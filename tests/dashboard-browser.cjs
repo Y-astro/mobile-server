@@ -1,6 +1,7 @@
 const { chromium } = require('@playwright/test');
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
+const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
 
 (async () => {
   const browser = await chromium.launch({
@@ -27,6 +28,18 @@ const assert = require('node:assert/strict');
         }
         if (url.endsWith('/portal.css')) {
           return route.fulfill({ body: fs.readFileSync('web/portal.css', 'utf8'), contentType: 'text/css' });
+        }
+        if (url.endsWith('/theme-tokens.css')) {
+          return route.fulfill({ body: appearanceHelper.getThemeTokensCss(), contentType: 'text/css' });
+        }
+        if (url.endsWith('/appearance.css')) {
+          return route.fulfill({ body: appearanceHelper.getAppearanceCss(), contentType: 'text/css' });
+        }
+        if (url.endsWith('/appearance.js')) {
+          return route.fulfill({ body: appearanceHelper.getAppearanceJs(), contentType: 'application/javascript' });
+        }
+        if (url.endsWith('/api/wallpapers')) {
+          return route.fulfill({ json: { version: 1, default_id: null, wallpapers: [] } });
         }
         if (url.endsWith('/static/portal-polling.js')) {
           return route.fulfill({ body: fs.readFileSync('web/portal-polling.js', 'utf8'), contentType: 'application/javascript' });
@@ -79,6 +92,18 @@ const assert = require('node:assert/strict');
         }
         if (url.endsWith('/portal.css')) {
           return route.fulfill({ body: fs.readFileSync('web/portal.css', 'utf8'), contentType: 'text/css' });
+        }
+        if (url.endsWith('/theme-tokens.css')) {
+          return route.fulfill({ body: appearanceHelper.getThemeTokensCss(), contentType: 'text/css' });
+        }
+        if (url.endsWith('/appearance.css')) {
+          return route.fulfill({ body: appearanceHelper.getAppearanceCss(), contentType: 'text/css' });
+        }
+        if (url.endsWith('/appearance.js')) {
+          return route.fulfill({ body: appearanceHelper.getAppearanceJs(), contentType: 'application/javascript' });
+        }
+        if (url.endsWith('/api/wallpapers')) {
+          return route.fulfill({ json: { version: 1, default_id: null, wallpapers: [] } });
         }
         if (url.endsWith('/static/portal-polling.js')) {
           return route.fulfill({ body: fs.readFileSync('web/portal-polling.js', 'utf8'), contentType: 'application/javascript' });
@@ -208,6 +233,18 @@ const assert = require('node:assert/strict');
         }
         if (url.endsWith('/portal.css')) {
           return route.fulfill({ body: fs.readFileSync('web/portal.css', 'utf8'), contentType: 'text/css' });
+        }
+        if (url.endsWith('/theme-tokens.css')) {
+          return route.fulfill({ body: appearanceHelper.getThemeTokensCss(), contentType: 'text/css' });
+        }
+        if (url.endsWith('/appearance.css')) {
+          return route.fulfill({ body: appearanceHelper.getAppearanceCss(), contentType: 'text/css' });
+        }
+        if (url.endsWith('/appearance.js')) {
+          return route.fulfill({ body: appearanceHelper.getAppearanceJs(), contentType: 'application/javascript' });
+        }
+        if (url.endsWith('/api/wallpapers')) {
+          return route.fulfill({ json: { version: 1, default_id: null, wallpapers: [] } });
         }
         if (url.endsWith('/static/portal-polling.js')) {
           return route.fulfill({ body: fs.readFileSync('web/portal-polling.js', 'utf8'), contentType: 'application/javascript' });

@@ -4,7 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin Console &bull; K20 Pro Server</title>
+  <link rel="stylesheet" href="/theme-tokens.css">
   <link rel="stylesheet" href="/portal.css">
+  <link rel="stylesheet" href="/appearance.css">
+  <script defer src="/appearance.js"></script>
   <style>
     .hidden { display: none !important; }
   </style>
@@ -35,6 +38,10 @@
           <span class="text-muted">&bull;</span>
           <span>Uptime: <span id="header-uptime" class="mono text-white font-medium">...</span></span>
         </div>
+        <button id="btn-appearance" type="button" aria-label="Open appearance settings" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5">
+          <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21a4 4 0 01-4-4 4 4 0 014-4c.7 0 1.37.18 1.96.5L18.4 4.07a2.5 2.5 0 013.53 3.53L12.5 17.04A4 4 0 017 21z"></path></svg>
+          <span>Appearance</span>
+        </button>
         <button onclick="handleLogout()" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
           <span>Sign Out</span>
@@ -758,6 +765,12 @@
     function initConverter() {
       const fileInput = document.getElementById('convert-file-input');
       if (fileInput) {
+        fileInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            fileInput.click();
+          }
+        });
         fileInput.addEventListener('change', (e) => {
           if (e.target.files && e.target.files.length > 0) {
             addConvertFiles(e.target.files);

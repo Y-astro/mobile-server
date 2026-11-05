@@ -3,6 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
+const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
 
 (async () => {
   const portalPollingJs = fs.readFileSync(path.resolve(__dirname, '../web/portal-polling.js'), 'utf8');
@@ -46,6 +47,7 @@ const assert = require('assert');
   });
 
   const server = http.createServer(async (req, res) => {
+    if (appearanceHelper.handleSharedAssetHttp(req, res)) return;
     const url = req.url;
     if (url === '/' || url === '/admin') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });

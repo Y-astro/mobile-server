@@ -4,6 +4,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 const assert = require('node:assert/strict');
 const { chromium } = require('@playwright/test');
+const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
 
 (async () => {
   const rootDir = path.resolve(__dirname, '..');
@@ -60,6 +61,7 @@ const { chromium } = require('@playwright/test');
   let simulateVpnFailure = false;
 
   const server = http.createServer((req, res) => {
+    if (appearanceHelper.handleSharedAssetHttp(req, res)) return;
     const parsed = new URL(req.url, 'http://127.0.0.1');
     const pathname = parsed.pathname;
 
