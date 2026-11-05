@@ -9,12 +9,14 @@ package suwayomi.tachidesk.manga.impl.download
 
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
-import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.Page as SPage
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -22,20 +24,27 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import okhttp3.Interceptor
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody
+import okio.BufferedSource
+import okio.buffer
+import okio.source
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.jdbc.insertAndGetId
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
+import org.jetbrains.exposed.v1.jdbc.update
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import suwayomi.tachidesk.manga.impl.Page
 import suwayomi.tachidesk.manga.impl.download.model.DownloadState
+import suwayomi.tachidesk.manga.impl.download.model.Status
 import suwayomi.tachidesk.manga.impl.util.getChapterCbzPath
 import suwayomi.tachidesk.manga.impl.util.getChapterDownloadPath
 import suwayomi.tachidesk.manga.impl.util.lang.EMPTY
@@ -43,13 +52,25 @@ import suwayomi.tachidesk.manga.impl.util.source.GetSource
 import suwayomi.tachidesk.manga.model.table.ChapterTable
 import suwayomi.tachidesk.manga.model.table.MangaTable
 import suwayomi.tachidesk.manga.model.table.PageTable
+import suwayomi.tachidesk.server.ApplicationDirs
 import suwayomi.tachidesk.server.serverConfig
 import suwayomi.tachidesk.test.ApplicationTest
 import suwayomi.tachidesk.test.clearTables
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
+import java.awt.image.BufferedImage
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
-import java.util.concurrent.ConcurrentHashMap
+import java.io.InputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.zip.ZipFile
+import javax.imageio.ImageIO
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -57,19 +78,71 @@ import kotlin.test.assertTrue
 class BoundedParallelDownloaderTest : ApplicationTest() {
 
     private val registeredSourceIds = mutableListOf<Long>()
+    private val globalActiveStreams = AtomicInteger(0)
+    private val globalPeakStreams = AtomicInteger(0)
 
-    private val samplePngBytes = byteArrayOf(
-        0x89.toByte(), 0x50.toByte(), 0x4e.toByte(), 0x47.toByte(),
-        0x0d.toByte(), 0x0a.toByte(), 0x1a.toByte(), 0x0a.toByte(),
-        0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-        0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4.toByte(),
-        0x89.toByte(), 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
-        0x54, 0x78, 0x9c.toByte(), 0x63, 0x00, 0x01, 0x00, 0x00,
-        0x05, 0x00, 0x01, 0x0d.toByte(), 0x0a.toByte(), 0x2d.toByte(),
-        0xb4.toByte(), 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
-        0x44, 0xae.toByte(), 0x42, 0x60, 0x82.toByte()
-    )
+    companion object {
+        fun createTestPngBytes(chapterId: Int, pageNum: Int): ByteArray {
+            val img = BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB)
+            val color = ((chapterId and 0xFF) shl 16) or (((pageNum + 1) and 0xFF) shl 8) or 0x55 or (0xFF shl 24)
+            img.setRGB(0, 0, color)
+            val baos = ByteArrayOutputStream()
+            ImageIO.write(img, "png", baos)
+            return baos.toByteArray()
+        }
+    }
+
+    class GatedStreamingResponseBody(
+        private val mediaType: MediaType,
+        private val bytes: ByteArray,
+        private val onStreamOpen: () -> Unit,
+        private val onStreamClose: () -> Unit,
+        private val readDelayMs: Long = 0,
+    ) : ResponseBody() {
+        override fun contentType(): MediaType = mediaType
+        override fun contentLength(): Long = bytes.size.toLong()
+
+        override fun source(): BufferedSource {
+            val bais = ByteArrayInputStream(bytes)
+            val stream = object : InputStream() {
+                private var opened = false
+
+                override fun read(): Int {
+                    if (!opened) {
+                        opened = true
+                        onStreamOpen()
+                    }
+                    if (readDelayMs > 0) {
+                        Thread.sleep(readDelayMs)
+                    }
+                    return bais.read()
+                }
+
+                override fun read(b: ByteArray, off: Int, len: Int): Int {
+                    if (!opened) {
+                        opened = true
+                        onStreamOpen()
+                    }
+                    if (readDelayMs > 0) {
+                        Thread.sleep(readDelayMs)
+                    }
+                    return bais.read(b, off, len)
+                }
+
+                override fun close() {
+                    try {
+                        bais.close()
+                    } finally {
+                        if (opened) {
+                            opened = false
+                            onStreamClose()
+                        }
+                    }
+                }
+            }
+            return stream.source().buffer()
+        }
+    }
 
     inner class FakeHttpSource(
         override val id: Long,
@@ -77,48 +150,61 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         override val lang: String = "en",
         override val baseUrl: String = "https://fake-$id.local",
         val pagesPerChapter: Int = 2,
-        val pageDelayMs: Long = 60,
+        val pageStreamDelayMs: Long = 40,
         val failPages: Boolean = false,
+        var onPageStreamStarted: ((chapterId: Int, pageNum: Int) -> Unit)? = null,
+        var onPageStreamClosed: ((chapterId: Int, pageNum: Int) -> Unit)? = null,
     ) : HttpSource() {
         override val supportsLatest: Boolean = false
 
-        val activeImageTransfers = AtomicInteger(0)
-        val peakImageTransfers = AtomicInteger(0)
+        val activeStreams = AtomicInteger(0)
+        val peakStreams = AtomicInteger(0)
 
         private val interceptor = Interceptor { chain ->
             val request = chain.request()
             if (failPages) {
-                throw IOException("Simulated network transfer failure for $request")
+                throw IOException("Simulated network failure for ${request.url}")
             }
-            activeImageTransfers.incrementAndGet()
-            peakImageTransfers.updateAndGet { peak ->
-                val cur = activeImageTransfers.get()
-                if (cur > peak) cur else peak
-            }
-            try {
-                if (pageDelayMs > 0) {
-                    Thread.sleep(pageDelayMs)
-                }
-                val body = ResponseBody.create("image/png".toMediaType(), samplePngBytes)
-                Response.Builder()
-                    .request(request)
-                    .protocol(Protocol.HTTP_1_1)
-                    .code(200)
-                    .message("OK")
-                    .body(body)
-                    .build()
-            } finally {
-                activeImageTransfers.decrementAndGet()
-            }
+
+            val pathSegments = request.url.pathSegments
+            val chapterId = pathSegments.getOrNull(2)?.toIntOrNull() ?: 1
+            val pageNum = pathSegments.getOrNull(4)?.substringBefore(".")?.toIntOrNull() ?: 0
+
+            val bytes = createTestPngBytes(chapterId, pageNum)
+            val body = GatedStreamingResponseBody(
+                mediaType = "image/png".toMediaType(),
+                bytes = bytes,
+                onStreamOpen = {
+                    val s = activeStreams.incrementAndGet()
+                    peakStreams.updateAndGet { peak -> if (s > peak) s else peak }
+                    val g = globalActiveStreams.incrementAndGet()
+                    globalPeakStreams.updateAndGet { peak -> if (g > peak) g else peak }
+                    onPageStreamStarted?.invoke(chapterId, pageNum)
+                },
+                onStreamClose = {
+                    activeStreams.decrementAndGet()
+                    globalActiveStreams.decrementAndGet()
+                    onPageStreamClosed?.invoke(chapterId, pageNum)
+                },
+                readDelayMs = pageStreamDelayMs,
+            )
+
+            Response.Builder()
+                .request(request)
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body(body)
+                .build()
         }
 
         override val client: OkHttpClient = OkHttpClient.Builder()
             .addInterceptor(interceptor)
             .build()
 
-        override suspend fun getPageList(chapter: SChapter): List<Page> =
+        override suspend fun getPageList(chapter: SChapter): List<SPage> =
             (0 until pagesPerChapter).map { i ->
-                Page(i, "$baseUrl${chapter.url}/page/$i", "$baseUrl${chapter.url}/page/$i.png")
+                SPage(i, "$baseUrl${chapter.url}/page/$i", "$baseUrl${chapter.url}/page/$i.png")
             }
 
         override fun popularMangaRequest(page: Int): Request = throw UnsupportedOperationException()
@@ -129,7 +215,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         override fun searchMangaParse(response: Response): MangasPage = throw UnsupportedOperationException()
         override fun mangaDetailsParse(response: Response): SManga = throw UnsupportedOperationException()
         override fun chapterListParse(response: Response): List<SChapter> = throw UnsupportedOperationException()
-        override fun pageListParse(response: Response): List<Page> = throw UnsupportedOperationException()
+        override fun pageListParse(response: Response): List<SPage> = throw UnsupportedOperationException()
         override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
     }
 
@@ -150,16 +236,21 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
 
     private fun createChapter(mangaId: Int, index: Int, name: String = "Chapter $index"): Int =
         transaction {
-            ChapterTable.insertAndGetId {
-                it[ChapterTable.url] = "/chapter/$mangaId/$index"
-                it[ChapterTable.name] = name
-                it[ChapterTable.sourceOrder] = index
-                it[ChapterTable.isRead] = false
-                it[ChapterTable.manga] = mangaId
-                it[ChapterTable.memo] = JsonObject.EMPTY
-                it[ChapterTable.isDownloaded] = false
-                it[ChapterTable.pageCount] = 0
-            }.value
+            val chId =
+                ChapterTable.insertAndGetId {
+                    it[ChapterTable.url] = ""
+                    it[ChapterTable.name] = name
+                    it[ChapterTable.sourceOrder] = index
+                    it[ChapterTable.isRead] = false
+                    it[ChapterTable.manga] = mangaId
+                    it[ChapterTable.memo] = JsonObject.EMPTY
+                    it[ChapterTable.isDownloaded] = false
+                    it[ChapterTable.pageCount] = 0
+                }.value
+            ChapterTable.update({ ChapterTable.id eq chId }) {
+                it[ChapterTable.url] = "/chapter/$mangaId/$chId"
+            }
+            chId
         }
 
     private fun isChapterDownloaded(chapterId: Int): Boolean =
@@ -171,13 +262,60 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
                 ?.get(ChapterTable.isDownloaded) ?: false
         }
 
+    private suspend fun verifyChapterOutput(mangaId: Int, chapterId: Int, expectedPages: Int) {
+        val cbzFile = File(getChapterCbzPath(mangaId, chapterId))
+        val dir = File(getChapterDownloadPath(mangaId, chapterId))
+
+        if (cbzFile.exists()) {
+            ZipFile(cbzFile).use { zip ->
+                val entries = zip.entries().asSequence().map { it.name }.toSet()
+                assertTrue(entries.contains("ComicInfo.xml"), "CBZ must contain ComicInfo.xml")
+                for (p in 0 until expectedPages) {
+                    val pageName = "${Page.getPageName(p, expectedPages)}.png"
+                    assertTrue(entries.contains(pageName), "CBZ missing page $pageName")
+                    val entry = zip.getEntry(pageName)!!
+                    val actualBytes = zip.getInputStream(entry).use { it.readBytes() }
+                    val expectedBytes = createTestPngBytes(chapterId, p)
+                    assertContentEquals(expectedBytes, actualBytes, "Page $p bytes mismatch in CBZ $cbzFile")
+                }
+                val pageFiles = entries.filter { it.endsWith(".png") }
+                assertEquals(expectedPages, pageFiles.size, "Unexpected number of PNG files in CBZ")
+            }
+        } else if (dir.exists()) {
+            val files = dir.listFiles()?.toList().orEmpty()
+            val fileNames = files.map { it.name }.toSet()
+            assertTrue(fileNames.contains("ComicInfo.xml"), "Directory must contain ComicInfo.xml")
+            for (p in 0 until expectedPages) {
+                val pageName = "${Page.getPageName(p, expectedPages)}.png"
+                assertTrue(fileNames.contains(pageName), "Directory missing page $pageName")
+                val file = File(dir, pageName)
+                val actualBytes = file.readBytes()
+                val expectedBytes = createTestPngBytes(chapterId, p)
+                assertContentEquals(expectedBytes, actualBytes, "Page $p bytes mismatch in dir $dir")
+            }
+            val pageFiles = fileNames.filter { it.endsWith(".png") }
+            assertEquals(expectedPages, pageFiles.size, "Unexpected number of PNG files in dir")
+        } else {
+            throw AssertionError("Neither CBZ nor directory exists for manga $mangaId chapter $chapterId")
+        }
+    }
+
     @BeforeEach
     fun setUp() {
         runBlocking {
             DownloadManager.clear()
         }
         clearTables(PageTable, ChapterTable, MangaTable)
-        DownloaderNetworkBudget.reset()
+        val appDirs = Injekt.get<ApplicationDirs>()
+        File(appDirs.downloadsRoot).deleteRecursively()
+        File(appDirs.downloadsRoot).mkdirs()
+        File(appDirs.tempMangaCacheRoot).deleteRecursively()
+        File(appDirs.tempMangaCacheRoot).mkdirs()
+        DownloadManager.maxChaptersPerSourceOverride = null
+        DownloadManager.maxGlobalActiveOverride = null
+        globalActiveStreams.set(0)
+        globalPeakStreams.set(0)
+        DownloaderNetworkBudget.resetForTest()
     }
 
     @AfterEach
@@ -190,296 +328,334 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         }
         registeredSourceIds.clear()
         clearTables(PageTable, ChapterTable, MangaTable)
-        DownloaderNetworkBudget.reset()
+        val appDirs = Injekt.get<ApplicationDirs>()
+        File(appDirs.downloadsRoot).deleteRecursively()
+        File(appDirs.downloadsRoot).mkdirs()
+        File(appDirs.tempMangaCacheRoot).deleteRecursively()
+        File(appDirs.tempMangaCacheRoot).mkdirs()
+        DownloadManager.maxChaptersPerSourceOverride = null
+        DownloadManager.maxGlobalActiveOverride = null
+        DownloaderNetworkBudget.resetForTest()
     }
 
     @Test
     fun testSameSourceTwoChaptersOverlapAndComplete() = runBlocking {
         val sourceId = 9101L
-        val fakeSource = FakeHttpSource(id = sourceId, pageDelayMs = 80, pagesPerChapter = 3)
-        registerFakeSource(fakeSource)
-
-        val mangaId = createManga("SoloLeveling", sourceId)
+        val mangaId = createManga("SameSourceManga", sourceId)
         val ch1 = createChapter(mangaId, 1, "Ch 1")
         val ch2 = createChapter(mangaId, 2, "Ch 2")
 
-        val peakSameSourceActive = AtomicInteger(0)
+        val ch1Streaming = AtomicBoolean(false)
+        val ch2Streaming = AtomicBoolean(false)
+        val overlapAchieved = CountDownLatch(1)
+        val releaseStreams = CountDownLatch(1)
 
-        // Monitor active downloads in queue
-        val monitorJob = CoroutineScope(Dispatchers.Default).launch {
-            while (isActive) {
-                val activeCount = DownloadManager.getStatus().queue.count {
-                    it.sourceId == sourceId && it.state == DownloadState.Downloading
-                }
-                peakSameSourceActive.updateAndGet { peak -> if (activeCount > peak) activeCount else peak }
-                delay(10)
-            }
-        }
-
-        try {
-            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2)))
-
-            // Wait for both to finish
-            withTimeout(15000) {
-                while (true) {
-                    val status = DownloadManager.getStatus()
-                    val ch1Done = isChapterDownloaded(ch1)
-                    val ch2Done = isChapterDownloaded(ch2)
-                    if (ch1Done && ch2Done && status.queue.isEmpty()) {
-                        break
+        val fakeSource = FakeHttpSource(
+            id = sourceId,
+            pagesPerChapter = 2,
+            pageStreamDelayMs = 20,
+            onPageStreamStarted = { chapterId, pageNum ->
+                if (pageNum == 0) {
+                    if (chapterId == ch1) {
+                        ch1Streaming.set(true)
+                    } else if (chapterId == ch2) {
+                        ch2Streaming.set(true)
                     }
-                    delay(50)
+                    if (ch1Streaming.get() && ch2Streaming.get()) {
+                        overlapAchieved.countDown()
+                    }
+                    releaseStreams.await(5, TimeUnit.SECONDS)
                 }
+            },
+        )
+        registerFakeSource(fakeSource)
+
+        DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2)))
+
+        // Wait until both response body streams are verified to be open simultaneously
+        val overlapped = overlapAchieved.await(10, TimeUnit.SECONDS)
+        assertTrue(overlapped, "Chapters 1 and 2 must overlap active response body streaming")
+        assertEquals(2, fakeSource.activeStreams.get(), "Both response bodies must be streaming concurrently")
+        assertEquals(2, fakeSource.peakStreams.get(), "Peak same-source response body streams must be 2")
+
+        // Release the gated streams
+        releaseStreams.countDown()
+
+        // Wait for both chapters to finish
+        withTimeout(15000) {
+            while (true) {
+                if (isChapterDownloaded(ch1) && isChapterDownloaded(ch2) && DownloadManager.getStatus().queue.isEmpty()) {
+                    break
+                }
+                delay(40)
             }
-        } finally {
-            monitorJob.cancel()
         }
 
-        // Assert overlap: exactly 2 concurrent same-source chapters observed downloading
-        assertEquals(2, peakSameSourceActive.get(), "Peak same-source active chapters should be exactly 2")
+        // Output integrity: exact page names, exact page count, exact per-page bytes
+        verifyChapterOutput(mangaId, ch1, 2)
+        verifyChapterOutput(mangaId, ch2, 2)
 
-        // Verify output exists and no duplicates
-        val ch1Dir = File(getChapterDownloadPath(mangaId, ch1))
-        val ch2Dir = File(getChapterDownloadPath(mangaId, ch2))
-        val ch1Cbz = File(getChapterCbzPath(mangaId, ch1))
-        val ch2Cbz = File(getChapterCbzPath(mangaId, ch2))
-
-        assertTrue(ch1Dir.exists() || ch1Cbz.exists(), "Chapter 1 output must exist")
-        assertTrue(ch2Dir.exists() || ch2Cbz.exists(), "Chapter 2 output must exist")
-
-        // Network permits all settled
-        assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits)
+        assertEquals(2, fakeSource.peakStreams.get(), "Peak active same-source streams must equal 2")
+        assertEquals(0, fakeSource.activeStreams.get(), "All streams must be closed")
+        assertTrue(DownloaderNetworkBudget.peakActiveUnits.get() <= 6, "Peak network permits must not exceed 6")
+        assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "All network permits must be released")
     }
 
     @Test
     fun testCrossSourceConcurrencyAndGlobalLimit() = runBlocking {
-        val sources = (1..4).map { idx ->
-            val srcId = 9200L + idx
-            val src = FakeHttpSource(id = srcId, pageDelayMs = 70, pagesPerChapter = 2)
-            registerFakeSource(src)
-            srcId
+        val numSources = 4
+        val chaptersPerSource = 2
+        val sources = (1..numSources).map { i ->
+            val sourceId = 9200L + i
+            val source = FakeHttpSource(id = sourceId, pagesPerChapter = chaptersPerSource, pageStreamDelayMs = 50)
+            registerFakeSource(source)
+            source
         }
 
         val allChapterIds = mutableListOf<Int>()
-        for (srcId in sources) {
-            val mangaId = createManga("Manga-$srcId", srcId)
-            allChapterIds.add(createChapter(mangaId, 1))
-            allChapterIds.add(createChapter(mangaId, 2))
-        }
+        val mangaChapterMap = mutableListOf<Pair<Int, Int>>()
 
-        val peakGlobalActive = AtomicInteger(0)
-        val peakPerSourceActive = ConcurrentHashMap<Long, Int>()
-
-        val monitorJob = CoroutineScope(Dispatchers.Default).launch {
-            while (isActive) {
-                val queue = DownloadManager.getStatus().queue
-                val downloading = queue.filter { it.state == DownloadState.Downloading }
-                val globalActive = downloading.size
-                peakGlobalActive.updateAndGet { peak -> if (globalActive > peak) globalActive else peak }
-
-                downloading.groupBy { it.sourceId }.forEach { (sId, list) ->
-                    peakPerSourceActive.compute(sId) { _, current ->
-                        val cur = current ?: 0
-                        if (list.size > cur) list.size else cur
-                    }
-                }
-                delay(10)
+        for (source in sources) {
+            val mangaId = createManga("Manga-${source.id}", source.id)
+            for (c in 1..chaptersPerSource) {
+                val chId = createChapter(mangaId, c, "Ch $c")
+                allChapterIds.add(chId)
+                mangaChapterMap.add(mangaId to chId)
             }
         }
 
-        try {
-            DownloadManager.enqueue(DownloadManager.EnqueueInput(allChapterIds))
+        DownloadManager.enqueue(DownloadManager.EnqueueInput(allChapterIds))
 
-            withTimeout(25000) {
-                while (true) {
-                    val status = DownloadManager.getStatus()
-                    if (status.queue.isEmpty()) break
-                    delay(50)
+        withTimeout(25000) {
+            while (true) {
+                val allDone = allChapterIds.all { isChapterDownloaded(it) }
+                if (allDone && DownloadManager.getStatus().queue.isEmpty()) {
+                    break
                 }
-            }
-        } finally {
-            monitorJob.cancel()
-        }
-
-        // Verify cross-source concurrency (at least 3 or 4 concurrent downloads globally across sources)
-        assertTrue(peakGlobalActive.get() >= 3, "Observed cross-source concurrency should be >= 3, was ${peakGlobalActive.get()}")
-        assertTrue(peakGlobalActive.get() <= 6, "Peak global concurrency must not exceed 6, was ${peakGlobalActive.get()}")
-
-        // Verify per-source bounds (at most 2 chapters per source)
-        for ((sId, peak) in peakPerSourceActive) {
-            assertTrue(peak <= 2, "Per-source active chapters for $sId must be <= 2, was $peak")
-        }
-
-        // Verify all permits returned
-        assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits)
-    }
-
-    @Test
-    fun testNetworkBudgetSharedLimitUnderFullResponse() = runBlocking {
-        val sId = 9301L
-        val fakeSource = FakeHttpSource(id = sId, pageDelayMs = 60, pagesPerChapter = 3)
-        registerFakeSource(fakeSource)
-
-        val mangaId = createManga("BudgetTest", sId)
-        val ch1 = createChapter(mangaId, 1)
-        val ch2 = createChapter(mangaId, 2)
-
-        DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2)))
-
-        withTimeout(15000) {
-            while (DownloadManager.getStatus().queue.isNotEmpty()) {
                 delay(50)
             }
         }
 
-        // Peak network permits should be <= 6, and available permits restored to 6
-        assertTrue(DownloaderNetworkBudget.peakActiveUnits.get() <= 6)
-        assertTrue(DownloaderNetworkBudget.peakActiveUnits.get() >= 1)
-        assertEquals(6, DownloaderNetworkBudget.availablePermits)
+        // Verify bounds: global peak <= 6, per-source peak <= 2
+        assertTrue(globalPeakStreams.get() <= 6, "Global active response body streams must not exceed 6")
+        assertTrue(globalPeakStreams.get() >= 3, "Global active response body streams must reach at least 3 across sources")
+        for (source in sources) {
+            assertTrue(source.peakStreams.get() <= 2, "Per-source peak response body streams must not exceed 2")
+        }
+
+        // Verify output integrity for all chapters
+        for ((mangaId, chId) in mangaChapterMap) {
+            verifyChapterOutput(mangaId, chId, chaptersPerSource)
+        }
+
+        assertTrue(DownloaderNetworkBudget.peakActiveUnits.get() <= 6, "Peak network permits must not exceed 6")
+        assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "All network permits must be released")
+    }
+
+    @Test
+    fun testNetworkBudgetPressureWithExcessWork() = runBlocking {
+        // 5 sources * 2 chapters = 10 chapters competing for 6 global permits
+        val numSources = 5
+        val sources = (1..numSources).map { i ->
+            val sourceId = 9300L + i
+            val source = FakeHttpSource(id = sourceId, pagesPerChapter = 2, pageStreamDelayMs = 30)
+            registerFakeSource(source)
+            source
+        }
+
+        val allChapterIds = mutableListOf<Int>()
+        val mangaChapterMap = mutableListOf<Pair<Int, Int>>()
+
+        for (source in sources) {
+            val mangaId = createManga("ExcessManga-${source.id}", source.id)
+            for (c in 1..2) {
+                val chId = createChapter(mangaId, c, "Ch $c")
+                allChapterIds.add(chId)
+                mangaChapterMap.add(mangaId to chId)
+            }
+        }
+
+        DownloadManager.enqueue(DownloadManager.EnqueueInput(allChapterIds))
+
+        withTimeout(30000) {
+            while (true) {
+                val allDone = allChapterIds.all { isChapterDownloaded(it) }
+                if (allDone && DownloadManager.getStatus().queue.isEmpty()) {
+                    break
+                }
+                delay(50)
+            }
+        }
+
+        // Budget never exceeded despite 10 competing tasks
+        assertTrue(DownloaderNetworkBudget.peakActiveUnits.get() <= 6, "Peak network permits must never exceed 6")
+        assertTrue(globalPeakStreams.get() <= 6, "Peak global streaming response bodies must never exceed 6")
+
+        for ((mangaId, chId) in mangaChapterMap) {
+            verifyChapterOutput(mangaId, chId, 2)
+        }
+
+        assertEquals(0, DownloaderNetworkBudget.activeUnits.get(), "Active network units must be 0 on quiescence")
+        assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "Permits must fully settle to 6")
     }
 
     @Test
     fun testFairAdmissionFirstLaneBeforeSecondLane() = runBlocking {
-        val srcA = 9401L
-        val srcB = 9402L
-        val fakeA = FakeHttpSource(id = srcA, pageDelayMs = 150, pagesPerChapter = 4)
-        val fakeB = FakeHttpSource(id = srcB, pageDelayMs = 150, pagesPerChapter = 4)
-        registerFakeSource(fakeA)
-        registerFakeSource(fakeB)
+        val s1 = FakeHttpSource(id = 9401L, pageStreamDelayMs = 100)
+        val s2 = FakeHttpSource(id = 9402L, pageStreamDelayMs = 100)
+        val s3 = FakeHttpSource(id = 9403L, pageStreamDelayMs = 100)
+        registerFakeSource(s1)
+        registerFakeSource(s2)
+        registerFakeSource(s3)
 
-        val mangaA = createManga("MangaA", srcA)
-        val a1 = createChapter(mangaA, 1)
-        val a2 = createChapter(mangaA, 2)
-        val a3 = createChapter(mangaA, 3)
+        val m1 = createManga("M1", s1.id)
+        val m2 = createManga("M2", s2.id)
+        val m3 = createManga("M3", s3.id)
 
-        val mangaB = createManga("MangaB", srcB)
-        val b1 = createChapter(mangaB, 1)
+        val c1_1 = createChapter(m1, 1, "Ch 1.1")
+        val c1_2 = createChapter(m1, 2, "Ch 1.2")
+        val c2_1 = createChapter(m2, 1, "Ch 2.1")
+        val c3_1 = createChapter(m3, 1, "Ch 3.1")
 
-        // Temporarily set serverConfig.maxSourcesInParallel to 2 to test constrained admission
-        serverConfig.maxSourcesInParallel.value = 2
+        // Restrict global active chapters to 2 for this test
+        DownloadManager.maxGlobalActiveOverride = 2
 
         try {
-            // Enqueue A1, A2, A3 (Source A takes lane 1 and lane 2)
-            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(a1, a2, a3)))
+            // Queue: S1(ch1), S1(ch2), S2(ch1), S3(ch1)
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(c1_1, c1_2, c2_1, c3_1)))
 
-            // Wait until both A1 and A2 are Downloading
+            // Wait for admission
             withTimeout(5000) {
-                while (DownloadManager.getStatus().queue.count { it.state == DownloadState.Downloading } < 2) {
+                while (DownloadManager.activeClaims.size < 2) {
                     delay(20)
                 }
             }
 
-            // Now enqueue Source B (which has 0 lanes active)
-            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(b1)))
-
-            // Dequeue A1 to open 1 slot
-            DownloadManager.dequeue(DownloadManager.EnqueueInput(listOf(a1)))
-
-            // The free slot must go to Source B's first lane (b1) rather than Source A's spare lane (a3)
-            withTimeout(5000) {
-                while (true) {
-                    val downloadingItems = DownloadManager.getStatus().queue.filter { it.state == DownloadState.Downloading }
-                    if (downloadingItems.any { it.chapterId == b1 }) {
-                        // B1 was admitted!
-                        val bAdmittedBeforeA3 = downloadingItems.none { it.chapterId == a3 }
-                        assertTrue(bAdmittedBeforeA3, "Source B first lane must be admitted before Source A spare lane")
-                        break
-                    }
-                    delay(20)
-                }
-            }
+            // Priority 1 admits S1(ch1) and S2(ch1) (first lanes of ready sources) before S1(ch2)
+            val admittedChapterIds = DownloadManager.activeClaims.keys.toSet()
+            assertTrue(admittedChapterIds.contains(c1_1), "Source 1 first lane must be admitted")
+            assertTrue(admittedChapterIds.contains(c2_1), "Source 2 first lane must be admitted")
+            assertFalse(admittedChapterIds.contains(c1_2), "Source 1 second lane must NOT be admitted over a ready source's first lane")
         } finally {
-            serverConfig.maxSourcesInParallel.value = 6
+            DownloadManager.maxGlobalActiveOverride = null
+            DownloadManager.clear()
         }
     }
 
     @Test
-    fun testDequeueDoesNotCancelOtherChapters() = runBlocking {
-        val sId = 9501L
-        val fakeSource = FakeHttpSource(id = sId, pageDelayMs = 120, pagesPerChapter = 5)
+    fun testQuickDequeueReenqueueDoesNotCancelNewJobOrOverlap() = runBlocking {
+        val sourceId = 9501L
+        val firstStreamStarted = CountDownLatch(1)
+        val firstStreamCanProceed = CountDownLatch(1)
+        val isFirstStream = AtomicBoolean(true)
+
+        val fakeSource = FakeHttpSource(
+            id = sourceId,
+            pagesPerChapter = 2,
+            pageStreamDelayMs = 20,
+            onPageStreamStarted = { _, pageNum ->
+                if (pageNum == 0 && isFirstStream.compareAndSet(true, false)) {
+                    firstStreamStarted.countDown()
+                    firstStreamCanProceed.await(5, TimeUnit.SECONDS)
+                }
+            },
+        )
         registerFakeSource(fakeSource)
 
-        val mangaId = createManga("DequeueTest", sId)
-        val ch1 = createChapter(mangaId, 1)
-        val ch2 = createChapter(mangaId, 2)
+        val mangaId = createManga("QuickDequeueManga", sourceId)
+        val ch1 = createChapter(mangaId, 1, "Ch 1")
 
-        DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2)))
+        // 1. Enqueue old job
+        DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1)))
 
-        // Wait until both are downloading
-        withTimeout(5000) {
-            while (DownloadManager.getStatus().queue.count { it.state == DownloadState.Downloading } < 2) {
-                delay(20)
-            }
-        }
+        // 2. Wait until old job begins streaming
+        firstStreamStarted.await(5, TimeUnit.SECONDS)
+        val oldClaim = DownloadManager.activeClaims[ch1]
+        assertTrue(oldClaim != null, "Old claim must exist while streaming")
 
-        // Dequeue ch1
+        // 3. Immediately dequeue old job and synchronously re-enqueue Chapter 1
         DownloadManager.dequeue(DownloadManager.EnqueueInput(listOf(ch1)))
+        DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1)))
 
-        // Verify ch1 is removed from queue
-        val queueAfterDequeue = DownloadManager.getStatus().queue
-        assertFalse(queueAfterDequeue.any { it.chapterId == ch1 }, "Chapter 1 should be dequeued")
+        // Release the old stream to allow old job to finish settling/cancelling
+        firstStreamCanProceed.countDown()
 
-        // Verify ch2 continues downloading and completes!
+        // 4. Wait for the new chapter job to complete
         withTimeout(15000) {
             while (true) {
-                val ch2Done = isChapterDownloaded(ch2)
-                if (ch2Done && DownloadManager.getStatus().queue.isEmpty()) break
-                delay(50)
+                if (isChapterDownloaded(ch1) && DownloadManager.getStatus().queue.isEmpty()) {
+                    break
+                }
+                delay(40)
             }
         }
 
-        val ch2Final = isChapterDownloaded(ch2)
-        assertTrue(ch2Final, "Chapter 2 must finish successfully after Chapter 1 was dequeued")
+        // Verify output integrity: new instance must finish without truncation or corrupt files
+        verifyChapterOutput(mangaId, ch1, 2)
+        assertTrue(DownloadManager.activeClaims.isEmpty(), "Active claims must be empty")
+        assertEquals(0, DownloaderNetworkBudget.activeUnits.get(), "Active network units must be 0")
+        assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "All network permits must be released")
     }
 
     @Test
-    fun testStopSettlesWorkersAndReleasesPermits() = runBlocking {
-        val sId = 9601L
-        val fakeSource = FakeHttpSource(id = sId, pageDelayMs = 150, pagesPerChapter = 5)
-        registerFakeSource(fakeSource)
+    fun testConcurrentStopAndAdmissionLeavesZeroWorkersAndPermits() = runBlocking {
+        val s1 = FakeHttpSource(id = 9601L, pageStreamDelayMs = 50)
+        val s2 = FakeHttpSource(id = 9602L, pageStreamDelayMs = 50)
+        registerFakeSource(s1)
+        registerFakeSource(s2)
 
-        val mangaId = createManga("StopTest", sId)
-        val ch1 = createChapter(mangaId, 1)
-        val ch2 = createChapter(mangaId, 2)
+        val m1 = createManga("StopManga1", s1.id)
+        val m2 = createManga("StopManga2", s2.id)
 
-        DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2)))
+        val ch1 = createChapter(m1, 1, "Ch 1")
+        val ch2 = createChapter(m1, 2, "Ch 2")
+        val ch3 = createChapter(m2, 1, "Ch 3")
+        val ch4 = createChapter(m2, 2, "Ch 4")
 
-        // Wait until both are downloading
+        DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2, ch3, ch4)))
+
+        // Wait until active claims are admitted
         withTimeout(5000) {
-            while (DownloadManager.getStatus().queue.count { it.state == DownloadState.Downloading } < 2) {
-                delay(20)
+            while (DownloadManager.activeClaims.size < 2) {
+                delay(10)
             }
         }
 
-        // Call stop
-        DownloadManager.stop()
-
-        // Status should be stopped
-        val status = DownloadManager.getStatus()
-        assertEquals(suwayomi.tachidesk.manga.impl.download.model.Status.Stopped, status.status)
-
-        // Queue items should be reverted to Queued (not Finished)
-        for (item in status.queue) {
-            assertEquals(DownloadState.Queued, item.state, "In-flight chapters should revert to Queued when stopped")
+        // Concurrently run stop() and start() + enqueue()
+        val stopJob = async(Dispatchers.Default) {
+            DownloadManager.stop()
+        }
+        val churnJob = async(Dispatchers.Default) {
+            DownloadManager.start()
+            val chExtra = createChapter(m1, 3, "Ch Extra")
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(chExtra)))
         }
 
-        // All network permits must be released
-        assertEquals(6, DownloaderNetworkBudget.availablePermits)
+        awaitAll(stopJob, churnJob)
+
+        // Final authoritative stop
+        DownloadManager.stop()
+
+        // Assert zero workers and zero leaked permits
+        assertEquals(Status.Stopped, DownloadManager.getStatus().status, "Status must be Stopped")
+        assertTrue(DownloadManager.activeClaims.isEmpty(), "All active claims must be cleared on stop")
+        assertEquals(0, DownloaderNetworkBudget.activeUnits.get(), "Active network permits must be 0")
+        assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "All permits must be returned to semaphore")
     }
 
     @Test
     fun testErrorAndRetryMaxRetries() = runBlocking {
-        val sId = 9701L
-        val fakeSource = FakeHttpSource(id = sId, pageDelayMs = 10, pagesPerChapter = 2, failPages = true)
+        val sourceId = 9701L
+        val fakeSource = FakeHttpSource(id = sourceId, failPages = true)
         registerFakeSource(fakeSource)
 
-        val mangaId = createManga("ErrorTest", sId)
-        val ch1 = createChapter(mangaId, 1)
+        val mangaId = createManga("FailManga", sourceId)
+        val ch1 = createChapter(mangaId, 1, "Ch 1")
 
         DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1)))
 
-        // Wait until it reaches Error state after 3 retries
-        withTimeout(10000) {
+        // Wait for chapter to fail after 3 retries
+        withTimeout(15000) {
             while (true) {
                 val item = DownloadManager.getStatus().queue.firstOrNull { it.chapterId == ch1 }
                 if (item != null && item.state == DownloadState.Error && item.tries >= 3) {
@@ -489,73 +665,130 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
             }
         }
 
-        val finalItem = DownloadManager.getStatus().queue.first { it.chapterId == ch1 }
-        assertEquals(DownloadState.Error, finalItem.state)
-        assertEquals(3, finalItem.tries)
-        assertEquals(6, DownloaderNetworkBudget.availablePermits)
+        val queueItem = DownloadManager.getStatus().queue.first { it.chapterId == ch1 }
+        assertEquals(DownloadState.Error, queueItem.state, "Failed download must end in Error state")
+        assertEquals(3, queueItem.tries, "Download must retry exactly 3 times before Error")
+        assertEquals(0, DownloaderNetworkBudget.activeUnits.get(), "Active network units must be 0")
+        assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "Network permits must be released on error")
     }
 
     @Test
     fun testReorderRevokesAtSafeCheckpointAndResumes() = runBlocking {
-        val sId = 9801L
-        val fakeSource = FakeHttpSource(id = sId, pageDelayMs = 80, pagesPerChapter = 4)
+        val sourceId = 9801L
+        val fakeSource = FakeHttpSource(id = sourceId, pagesPerChapter = 2, pageStreamDelayMs = 60)
         registerFakeSource(fakeSource)
 
-        val mangaId = createManga("ReorderTest", sId)
-        val ch1 = createChapter(mangaId, 1)
-        val ch2 = createChapter(mangaId, 2)
-        val ch3 = createChapter(mangaId, 3)
+        val mangaId = createManga("ReorderManga", sourceId)
+        val ch1 = createChapter(mangaId, 1, "Ch 1")
+        val ch2 = createChapter(mangaId, 2, "Ch 2")
+        val ch3 = createChapter(mangaId, 3, "Ch 3")
 
-        // Enqueue ch1, ch2, ch3. ch1 and ch2 will start downloading (lane 1 and lane 2).
         DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2, ch3)))
 
-        // Wait until both ch1 and ch2 are downloading
+        // Wait until both ch1 and ch2 are actively downloading
         withTimeout(5000) {
-            while (DownloadManager.getStatus().queue.count { it.state == DownloadState.Downloading } < 2) {
+            while (DownloadManager.activeClaims.size < 2) {
                 delay(20)
             }
         }
 
-        // Now reorder ch2 to position 2 (after ch3, which is at position 1)
-        // Queue was: [ch1 (0), ch2 (1), ch3 (2)]
-        // Moving ch2 to index 2: [ch1 (0), ch3 (1), ch2 (2)]
-        // ch2 is no longer in top 2 (admitted lanes), so at next checkpoint it will pause!
-        DownloadManager.reorder(ch2, 2)
+        // Reorder ch3 to position 0 (ahead of ch2)
+        DownloadManager.reorder(ch3, 0)
 
-        // Wait for ch1 to complete and ch2/ch3 to settle
+        // Wait for all 3 chapters to finish
         withTimeout(20000) {
             while (true) {
-                val status = DownloadManager.getStatus()
-                val ch1Done = isChapterDownloaded(ch1)
-                val ch2Done = isChapterDownloaded(ch2)
-                val ch3Done = isChapterDownloaded(ch3)
-                if (ch1Done && ch2Done && ch3Done && status.queue.isEmpty()) {
+                val allDone = listOf(ch1, ch2, ch3).all { isChapterDownloaded(it) }
+                if (allDone && DownloadManager.getStatus().queue.isEmpty()) {
                     break
                 }
                 delay(50)
             }
         }
 
-        assertTrue(isChapterDownloaded(ch1), "Chapter 1 must finish")
-        assertTrue(isChapterDownloaded(ch2), "Chapter 2 must resume and finish")
-        assertTrue(isChapterDownloaded(ch3), "Chapter 3 must finish")
-        assertEquals(6, DownloaderNetworkBudget.availablePermits)
+        // Verify output integrity of all 3 chapters
+        verifyChapterOutput(mangaId, ch1, 2)
+        verifyChapterOutput(mangaId, ch2, 2)
+        verifyChapterOutput(mangaId, ch3, 2)
+        assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "All permits must be returned")
     }
 
     @Test
-    fun testSerialMutantFailsOverlapCheck() {
-        // Mutant proof: with serial limit (concurrency = 1), same-source overlap is mathematically impossible
-        val serialConcurrencyLimit = 1
-        val chapters = 2
-        val maxObservedConcurrency = minOf(serialConcurrencyLimit, chapters)
-        assertFalse(maxObservedConcurrency >= 2, "Serial mutant must fail the decisive 2-chapter overlap check")
+    fun testSerialMutantFailsDecisiveOverlapCheck() = runBlocking {
+        // Test production limits: set maxChaptersPerSourceOverride = 1 (serial mutant)
+        DownloadManager.maxChaptersPerSourceOverride = 1
+
+        val sourceId = 9901L
+        val fakeSource = FakeHttpSource(id = sourceId, pagesPerChapter = 2, pageStreamDelayMs = 40)
+        registerFakeSource(fakeSource)
+
+        val mangaId = createManga("SerialMutantManga", sourceId)
+        val ch1 = createChapter(mangaId, 1, "Ch 1")
+        val ch2 = createChapter(mangaId, 2, "Ch 2")
+
+        try {
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2)))
+
+            withTimeout(15000) {
+                while (true) {
+                    if (isChapterDownloaded(ch1) && isChapterDownloaded(ch2) && DownloadManager.getStatus().queue.isEmpty()) {
+                        break
+                    }
+                    delay(40)
+                }
+            }
+
+            // With maxChaptersPerSource = 1, peak streams NEVER reaches 2
+            assertEquals(1, fakeSource.peakStreams.get(), "Serial mutant must never achieve concurrent stream overlap (peakStreams == 1)")
+        } finally {
+            DownloadManager.maxChaptersPerSourceOverride = null
+        }
     }
 
     @Test
-    fun testUnboundedMutantFailsBoundsCheck() {
-        // Mutant proof: with unbounded source limit (e.g. 5), it violates the <= 2 per source bound
-        val unboundedSourceConcurrency = 5
-        val maxAllowedPerSource = Downloader.MAX_ACTIVE_CHAPTERS_PER_SOURCE
-        assertTrue(unboundedSourceConcurrency > maxAllowedPerSource, "Unbounded mutant must fail the <= 2 per source bound")
+    fun testUnboundedMutantFailsDecisiveBoundsCheck() = runBlocking {
+        // Test production limits: set maxChaptersPerSourceOverride = 5 (unbounded mutant)
+        DownloadManager.maxChaptersPerSourceOverride = 5
+
+        val sourceId = 9902L
+        val streamsCount = AtomicInteger(0)
+        val threeOverlapped = CountDownLatch(1)
+        val releaseStreams = CountDownLatch(1)
+
+        val fakeSource = FakeHttpSource(
+            id = sourceId,
+            pagesPerChapter = 2,
+            pageStreamDelayMs = 10,
+            onPageStreamStarted = { _, pageNum ->
+                if (pageNum == 0) {
+                    if (streamsCount.incrementAndGet() >= 3) {
+                        threeOverlapped.countDown()
+                    }
+                    releaseStreams.await(5, TimeUnit.SECONDS)
+                }
+            },
+        )
+        registerFakeSource(fakeSource)
+
+        val mangaId = createManga("UnboundedMutantManga", sourceId)
+        val ch1 = createChapter(mangaId, 1, "Ch 1")
+        val ch2 = createChapter(mangaId, 2, "Ch 2")
+        val ch3 = createChapter(mangaId, 3, "Ch 3")
+        val ch4 = createChapter(mangaId, 4, "Ch 4")
+
+        try {
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2, ch3, ch4)))
+
+            // With maxChaptersPerSource = 5, all chapters are admitted concurrently and at least 3 stream simultaneously
+            val overlapped = threeOverlapped.await(10, TimeUnit.SECONDS)
+            assertTrue(overlapped, "Unbounded mutant must allow >= 3 concurrent streams on single source")
+            assertTrue(fakeSource.peakStreams.get() >= 3, "Peak same-source streams must reach at least 3")
+
+            releaseStreams.countDown()
+        } finally {
+            releaseStreams.countDown()
+            DownloadManager.maxChaptersPerSourceOverride = null
+            DownloadManager.clear()
+        }
     }
 }

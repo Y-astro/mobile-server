@@ -13,18 +13,18 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import io.javalin.websocket.WsContext
 import io.javalin.websocket.WsMessageContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.jetbrains.exposed.v1.core.and
@@ -34,8 +34,11 @@ import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import suwayomi.tachidesk.graphql.types.ChapterDownloadReorder
+import suwayomi.tachidesk.manga.impl.download.Downloader.Companion.MAX_ACTIVE_CHAPTERS_PER_SOURCE
+import suwayomi.tachidesk.manga.impl.download.Downloader.Companion.MAX_RETRIES
 import suwayomi.tachidesk.manga.impl.download.model.DownloadChapter
 import suwayomi.tachidesk.manga.impl.download.model.DownloadQueueItem
+import suwayomi.tachidesk.manga.impl.download.model.DownloadState.Downloading
 import suwayomi.tachidesk.manga.impl.download.model.DownloadState.Error
 import suwayomi.tachidesk.manga.impl.download.model.DownloadState.Finished
 import suwayomi.tachidesk.manga.impl.download.model.DownloadState.Queued
@@ -57,12 +60,17 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicBoolean
-import suwayomi.tachidesk.manga.impl.download.Downloader.Companion.MAX_ACTIVE_CHAPTERS_PER_SOURCE
-import suwayomi.tachidesk.manga.impl.download.Downloader.Companion.MAX_RETRIES
 import kotlin.reflect.jvm.jvmName
 import kotlin.time.Duration.Companion.seconds
 
 private val logger = KotlinLogging.logger {}
+
+internal data class ChapterClaim(
+    val chapterId: Int,
+    val sourceId: Long,
+    val downloadItem: DownloadQueueItem,
+    val job: Job,
+)
 
 @OptIn(FlowPreview::class)
 object DownloadManager {
@@ -186,12 +194,6 @@ object DownloadManager {
         downloadUpdates.removeAll(outdatedUpdates.toSet())
         downloadUpdates.addAll(downloads)
 
-        // There is a problem where too many immediate updates can cause the client to lag out (e.g., in case it has to
-        // update the queue in the cache based on the updates).
-        // This happens in case e.g., a source is broken and all its downloads error out basically immediately.
-        // With each errored out download, a new one starts, which causes an immediate notification to the clients.
-        // While the immediate notification functionality is no longer needed for the latest graphql download subscription,
-        // it is still required for the deprecated version as well as the rest api subscription.
         if (gqlEmit) {
             val updates = getDownloadUpdates()
 
@@ -224,7 +226,7 @@ object DownloadManager {
 
     fun getStatus(): DownloadStatus =
         DownloadStatus(
-            if (downloaders.values.any { it.isActive }) {
+            if (activeClaims.isNotEmpty()) {
                 Status.Started
             } else {
                 Status.Stopped
@@ -267,7 +269,7 @@ object DownloadManager {
 
     private fun getDownloadUpdates(addInitial: Boolean = false): DownloadUpdates =
         DownloadUpdates(
-            if (downloaders.values.any { it.isActive }) {
+            if (activeClaims.isNotEmpty()) {
                 Status.Started
             } else {
                 Status.Stopped
@@ -279,34 +281,56 @@ object DownloadManager {
     const val MAX_ACTIVE_CHAPTERS_GLOBAL = 6
     private val isRunning = AtomicBoolean(false)
     private val admissionLock = Any()
+    internal val activeClaims = ConcurrentHashMap<Int, ChapterClaim>()
+
+    @Volatile
+    internal var maxChaptersPerSourceOverride: Int? = null
+
+    @Volatile
+    internal var maxGlobalActiveOverride: Int? = null
+
+    val maxChaptersPerSource: Int
+        get() = maxChaptersPerSourceOverride ?: MAX_ACTIVE_CHAPTERS_PER_SOURCE
+
+    val maxGlobalActive: Int
+        get() = maxGlobalActiveOverride ?: serverConfig.maxSourcesInParallel.value.coerceIn(1, MAX_ACTIVE_CHAPTERS_GLOBAL)
+
+    fun isSourceActive(sourceId: Long): Boolean =
+        activeClaims.values.any { it.sourceId == sourceId }
+
+    fun activeChapterCountForSource(sourceId: Long): Int =
+        activeClaims.values.count { it.sourceId == sourceId }
+
+    val activeChapterCount: Int
+        get() = activeClaims.size
+
+    val activeChapterIds: Set<Int>
+        get() = activeClaims.keys.toSet()
+
+    fun isAdmitted(download: DownloadQueueItem): Boolean {
+        if (!isRunning.get()) return false
+        if (download !in downloadQueue) return false
+        val eligibleSourceDownloads = downloadQueue.filter { it.sourceId == download.sourceId && it.state != Error }
+        val admitted = eligibleSourceDownloads.take(maxChaptersPerSource)
+        return download in admitted
+    }
 
     private val downloaderWatch = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     init {
         serverConfig.subscribeTo(serverConfig.maxSourcesInParallel, { maxSourcesInParallel ->
-            val runningDownloaders = downloaders.values.filter { it.isActive }
-            var downloadersToStop = runningDownloaders.size - maxSourcesInParallel
-
-            logger.debug { "Max sources in parallel changed to $maxSourcesInParallel (running downloaders ${runningDownloaders.size})" }
-
-            if (downloadersToStop > 0) {
-                runningDownloaders.takeWhile {
-                    scope.launch { it.stop() }
-                    --downloadersToStop > 0
-                }
-            } else {
-                refreshDownloaders()
-            }
+            logger.debug { "Max sources in parallel changed to $maxSourcesInParallel" }
+            refreshDownloaders()
         })
 
         scope.launch {
             downloaderWatch.sample(1.seconds).collect {
                 val runningDownloaders = downloaders.values.filter { it.isActive }
-                val activeChapterCount = downloaders.values.sumOf { it.activeChapterCount }
+                val currentActiveClaims = activeClaims.size
                 val availableDownloads = downloadQueue.filter { it.state != Error }
 
                 logger.info {
-                    "Running downloaders: ${runningDownloaders.size}, active chapters: $activeChapterCount, " +
+                    "Running downloaders: ${runningDownloaders.size}, active chapters: $currentActiveClaims, " +
                         "Queued: ${availableDownloads.size}, " +
                         "Failed: ${downloadQueue.size - availableDownloads.size}"
                 }
@@ -322,30 +346,21 @@ object DownloadManager {
         synchronized(admissionLock) {
             if (!isRunning.get()) return
 
-            val maxGlobalActive = serverConfig.maxSourcesInParallel.value.coerceIn(1, MAX_ACTIVE_CHAPTERS_GLOBAL)
+            val maxGlobal = maxGlobalActive
+            val maxPerSource = maxChaptersPerSource
 
-            // Count active chapters per source across all downloaders
             val activeClaimsPerSource = mutableMapOf<Long, Int>()
-            var totalActiveChapters = 0
-            for ((sourceId, downloader) in downloaders) {
-                val count = downloader.activeChapterCount
-                if (count > 0) {
-                    activeClaimsPerSource[sourceId] = count
-                    totalActiveChapters += count
-                }
+            for (claim in activeClaims.values) {
+                activeClaimsPerSource[claim.sourceId] = (activeClaimsPerSource[claim.sourceId] ?: 0) + 1
             }
 
-            var freeGlobalSlots = (maxGlobalActive - totalActiveChapters).coerceAtLeast(0)
+            var freeGlobalSlots = (maxGlobal - activeClaims.size).coerceAtLeast(0)
             if (freeGlobalSlots <= 0) return
 
-            // All currently active chapter IDs across all downloaders
-            val activeChapterIds = downloaders.values.flatMap { it.activeChapterIds }.toSet()
-
-            // Eligible items in queue
             val eligibleItems =
                 downloadQueue.filter {
                     (it.state == Queued || it.state == Finished || (it.state == Error && it.tries < MAX_RETRIES)) &&
-                        it.chapterId !in activeChapterIds
+                        !activeClaims.containsKey(it.chapterId)
                 }
 
             if (eligibleItems.isEmpty()) return
@@ -363,24 +378,34 @@ object DownloadManager {
                 }
             }
 
-            // Priority 2: Ready sources needing their SECOND lane (active count == 1)
+            // Priority 2: Ready sources needing their SECOND lane (active count < maxPerSource)
             if (freeGlobalSlots > 0) {
                 for (item in eligibleItems) {
                     if (freeGlobalSlots <= 0) break
                     if (item in toAdmit) continue
                     val count = activeClaimsPerSource.getOrDefault(item.sourceId, 0)
-                    if (count == 1 && count < MAX_ACTIVE_CHAPTERS_PER_SOURCE) {
+                    if (count < maxPerSource) {
                         toAdmit.add(item)
-                        activeClaimsPerSource[item.sourceId] = 2
+                        activeClaimsPerSource[item.sourceId] = count + 1
                         freeGlobalSlots--
                     }
                 }
             }
 
-            // Launch admitted chapters
             for (item in toAdmit) {
                 val downloader = getDownloader(item.sourceId)
-                downloader.startChapter(item)
+                lateinit var claim: ChapterClaim
+                val job =
+                    scope.launch(start = CoroutineStart.LAZY) {
+                        downloader.runChapter(item)
+                    }
+                claim = ChapterClaim(item.chapterId, item.sourceId, item, job)
+                activeClaims[item.chapterId] = claim
+                job.invokeOnCompletion {
+                    activeClaims.remove(item.chapterId, claim)
+                    refreshDownloaders()
+                }
+                job.start()
             }
 
             if (toAdmit.isNotEmpty()) {
@@ -423,8 +448,6 @@ object DownloadManager {
     }
 
     @Serializable
-    // Input might have additional formats in the future, such as "All for mangaID" or "Unread for categoryID"
-    // Having this input format is just future-proofing
     data class EnqueueInput(
         val chapterIds: List<Int>?,
     )
@@ -454,7 +477,6 @@ object DownloadManager {
             transaction {
                 chapters.map {
                     Pair(
-                        // this should be safe because mangas is created above from chapters
                         mangas[it[ChapterTable.manga].value]!!,
                         ChapterTable.toDataClass(it),
                     )
@@ -464,10 +486,6 @@ object DownloadManager {
         addMultipleToQueue(inputPairs)
     }
 
-    /**
-     * Tries to add multiple inputs to queue
-     * If any of inputs was actually added to queue, starts the queue
-     */
     private fun addMultipleToQueue(inputs: List<Pair<MangaDataClass, ChapterDataClass>>) {
         val size = downloadQueue.size
         val addedChapters = inputs.mapNotNull { addToQueue(it.first, it.second) }
@@ -487,10 +505,6 @@ object DownloadManager {
         }
     }
 
-    /**
-     * Tries to add chapter to queue.
-     * If chapter is added, returns the created DownloadChapter, otherwise returns null
-     */
     private fun addToQueue(
         manga: MangaDataClass,
         chapter: ChapterDataClass,
@@ -548,15 +562,21 @@ object DownloadManager {
     private fun dequeue(chapterDownloads: Set<DownloadQueueItem>) {
         logger.debug { "dequeue ${chapterDownloads.size} chapters [${chapterDownloads.joinToString(separator = ", ") { "$it" }}]" }
 
-        downloadQueue.removeAll(chapterDownloads)
-        triggerSaveDownloadQueue()
+        val jobsToCancel = mutableListOf<Job>()
+        synchronized(admissionLock) {
+            downloadQueue.removeAll(chapterDownloads)
+            triggerSaveDownloadQueue()
 
-        chapterDownloads.forEach { item ->
-            downloaders[item.sourceId]?.let { downloader ->
-                scope.launch {
-                    downloader.stopChapter(item.chapterId)
+            for (item in chapterDownloads) {
+                val claim = activeClaims[item.chapterId]
+                if (claim != null && claim.downloadItem === item) {
+                    jobsToCancel.add(claim.job)
                 }
             }
+        }
+
+        for (job in jobsToCancel) {
+            job.cancel()
         }
 
         notifyAllClients(
@@ -621,16 +641,38 @@ object DownloadManager {
 
     suspend fun stop() {
         logger.debug { "stop" }
-        isRunning.set(false)
-        coroutineScope {
-            downloaders
-                .map { (_, downloader) ->
-                    async {
-                        downloader.stop()
-                    }
-                }.awaitAll()
+        val jobsToJoin: List<Job>
+        synchronized(admissionLock) {
+            isRunning.set(false)
+            jobsToJoin = activeClaims.values.map { it.job }.toList()
+            for (job in jobsToJoin) {
+                job.cancel()
+            }
         }
+        jobsToJoin.joinAll()
         notifyAllClients()
+    }
+
+    suspend fun stopSource(sourceId: Long) {
+        val jobsToJoin: List<Job>
+        synchronized(admissionLock) {
+            val claimsToStop = activeClaims.values.filter { it.sourceId == sourceId }
+            jobsToJoin = claimsToStop.map { it.job }
+            for (job in jobsToJoin) {
+                job.cancel()
+            }
+        }
+        jobsToJoin.joinAll()
+    }
+
+    suspend fun stopChapter(chapterId: Int) {
+        val jobToJoin: Job?
+        synchronized(admissionLock) {
+            val claim = activeClaims[chapterId]
+            jobToJoin = claim?.job
+            jobToJoin?.cancel()
+        }
+        jobToJoin?.join()
     }
 
     suspend fun clear() {

@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger
 object DownloaderNetworkBudget {
     const val DEFAULT_MAX_PERMITS = 6
 
-    private var semaphore = Semaphore(DEFAULT_MAX_PERMITS)
+    private val semaphore = Semaphore(DEFAULT_MAX_PERMITS)
     val activeUnits = AtomicInteger(0)
     val peakActiveUnits = AtomicInteger(0)
 
@@ -32,9 +32,10 @@ object DownloaderNetworkBudget {
             }
         }
 
-    fun reset(permits: Int = DEFAULT_MAX_PERMITS) {
-        semaphore = Semaphore(permits)
-        activeUnits.set(0)
+    internal fun resetForTest() {
+        check(activeUnits.get() == 0 && semaphore.availablePermits == DEFAULT_MAX_PERMITS) {
+            "Cannot reset DownloaderNetworkBudget while non-quiescent: active=${activeUnits.get()}, available=${semaphore.availablePermits}"
+        }
         peakActiveUnits.set(0)
     }
 }

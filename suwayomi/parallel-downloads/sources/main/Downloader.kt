@@ -12,11 +12,8 @@ import io.github.oshai.kotlinlogging.KLogger
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.jetbrains.exposed.v1.jdbc.update
@@ -35,7 +32,6 @@ import suwayomi.tachidesk.manga.impl.download.model.DownloadUpdateType.PAUSED
 import suwayomi.tachidesk.manga.impl.download.model.DownloadUpdateType.PROGRESS
 import suwayomi.tachidesk.manga.impl.download.model.DownloadUpdateType.STOPPED
 import suwayomi.tachidesk.manga.model.table.ChapterTable
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 class Downloader(
@@ -53,16 +49,14 @@ class Downloader(
 
     private val logger = KotlinLogging.logger("${Downloader::class.java.name} source($sourceId)")
 
-    private val activeChapterJobs = ConcurrentHashMap<Int, Job>()
-
     val isActive: Boolean
-        get() = activeChapterJobs.isNotEmpty()
+        get() = DownloadManager.isSourceActive(sourceId)
 
     val activeChapterCount: Int
-        get() = activeChapterJobs.size
+        get() = DownloadManager.activeChapterCountForSource(sourceId)
 
     val activeChapterIds: Set<Int>
-        get() = activeChapterJobs.keys.toSet()
+        get() = DownloadManager.activeClaims.values.filter { it.sourceId == sourceId }.map { it.chapterId }.toSet()
 
     class StopDownloadException : Exception("Cancelled download")
 
@@ -90,15 +84,6 @@ class Downloader(
         notify(immediate, download?.let { DownloadUpdate(type, download, downloadQueue.indexOf(download)) })
     }
 
-    private fun isAdmitted(download: DownloadQueueItem): Boolean {
-        if (download !in downloadQueue) {
-            return false
-        }
-        val eligibleSourceDownloads = downloadQueue.filter { it.sourceId == sourceId && it.state != Error }
-        val admitted = eligibleSourceDownloads.take(MAX_ACTIVE_CHAPTERS_PER_SOURCE)
-        return download in admitted
-    }
-
     private suspend fun step(
         type: DownloadUpdateType,
         download: DownloadQueueItem?,
@@ -110,52 +95,23 @@ class Downloader(
             if (download !in downloadQueue) {
                 throw StopDownloadException()
             }
-            if (!isAdmitted(download)) {
+            if (!DownloadManager.isAdmitted(download)) {
                 throw PauseDownloadException()
             }
         }
     }
 
     fun start() {
-        onComplete()
-    }
-
-    fun startChapter(download: DownloadQueueItem): Job? {
-        if (activeChapterJobs.containsKey(download.chapterId)) {
-            return activeChapterJobs[download.chapterId]
-        }
-        if (activeChapterJobs.size >= MAX_ACTIVE_CHAPTERS_PER_SOURCE) {
-            return null
-        }
-
-        val job =
-            scope.launch {
-                runChapter(download)
-            }
-        activeChapterJobs[download.chapterId] = job
-        job.invokeOnCompletion { cause ->
-            activeChapterJobs.remove(download.chapterId)
-            if (cause !is CancellationException) {
-                logger.debug { "completed chapter ${download.chapterId}" }
-                onComplete()
-            }
-        }
-        logger.debug { "started chapter ${download.chapterId} (active: ${activeChapterJobs.size})" }
-        notify(false)
-        return job
+        DownloadManager.start()
     }
 
     suspend fun stop() {
-        val jobs = activeChapterJobs.values.toList()
-        jobs.forEach { it.cancel() }
-        jobs.forEach { it.join() }
-        activeChapterJobs.clear()
+        DownloadManager.stopSource(sourceId)
         logger.debug { "stopped" }
     }
 
     suspend fun stopChapter(chapterId: Int) {
-        val job = activeChapterJobs.remove(chapterId)
-        job?.cancelAndJoin()
+        DownloadManager.stopChapter(chapterId)
     }
 
     private fun finishDownload(
@@ -168,7 +124,7 @@ class Downloader(
         logger.debug { "finished" }
     }
 
-    private suspend fun runChapter(download: DownloadQueueItem) {
+    suspend fun runChapter(download: DownloadQueueItem) {
         val logContext = "${logger.name} - downloadChapter($download)"
         val downloadLogger = KotlinLogging.logger(logContext)
 

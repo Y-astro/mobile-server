@@ -19,13 +19,13 @@
 ## 3. Patch & Source Provenance
 
 - **Patch file**: `suwayomi/parallel-downloads/bounded-chapters.patch`
-  - SHA256: `55f3353f62b113053340b55414e12dcc003a87b542e1144efae594b6ef4f2beb`
+  - SHA256: `5f8344403c051f30bcee77c9901b3ddf68b2bb8e5da548038159a086fc5a1e0f`
 - **Patched upstream sources**:
-  - `server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/DownloaderNetworkBudget.kt` (SHA256: `ada7e694b03bd4f5cc5d7e8afc88661f23086cc3084de62b1683bb2930f5c37f`)
-  - `server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/Downloader.kt` (SHA256: `eb0240d7609b8dbae31a11d5ff087b8d57be9be04e18a740ff1c73ded4033c86`)
-  - `server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/DownloadManager.kt` (SHA256: `42eed28a0564d5c9d4778e83cb3d584e820407e999d384b57d5fa0a14967bffd`)
+  - `server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/DownloaderNetworkBudget.kt` (SHA256: `6c82adee19abbd331b97287f6cde1b48b0e132b16008160cc1f9734980971e18`)
+  - `server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/Downloader.kt` (SHA256: `01f9a70da7ba39e1e7bbb8b08effc7d063b3479bcc8ccdb7c21b779aa8ebf89d`)
+  - `server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/DownloadManager.kt` (SHA256: `e5ff37215e3ee26404fd2269448995b03798275cde5d5e74ba4c5f51697a2b83`)
   - `server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/fileProvider/ChaptersFilesProvider.kt` (SHA256: `f13f349d360140510a414ac9599b97d5da508f00e87655309a92c8685c8c35dc`)
-  - `server/src/test/kotlin/suwayomi/tachidesk/manga/impl/download/BoundedParallelDownloaderTest.kt` (SHA256: `285e2761ceba08bff631e8936a420e5453d024478ab9ff5fa9dc4e993d81d29f`)
+  - `server/src/test/kotlin/suwayomi/tachidesk/manga/impl/download/BoundedParallelDownloaderTest.kt` (SHA256: `25bc697897799a9a20f92edf12bd3fd0fc515f38c1cd2c49b1ebdb2a0685115b`)
 
 ## 4. Reproducible Build Commands
 
