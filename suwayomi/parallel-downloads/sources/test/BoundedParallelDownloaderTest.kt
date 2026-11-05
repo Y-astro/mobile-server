@@ -156,6 +156,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         val failPages: Boolean = false,
         var onPageStreamStarted: ((chapterId: Int, pageNum: Int) -> Unit)? = null,
         var onPageStreamClosed: ((chapterId: Int, pageNum: Int) -> Unit)? = null,
+        var onGetPageListStarted: ((chapterId: Int) -> Unit)? = null,
     ) : HttpSource() {
         override val supportsLatest: Boolean = false
 
@@ -204,10 +205,13 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
             .addInterceptor(interceptor)
             .build()
 
-        override suspend fun getPageList(chapter: SChapter): List<SPage> =
-            (0 until pagesPerChapter).map { i ->
+        override suspend fun getPageList(chapter: SChapter): List<SPage> {
+            val chapterId = chapter.url.substringAfterLast("/").toIntOrNull() ?: 0
+            onGetPageListStarted?.invoke(chapterId)
+            return (0 until pagesPerChapter).map { i ->
                 SPage(i, "$baseUrl${chapter.url}/page/$i", "$baseUrl${chapter.url}/page/$i.png")
             }
+        }
 
         override fun popularMangaRequest(page: Int): Request = throw UnsupportedOperationException()
         override fun popularMangaParse(response: Response): MangasPage = throw UnsupportedOperationException()
@@ -319,6 +323,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         globalActiveStreams.set(0)
         globalPeakStreams.set(0)
         DownloaderNetworkBudget.resetForTest()
+        Downloader.resetPathLocksForTest()
     }
 
     @AfterEach
@@ -340,6 +345,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         DownloadManager.maxGlobalActiveOverride = null
         serverConfig.maxSourcesInParallel.value = 6
         DownloaderNetworkBudget.resetForTest()
+        Downloader.resetPathLocksForTest()
     }
 
     @Test
@@ -905,6 +911,203 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
             releaseStreams.countDown()
             DownloadManager.maxChaptersPerSourceOverride = null
             DownloadManager.clear()
+        }
+    }
+
+    @Test
+    fun testConcurrentOutputCollisionSerializesAndPreservesOutputIntegrity() = runBlocking {
+        val source1Id = 9801L
+        val source2Id = 9802L
+
+        val manga1Id = createManga("CollisionManga", source1Id)
+        val ch1 = createChapter(manga1Id, 1, "Chapter 1")
+        val ch2 = createChapter(manga1Id, 2, "Chapter 1")
+
+        val manga2Id = createManga("DistinctManga", source2Id)
+        val ch3 = createChapter(manga2Id, 1, "Chapter 1")
+
+        val path1 = Downloader.canonicalEffectiveOutputPath(manga1Id, ch1)
+        val path2 = Downloader.canonicalEffectiveOutputPath(manga1Id, ch2)
+        val path3 = Downloader.canonicalEffectiveOutputPath(manga2Id, ch3)
+
+        assertEquals(path1, path2, "Both chapter IDs must resolve to the identical effective output path")
+        assertTrue(path1 != path3, "Distinct chapter must have a different effective output path")
+
+        val ch1StreamOpen = CountDownLatch(1)
+        val releaseCh1 = CountDownLatch(1)
+        val ch2Prepared = AtomicBoolean(false)
+        val ch2StreamStarted = AtomicBoolean(false)
+        val ch3Completed = CountDownLatch(1)
+
+        val fakeSource1 = FakeHttpSource(
+            id = source1Id,
+            pagesPerChapter = 2,
+            pageStreamDelayMs = 20,
+            onPageStreamStarted = { chapterId, pageNum ->
+                if (chapterId == ch1 && pageNum == 0) {
+                    ch1StreamOpen.countDown()
+                    releaseCh1.await(5, TimeUnit.SECONDS)
+                }
+                if (chapterId == ch2) {
+                    ch2StreamStarted.set(true)
+                }
+            },
+        )
+        fakeSource1.onGetPageListStarted = { chapterId ->
+            if (chapterId == ch2) {
+                ch2Prepared.set(true)
+            }
+        }
+        registerFakeSource(fakeSource1)
+
+        val fakeSource2 = FakeHttpSource(
+            id = source2Id,
+            pagesPerChapter = 2,
+            pageStreamDelayMs = 20,
+            onPageStreamClosed = { chapterId, pageNum ->
+                if (chapterId == ch3 && pageNum == 1) {
+                    ch3Completed.countDown()
+                }
+            },
+        )
+        registerFakeSource(fakeSource2)
+
+        try {
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2, ch3)))
+
+            withTimeout(5000) {
+                while (DownloadManager.activeClaims.size < 3) {
+                    delay(20)
+                }
+            }
+            assertTrue(DownloadManager.activeClaims.containsKey(ch1), "Chapter 1 claim must be active")
+            assertTrue(DownloadManager.activeClaims.containsKey(ch2), "Chapter 2 claim must be active")
+            assertTrue(DownloadManager.activeClaims.containsKey(ch3), "Chapter 3 claim must be active")
+
+            assertTrue(ch1StreamOpen.await(5, TimeUnit.SECONDS), "Chapter 1 must begin streaming and hold path lock")
+
+            // While Chapter 1 holds the lock:
+            // 1) Chapter 2 cannot enter preparation or write
+            assertFalse(ch2Prepared.get(), "Chapter 2 must not enter preparation while Chapter 1 holds the output path lock")
+            assertFalse(ch2StreamStarted.get(), "Chapter 2 must not enter stream write while Chapter 1 holds the output path lock")
+            assertEquals(2, Downloader.pathLockRefCount(path1), "Path lock refCount must be 2 while Chapter 2 waits")
+
+            // 2) Distinct-path job Chapter 3 must progress and complete
+            assertTrue(ch3Completed.await(5, TimeUnit.SECONDS), "Distinct-path Chapter 3 must progress while path 1 is held")
+            withTimeout(5000) {
+                while (!isChapterDownloaded(ch3)) {
+                    delay(20)
+                }
+            }
+            assertTrue(isChapterDownloaded(ch3), "Chapter 3 must be marked downloaded")
+            verifyChapterOutput(manga2Id, ch3, 2)
+
+            // Releasing Chapter 1 permits Chapter 2 to proceed
+            releaseCh1.countDown()
+
+            withTimeout(10000) {
+                while (true) {
+                    if (isChapterDownloaded(ch1) && isChapterDownloaded(ch2)) {
+                        break
+                    }
+                    delay(40)
+                }
+            }
+
+            assertTrue(isChapterDownloaded(ch1), "Chapter 1 must finish successfully")
+            assertTrue(isChapterDownloaded(ch2), "Chapter 2 must finish successfully")
+            assertTrue(ch2Prepared.get(), "Chapter 2 must have entered preparation after lock release")
+
+            verifyChapterOutput(manga1Id, ch1, 2)
+            verifyChapterOutput(manga1Id, ch2, 2)
+
+            withTimeout(5000) {
+                while (DownloadManager.activeClaims.isNotEmpty()) {
+                    delay(20)
+                }
+            }
+
+            assertTrue(DownloadManager.activeClaims.isEmpty(), "All active claims must be settled")
+            assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "All network permits must be released")
+            assertEquals(0, Downloader.activePathLockCount(), "All path locks must be released and registry cleaned up")
+        } finally {
+            releaseCh1.countDown()
+        }
+    }
+
+    @Test
+    fun testCollisionCancellationWhileWaitingCleansUpRegistry() = runBlocking {
+        val sourceId = 9803L
+        val mangaId = createManga("CancelCollisionManga", sourceId)
+        val ch1 = createChapter(mangaId, 1, "Chapter 1")
+        val ch2 = createChapter(mangaId, 2, "Chapter 1")
+
+        val sharedPath = Downloader.canonicalEffectiveOutputPath(mangaId, ch1)
+        assertEquals(sharedPath, Downloader.canonicalEffectiveOutputPath(mangaId, ch2))
+
+        val ch1Streaming = CountDownLatch(1)
+        val releaseCh1 = CountDownLatch(1)
+
+        val fakeSource = FakeHttpSource(
+            id = sourceId,
+            pagesPerChapter = 2,
+            pageStreamDelayMs = 20,
+            onPageStreamStarted = { chapterId, pageNum ->
+                if (chapterId == ch1 && pageNum == 0) {
+                    ch1Streaming.countDown()
+                    releaseCh1.await(5, TimeUnit.SECONDS)
+                }
+            },
+        )
+        registerFakeSource(fakeSource)
+
+        try {
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2)))
+
+            withTimeout(5000) {
+                while (DownloadManager.activeClaims.size < 2) {
+                    delay(20)
+                }
+            }
+
+            assertTrue(ch1Streaming.await(5, TimeUnit.SECONDS), "Chapter 1 must start streaming and hold path lock")
+            assertEquals(2, Downloader.pathLockRefCount(sharedPath), "Path lock refCount must be 2 while ch2 waits")
+
+            // Cancel Chapter 2 while waiting for path lock
+            DownloadManager.stopChapter(ch2)
+
+            withTimeout(5000) {
+                while (DownloadManager.activeClaims.containsKey(ch2)) {
+                    delay(20)
+                }
+            }
+
+            assertFalse(DownloadManager.activeClaims.containsKey(ch2), "Chapter 2 claim must be removed after cancellation")
+            assertEquals(1, Downloader.pathLockRefCount(sharedPath), "Path lock refCount must drop to 1 after ch2 cancellation while waiting")
+
+            releaseCh1.countDown()
+
+            withTimeout(5000) {
+                while (!isChapterDownloaded(ch1)) {
+                    delay(20)
+                }
+            }
+
+            assertTrue(isChapterDownloaded(ch1), "Chapter 1 must finish successfully")
+            assertFalse(isChapterDownloaded(ch2), "Cancelled Chapter 2 must not be downloaded")
+            verifyChapterOutput(mangaId, ch1, 2)
+
+            withTimeout(5000) {
+                while (DownloadManager.activeClaims.isNotEmpty()) {
+                    delay(20)
+                }
+            }
+
+            assertEquals(0, Downloader.pathLockRefCount(sharedPath), "Path lock refCount must be 0 after ch1 finishes")
+            assertEquals(0, Downloader.activePathLockCount(), "Registry must have 0 active path locks after cancellation unwinding")
+            assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "All network permits released")
+        } finally {
+            releaseCh1.countDown()
         }
     }
 }

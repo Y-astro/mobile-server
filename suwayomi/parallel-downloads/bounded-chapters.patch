@@ -1,5 +1,5 @@
 diff --git a/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/DownloadManager.kt b/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/DownloadManager.kt
-index 2758bb6d..c4001d75 100644
+index 2758bb6..c4001d7 100644
 --- a/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/DownloadManager.kt
 +++ b/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/DownloadManager.kt
 @@ -13,18 +13,18 @@ import io.github.oshai.kotlinlogging.KotlinLogging
@@ -466,10 +466,10 @@ index 2758bb6d..c4001d75 100644
          notifyAllClients(false, removedDownloads)
      }
 diff --git a/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/Downloader.kt b/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/Downloader.kt
-index 9534f521..ed6dff20 100644
+index 9534f52..ba484b5 100644
 --- a/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/Downloader.kt
 +++ b/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/Downloader.kt
-@@ -12,12 +12,8 @@ import io.github.oshai.kotlinlogging.KLogger
+@@ -12,12 +12,10 @@ import io.github.oshai.kotlinlogging.KLogger
  import io.github.oshai.kotlinlogging.KotlinLogging
  import kotlinx.coroutines.CancellationException
  import kotlinx.coroutines.CoroutineScope
@@ -479,16 +479,80 @@ index 9534f521..ed6dff20 100644
  import kotlinx.coroutines.ensureActive
 -import kotlinx.coroutines.isActive
 -import kotlinx.coroutines.launch
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
  import org.jetbrains.exposed.v1.core.eq
  import org.jetbrains.exposed.v1.jdbc.transactions.transaction
  import org.jetbrains.exposed.v1.jdbc.update
-@@ -47,14 +43,20 @@ class Downloader(
+@@ -35,7 +33,9 @@ import suwayomi.tachidesk.manga.impl.download.model.DownloadUpdateType.FINISHED
+ import suwayomi.tachidesk.manga.impl.download.model.DownloadUpdateType.PAUSED
+ import suwayomi.tachidesk.manga.impl.download.model.DownloadUpdateType.PROGRESS
+ import suwayomi.tachidesk.manga.impl.download.model.DownloadUpdateType.STOPPED
++import suwayomi.tachidesk.manga.impl.util.getChapterDownloadPath
+ import suwayomi.tachidesk.manga.model.table.ChapterTable
++import java.io.File
+ import java.util.concurrent.CopyOnWriteArrayList
+ 
+ class Downloader(
+@@ -47,14 +47,72 @@ class Downloader(
      private val onDownloadFinished: () -> Unit,
  ) {
      companion object {
 -        private const val MAX_RETRIES = 3
 +        const val MAX_RETRIES = 3
 +        const val MAX_ACTIVE_CHAPTERS_PER_SOURCE = 2
++
++        private val pathLockRegistryLock = Any()
++        private val pathLocks = mutableMapOf<String, PathLockEntry>()
++
++        internal class PathLockEntry(
++            val mutex: Mutex = Mutex(),
++            var refCount: Int = 0,
++        )
++
++        internal suspend fun canonicalEffectiveOutputPath(mangaId: Int, chapterId: Int): String {
++            val rawPath = getChapterDownloadPath(mangaId, chapterId)
++            return try {
++                File(rawPath).canonicalPath
++            } catch (_: Exception) {
++                File(rawPath).toPath().toAbsolutePath().normalize().toString()
++            }
++        }
++
++        private fun acquirePathLock(path: String): PathLockEntry =
++            synchronized(pathLockRegistryLock) {
++                val entry = pathLocks.getOrPut(path) { PathLockEntry() }
++                entry.refCount++
++                entry
++            }
++
++        private fun releasePathLock(path: String, entry: PathLockEntry) =
++            synchronized(pathLockRegistryLock) {
++                entry.refCount--
++                if (entry.refCount <= 0) {
++                    pathLocks.remove(path, entry)
++                }
++            }
++
++        internal suspend fun <T> withPathLock(path: String, action: suspend () -> T): T {
++            val entry = acquirePathLock(path)
++            return try {
++                entry.mutex.withLock {
++                    action()
++                }
++            } finally {
++                releasePathLock(path, entry)
++            }
++        }
++
++        internal fun activePathLockCount(): Int =
++            synchronized(pathLockRegistryLock) { pathLocks.size }
++
++        internal fun pathLockRefCount(path: String): Int =
++            synchronized(pathLockRegistryLock) { pathLocks[path]?.refCount ?: 0 }
++
++        internal fun resetPathLocksForTest() =
++            synchronized(pathLockRegistryLock) { pathLocks.clear() }
      }
  
      private val logger = KotlinLogging.logger("${Downloader::class.java.name} source($sourceId)")
@@ -507,7 +571,7 @@ index 9534f521..ed6dff20 100644
  
      class StopDownloadException : Exception("Cancelled download")
  
-@@ -89,42 +91,29 @@ class Downloader(
+@@ -89,42 +147,29 @@ class Downloader(
      ) {
          notify(immediate, type, download)
          currentCoroutineContext().ensureActive()
@@ -561,7 +625,7 @@ index 9534f521..ed6dff20 100644
      private fun finishDownload(
          logger: KLogger,
          download: DownloadQueueItem,
-@@ -135,79 +124,75 @@ class Downloader(
+@@ -135,37 +180,45 @@ class Downloader(
          logger.debug { "finished" }
      }
  
@@ -571,22 +635,28 @@ index 9534f521..ed6dff20 100644
 -                availableSourceDownloads.firstOrNull {
 -                    (it.state == Queued || it.state == Finished || (it.state == Error && it.tries < MAX_RETRIES))
 -                } ?: break
--
--            val logContext = "${logger.name} - downloadChapter($download))"
--            val downloadLogger = KotlinLogging.logger(logContext)
 +    suspend fun runChapter(download: DownloadQueueItem) {
 +        val logContext = "${logger.name} - downloadChapter($download)"
 +        val downloadLogger = KotlinLogging.logger(logContext)
+ 
+-            val logContext = "${logger.name} - downloadChapter($download))"
+-            val downloadLogger = KotlinLogging.logger(logContext)
++        // Skip local source downloads
++        if (sourceId == LocalSource.ID) {
++            finishDownload(downloadLogger, download)
++            return
++        }
  
 -            // Skip local source downloads
 -            if (sourceId == LocalSource.ID) {
 -                finishDownload(downloadLogger, download)
 -                continue
 -            }
--
++        downloadLogger.debug { "start" }
+ 
 -            downloadLogger.debug { "start" }
-+        // Skip local source downloads
-+        if (sourceId == LocalSource.ID) {
++        // handle cases where the downloader was stopped before the finished download could be removed from the queue
++        if (download.state == Finished) {
 +            finishDownload(downloadLogger, download)
 +            return
 +        }
@@ -598,57 +668,36 @@ index 9534f521..ed6dff20 100644
 -                finishDownload(downloadLogger, download)
 -                break
 -            }
-+        downloadLogger.debug { "start" }
++        try {
++            val outputPath = canonicalEffectiveOutputPath(download.mangaId, download.chapterId)
++            withPathLock(outputPath) {
++                if (download !in downloadQueue) {
++                    throw StopDownloadException()
++                }
++                if (!DownloadManager.isAdmitted(download)) {
++                    throw PauseDownloadException()
++                }
++                if (download.state == Finished) {
++                    finishDownload(downloadLogger, download)
++                    return@withPathLock
++                }
  
 -            try {
--                download.state = Downloading
--                step(PROGRESS, download, true)
-+        // handle cases where the downloader was stopped before the finished download could be removed from the queue
-+        if (download.state == Finished) {
-+            finishDownload(downloadLogger, download)
-+            return
-+        }
+                 download.state = Downloading
+                 step(PROGRESS, download, true)
  
 -                val chapter = getChapterDownloadReadyById(download.chapterId)
-+        try {
-+            download.state = Downloading
-+            step(PROGRESS, download, true)
++                val chapter =
++                    DownloaderNetworkBudget.withPermit {
++                        getChapterDownloadReadyById(download.chapterId)
++                    }
  
--                if (chapter.pageCount <= 0) {
--                    throw EmptyChapterException()
-+            val chapter =
-+                DownloaderNetworkBudget.withPermit {
-+                    getChapterDownloadReadyById(download.chapterId)
+                 if (chapter.pageCount <= 0) {
+                     throw EmptyChapterException()
+@@ -185,29 +238,31 @@ class Downloader(
+                     }
                  }
- 
--                download.pageCount = chapter.pageCount
-+            if (chapter.pageCount <= 0) {
-+                throw EmptyChapterException()
-+            }
- 
--                ChapterDownloadHelper.download(download.mangaId, download.chapterId, download, scope) { downloadChapter, immediate ->
--                    step(PROGRESS, downloadChapter, immediate)
--                }
--                download.state = Finished
--                transaction {
--                    ChapterTable.update(
--                        { (ChapterTable.id eq download.chapterId) },
--                    ) {
--                        it[isDownloaded] = true
--                    }
-+            download.pageCount = chapter.pageCount
-+
-+            ChapterDownloadHelper.download(download.mangaId, download.chapterId, download, scope) { downloadChapter, immediate ->
-+                step(PROGRESS, downloadChapter, immediate)
-+            }
-+            download.state = Finished
-+            transaction {
-+                ChapterTable.update(
-+                    { (ChapterTable.id eq download.chapterId) },
-+                ) {
-+                    it[isDownloaded] = true
-                 }
--                finishDownload(downloadLogger, download)
+                 finishDownload(downloadLogger, download)
 -            } catch (e: CancellationException) {
 -                downloadLogger.debug { "Downloader was stopped" }
 -                availableSourceDownloads.filter { it.state == Downloading }.forEach { it.state = Queued }
@@ -658,7 +707,6 @@ index 9534f521..ed6dff20 100644
 -            } catch (e: PauseDownloadException) {
 -                downloadLogger.debug { "paused" }
 +            }
-+            finishDownload(downloadLogger, download)
 +        } catch (e: CancellationException) {
 +            downloadLogger.debug { "Downloader was stopped" }
 +            if (download in downloadQueue && download.state == Downloading) {
@@ -700,7 +748,7 @@ index 9534f521..ed6dff20 100644
      }
 diff --git a/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/DownloaderNetworkBudget.kt b/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/DownloaderNetworkBudget.kt
 new file mode 100644
-index 00000000..46fb0404
+index 0000000..46fb040
 --- /dev/null
 +++ b/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/DownloaderNetworkBudget.kt
 @@ -0,0 +1,41 @@
@@ -746,7 +794,7 @@ index 00000000..46fb0404
 +    }
 +}
 diff --git a/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/fileProvider/ChaptersFilesProvider.kt b/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/fileProvider/ChaptersFilesProvider.kt
-index 0bf56b0f..8b325627 100644
+index 0bf56b0..8b32562 100644
 --- a/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/fileProvider/ChaptersFilesProvider.kt
 +++ b/server/src/main/kotlin/suwayomi/tachidesk/manga/impl/download/fileProvider/ChaptersFilesProvider.kt
 @@ -17,6 +17,7 @@ import org.jetbrains.exposed.v1.jdbc.transactions.transaction
@@ -808,10 +856,10 @@ index 0bf56b0f..8b325627 100644
                  pageProgressJob?.cancel()
 diff --git a/server/src/test/kotlin/suwayomi/tachidesk/manga/impl/download/BoundedParallelDownloaderTest.kt b/server/src/test/kotlin/suwayomi/tachidesk/manga/impl/download/BoundedParallelDownloaderTest.kt
 new file mode 100644
-index 00000000..c5dac7b0
+index 0000000..f487ef5
 --- /dev/null
 +++ b/server/src/test/kotlin/suwayomi/tachidesk/manga/impl/download/BoundedParallelDownloaderTest.kt
-@@ -0,0 +1,910 @@
+@@ -0,0 +1,1113 @@
 +package suwayomi.tachidesk.manga.impl.download
 +
 +/*
@@ -970,6 +1018,7 @@ index 00000000..c5dac7b0
 +        val failPages: Boolean = false,
 +        var onPageStreamStarted: ((chapterId: Int, pageNum: Int) -> Unit)? = null,
 +        var onPageStreamClosed: ((chapterId: Int, pageNum: Int) -> Unit)? = null,
++        var onGetPageListStarted: ((chapterId: Int) -> Unit)? = null,
 +    ) : HttpSource() {
 +        override val supportsLatest: Boolean = false
 +
@@ -1018,10 +1067,13 @@ index 00000000..c5dac7b0
 +            .addInterceptor(interceptor)
 +            .build()
 +
-+        override suspend fun getPageList(chapter: SChapter): List<SPage> =
-+            (0 until pagesPerChapter).map { i ->
++        override suspend fun getPageList(chapter: SChapter): List<SPage> {
++            val chapterId = chapter.url.substringAfterLast("/").toIntOrNull() ?: 0
++            onGetPageListStarted?.invoke(chapterId)
++            return (0 until pagesPerChapter).map { i ->
 +                SPage(i, "$baseUrl${chapter.url}/page/$i", "$baseUrl${chapter.url}/page/$i.png")
 +            }
++        }
 +
 +        override fun popularMangaRequest(page: Int): Request = throw UnsupportedOperationException()
 +        override fun popularMangaParse(response: Response): MangasPage = throw UnsupportedOperationException()
@@ -1133,6 +1185,7 @@ index 00000000..c5dac7b0
 +        globalActiveStreams.set(0)
 +        globalPeakStreams.set(0)
 +        DownloaderNetworkBudget.resetForTest()
++        Downloader.resetPathLocksForTest()
 +    }
 +
 +    @AfterEach
@@ -1154,6 +1207,7 @@ index 00000000..c5dac7b0
 +        DownloadManager.maxGlobalActiveOverride = null
 +        serverConfig.maxSourcesInParallel.value = 6
 +        DownloaderNetworkBudget.resetForTest()
++        Downloader.resetPathLocksForTest()
 +    }
 +
 +    @Test
@@ -1719,6 +1773,203 @@ index 00000000..c5dac7b0
 +            releaseStreams.countDown()
 +            DownloadManager.maxChaptersPerSourceOverride = null
 +            DownloadManager.clear()
++        }
++    }
++
++    @Test
++    fun testConcurrentOutputCollisionSerializesAndPreservesOutputIntegrity() = runBlocking {
++        val source1Id = 9801L
++        val source2Id = 9802L
++
++        val manga1Id = createManga("CollisionManga", source1Id)
++        val ch1 = createChapter(manga1Id, 1, "Chapter 1")
++        val ch2 = createChapter(manga1Id, 2, "Chapter 1")
++
++        val manga2Id = createManga("DistinctManga", source2Id)
++        val ch3 = createChapter(manga2Id, 1, "Chapter 1")
++
++        val path1 = Downloader.canonicalEffectiveOutputPath(manga1Id, ch1)
++        val path2 = Downloader.canonicalEffectiveOutputPath(manga1Id, ch2)
++        val path3 = Downloader.canonicalEffectiveOutputPath(manga2Id, ch3)
++
++        assertEquals(path1, path2, "Both chapter IDs must resolve to the identical effective output path")
++        assertTrue(path1 != path3, "Distinct chapter must have a different effective output path")
++
++        val ch1StreamOpen = CountDownLatch(1)
++        val releaseCh1 = CountDownLatch(1)
++        val ch2Prepared = AtomicBoolean(false)
++        val ch2StreamStarted = AtomicBoolean(false)
++        val ch3Completed = CountDownLatch(1)
++
++        val fakeSource1 = FakeHttpSource(
++            id = source1Id,
++            pagesPerChapter = 2,
++            pageStreamDelayMs = 20,
++            onPageStreamStarted = { chapterId, pageNum ->
++                if (chapterId == ch1 && pageNum == 0) {
++                    ch1StreamOpen.countDown()
++                    releaseCh1.await(5, TimeUnit.SECONDS)
++                }
++                if (chapterId == ch2) {
++                    ch2StreamStarted.set(true)
++                }
++            },
++        )
++        fakeSource1.onGetPageListStarted = { chapterId ->
++            if (chapterId == ch2) {
++                ch2Prepared.set(true)
++            }
++        }
++        registerFakeSource(fakeSource1)
++
++        val fakeSource2 = FakeHttpSource(
++            id = source2Id,
++            pagesPerChapter = 2,
++            pageStreamDelayMs = 20,
++            onPageStreamClosed = { chapterId, pageNum ->
++                if (chapterId == ch3 && pageNum == 1) {
++                    ch3Completed.countDown()
++                }
++            },
++        )
++        registerFakeSource(fakeSource2)
++
++        try {
++            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2, ch3)))
++
++            withTimeout(5000) {
++                while (DownloadManager.activeClaims.size < 3) {
++                    delay(20)
++                }
++            }
++            assertTrue(DownloadManager.activeClaims.containsKey(ch1), "Chapter 1 claim must be active")
++            assertTrue(DownloadManager.activeClaims.containsKey(ch2), "Chapter 2 claim must be active")
++            assertTrue(DownloadManager.activeClaims.containsKey(ch3), "Chapter 3 claim must be active")
++
++            assertTrue(ch1StreamOpen.await(5, TimeUnit.SECONDS), "Chapter 1 must begin streaming and hold path lock")
++
++            // While Chapter 1 holds the lock:
++            // 1) Chapter 2 cannot enter preparation or write
++            assertFalse(ch2Prepared.get(), "Chapter 2 must not enter preparation while Chapter 1 holds the output path lock")
++            assertFalse(ch2StreamStarted.get(), "Chapter 2 must not enter stream write while Chapter 1 holds the output path lock")
++            assertEquals(2, Downloader.pathLockRefCount(path1), "Path lock refCount must be 2 while Chapter 2 waits")
++
++            // 2) Distinct-path job Chapter 3 must progress and complete
++            assertTrue(ch3Completed.await(5, TimeUnit.SECONDS), "Distinct-path Chapter 3 must progress while path 1 is held")
++            withTimeout(5000) {
++                while (!isChapterDownloaded(ch3)) {
++                    delay(20)
++                }
++            }
++            assertTrue(isChapterDownloaded(ch3), "Chapter 3 must be marked downloaded")
++            verifyChapterOutput(manga2Id, ch3, 2)
++
++            // Releasing Chapter 1 permits Chapter 2 to proceed
++            releaseCh1.countDown()
++
++            withTimeout(10000) {
++                while (true) {
++                    if (isChapterDownloaded(ch1) && isChapterDownloaded(ch2)) {
++                        break
++                    }
++                    delay(40)
++                }
++            }
++
++            assertTrue(isChapterDownloaded(ch1), "Chapter 1 must finish successfully")
++            assertTrue(isChapterDownloaded(ch2), "Chapter 2 must finish successfully")
++            assertTrue(ch2Prepared.get(), "Chapter 2 must have entered preparation after lock release")
++
++            verifyChapterOutput(manga1Id, ch1, 2)
++            verifyChapterOutput(manga1Id, ch2, 2)
++
++            withTimeout(5000) {
++                while (DownloadManager.activeClaims.isNotEmpty()) {
++                    delay(20)
++                }
++            }
++
++            assertTrue(DownloadManager.activeClaims.isEmpty(), "All active claims must be settled")
++            assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "All network permits must be released")
++            assertEquals(0, Downloader.activePathLockCount(), "All path locks must be released and registry cleaned up")
++        } finally {
++            releaseCh1.countDown()
++        }
++    }
++
++    @Test
++    fun testCollisionCancellationWhileWaitingCleansUpRegistry() = runBlocking {
++        val sourceId = 9803L
++        val mangaId = createManga("CancelCollisionManga", sourceId)
++        val ch1 = createChapter(mangaId, 1, "Chapter 1")
++        val ch2 = createChapter(mangaId, 2, "Chapter 1")
++
++        val sharedPath = Downloader.canonicalEffectiveOutputPath(mangaId, ch1)
++        assertEquals(sharedPath, Downloader.canonicalEffectiveOutputPath(mangaId, ch2))
++
++        val ch1Streaming = CountDownLatch(1)
++        val releaseCh1 = CountDownLatch(1)
++
++        val fakeSource = FakeHttpSource(
++            id = sourceId,
++            pagesPerChapter = 2,
++            pageStreamDelayMs = 20,
++            onPageStreamStarted = { chapterId, pageNum ->
++                if (chapterId == ch1 && pageNum == 0) {
++                    ch1Streaming.countDown()
++                    releaseCh1.await(5, TimeUnit.SECONDS)
++                }
++            },
++        )
++        registerFakeSource(fakeSource)
++
++        try {
++            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2)))
++
++            withTimeout(5000) {
++                while (DownloadManager.activeClaims.size < 2) {
++                    delay(20)
++                }
++            }
++
++            assertTrue(ch1Streaming.await(5, TimeUnit.SECONDS), "Chapter 1 must start streaming and hold path lock")
++            assertEquals(2, Downloader.pathLockRefCount(sharedPath), "Path lock refCount must be 2 while ch2 waits")
++
++            // Cancel Chapter 2 while waiting for path lock
++            DownloadManager.stopChapter(ch2)
++
++            withTimeout(5000) {
++                while (DownloadManager.activeClaims.containsKey(ch2)) {
++                    delay(20)
++                }
++            }
++
++            assertFalse(DownloadManager.activeClaims.containsKey(ch2), "Chapter 2 claim must be removed after cancellation")
++            assertEquals(1, Downloader.pathLockRefCount(sharedPath), "Path lock refCount must drop to 1 after ch2 cancellation while waiting")
++
++            releaseCh1.countDown()
++
++            withTimeout(5000) {
++                while (!isChapterDownloaded(ch1)) {
++                    delay(20)
++                }
++            }
++
++            assertTrue(isChapterDownloaded(ch1), "Chapter 1 must finish successfully")
++            assertFalse(isChapterDownloaded(ch2), "Cancelled Chapter 2 must not be downloaded")
++            verifyChapterOutput(mangaId, ch1, 2)
++
++            withTimeout(5000) {
++                while (DownloadManager.activeClaims.isNotEmpty()) {
++                    delay(20)
++                }
++            }
++
++            assertEquals(0, Downloader.pathLockRefCount(sharedPath), "Path lock refCount must be 0 after ch1 finishes")
++            assertEquals(0, Downloader.activePathLockCount(), "Registry must have 0 active path locks after cancellation unwinding")
++            assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "All network permits released")
++        } finally {
++            releaseCh1.countDown()
 +        }
 +    }
 +}

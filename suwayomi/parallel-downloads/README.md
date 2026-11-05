@@ -20,6 +20,14 @@ Pages remain serial. Reorder revokes work at a safe checkpoint without charging 
 retry; stop settles claims and returns permits. Existing queue persistence, paths,
 image clients and archive behavior remain in use.
 
+Concurrent output collision preservation: chapters resolving to the identical
+canonical effective output path (from source display name, manga title, scanlator, and chapter name)
+are mutually excluded across their full lifecycle (preparation through archive finalization)
+via a reference-counted keyed Mutex registry owned by `Downloader`. Waiting chapters hold
+neither admission locks nor network permits. Distinct output paths continue in parallel.
+Cancellation while waiting safely decrements the reference count and prunes the registry
+without leaving orphan path-lock entries or leaking Mutex instances.
+
 ## Build inputs and checks
 
 The verified host toolchain is OpenJDK 27.0.1.0.3, Gradle wrapper 9.7.1 and Kotlin
@@ -44,8 +52,10 @@ ProductBuildType=Stable GRADLE_USER_HOME=/path/to/pinned/private-gradle-cache \
   :server:shadowJar
 ```
 
-Root's focused gate passed 18 tests: four SafePath, one PageTest and thirteen
-downloader tests. Tests use a 384 MiB heap and production JVM options; the larger
+Root's previous focused gate passed 18 tests: four SafePath, one PageTest and thirteen
+downloader tests. Two new regression tests bring downloader tests to 15 (20 focused tests total):
+verifying output collision serialization and output integrity, and proving cancellation while
+waiting cleans up the registry without leaked locks or references. Tests use a 384 MiB heap and production JVM options; the larger
 heap in the command belongs to the Gradle build process. Tests gate actual response
 streams, exact page bytes and names, cancellation settlement, quick dequeue/requeue, stable-ID deduplication, clear/enqueue settlement,
 reorder, retries, source admission and both independent concurrency bounds. The
@@ -80,3 +90,11 @@ The candidate must exist at `.work/packaged-candidate.jar`. Include
 file adds the Java origin check and places the packaged JAR before the configured
 test runtime. It resolves the original classpath lazily in the task context.
 This host gate does not replace the paired resource or Android acceptance gates.
+
+## Deferred verification
+
+Verification of the updated shadow JAR and packaged runtime is deferred pending release
+of the shared Gradle build cache by the concurrent resource worker. The SHA-256 pins for
+mirrored sources and `bounded-chapters.patch` are updated; `verified_compiled_jar_sha256`
+is set to null pending clean root recompilation and focused suite verification (15 downloader
+tests, SafePath, PageTest, and PackagedClassOriginTest).

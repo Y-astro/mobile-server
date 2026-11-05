@@ -14,6 +14,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.jetbrains.exposed.v1.jdbc.update
@@ -31,7 +33,9 @@ import suwayomi.tachidesk.manga.impl.download.model.DownloadUpdateType.FINISHED
 import suwayomi.tachidesk.manga.impl.download.model.DownloadUpdateType.PAUSED
 import suwayomi.tachidesk.manga.impl.download.model.DownloadUpdateType.PROGRESS
 import suwayomi.tachidesk.manga.impl.download.model.DownloadUpdateType.STOPPED
+import suwayomi.tachidesk.manga.impl.util.getChapterDownloadPath
 import suwayomi.tachidesk.manga.model.table.ChapterTable
+import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 
 class Downloader(
@@ -45,6 +49,58 @@ class Downloader(
     companion object {
         const val MAX_RETRIES = 3
         const val MAX_ACTIVE_CHAPTERS_PER_SOURCE = 2
+
+        private val pathLockRegistryLock = Any()
+        private val pathLocks = mutableMapOf<String, PathLockEntry>()
+
+        internal class PathLockEntry(
+            val mutex: Mutex = Mutex(),
+            var refCount: Int = 0,
+        )
+
+        internal suspend fun canonicalEffectiveOutputPath(mangaId: Int, chapterId: Int): String {
+            val rawPath = getChapterDownloadPath(mangaId, chapterId)
+            return try {
+                File(rawPath).canonicalPath
+            } catch (_: Exception) {
+                File(rawPath).toPath().toAbsolutePath().normalize().toString()
+            }
+        }
+
+        private fun acquirePathLock(path: String): PathLockEntry =
+            synchronized(pathLockRegistryLock) {
+                val entry = pathLocks.getOrPut(path) { PathLockEntry() }
+                entry.refCount++
+                entry
+            }
+
+        private fun releasePathLock(path: String, entry: PathLockEntry) =
+            synchronized(pathLockRegistryLock) {
+                entry.refCount--
+                if (entry.refCount <= 0) {
+                    pathLocks.remove(path, entry)
+                }
+            }
+
+        internal suspend fun <T> withPathLock(path: String, action: suspend () -> T): T {
+            val entry = acquirePathLock(path)
+            return try {
+                entry.mutex.withLock {
+                    action()
+                }
+            } finally {
+                releasePathLock(path, entry)
+            }
+        }
+
+        internal fun activePathLockCount(): Int =
+            synchronized(pathLockRegistryLock) { pathLocks.size }
+
+        internal fun pathLockRefCount(path: String): Int =
+            synchronized(pathLockRegistryLock) { pathLocks[path]?.refCount ?: 0 }
+
+        internal fun resetPathLocksForTest() =
+            synchronized(pathLockRegistryLock) { pathLocks.clear() }
     }
 
     private val logger = KotlinLogging.logger("${Downloader::class.java.name} source($sourceId)")
@@ -143,32 +199,46 @@ class Downloader(
         }
 
         try {
-            download.state = Downloading
-            step(PROGRESS, download, true)
-
-            val chapter =
-                DownloaderNetworkBudget.withPermit {
-                    getChapterDownloadReadyById(download.chapterId)
+            val outputPath = canonicalEffectiveOutputPath(download.mangaId, download.chapterId)
+            withPathLock(outputPath) {
+                if (download !in downloadQueue) {
+                    throw StopDownloadException()
+                }
+                if (!DownloadManager.isAdmitted(download)) {
+                    throw PauseDownloadException()
+                }
+                if (download.state == Finished) {
+                    finishDownload(downloadLogger, download)
+                    return@withPathLock
                 }
 
-            if (chapter.pageCount <= 0) {
-                throw EmptyChapterException()
-            }
+                download.state = Downloading
+                step(PROGRESS, download, true)
 
-            download.pageCount = chapter.pageCount
+                val chapter =
+                    DownloaderNetworkBudget.withPermit {
+                        getChapterDownloadReadyById(download.chapterId)
+                    }
 
-            ChapterDownloadHelper.download(download.mangaId, download.chapterId, download, scope) { downloadChapter, immediate ->
-                step(PROGRESS, downloadChapter, immediate)
-            }
-            download.state = Finished
-            transaction {
-                ChapterTable.update(
-                    { (ChapterTable.id eq download.chapterId) },
-                ) {
-                    it[isDownloaded] = true
+                if (chapter.pageCount <= 0) {
+                    throw EmptyChapterException()
                 }
+
+                download.pageCount = chapter.pageCount
+
+                ChapterDownloadHelper.download(download.mangaId, download.chapterId, download, scope) { downloadChapter, immediate ->
+                    step(PROGRESS, downloadChapter, immediate)
+                }
+                download.state = Finished
+                transaction {
+                    ChapterTable.update(
+                        { (ChapterTable.id eq download.chapterId) },
+                    ) {
+                        it[isDownloaded] = true
+                    }
+                }
+                finishDownload(downloadLogger, download)
             }
-            finishDownload(downloadLogger, download)
         } catch (e: CancellationException) {
             downloadLogger.debug { "Downloader was stopped" }
             if (download in downloadQueue && download.state == Downloading) {
