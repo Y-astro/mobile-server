@@ -949,7 +949,7 @@ class PairedResourceProofTest : ApplicationTest() {
         sb.append("> [!NOTE]\n")
         sb.append("> This resource proof is a HOST-ONLY simulation using synthetic latency and deterministic payloads.\n")
         sb.append("> Fake-latency throughput does not represent actual Android device or WAN throughput.\n")
-        sb.append("> Phone headroom, battery, and thermals must be validated separately on physical hardware prior to live activation.\n")
+        sb.append("> Check phone memory and native startup separately. The operator accepts temporary heating and battery impact for this release.\n")
 
         return sb.toString()
     }

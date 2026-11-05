@@ -11,7 +11,7 @@ export GRADLE_USER_HOME="/home/astro/server-audit/2026-11-03/suwayomi-download-p
 
 UPSTREAM_DIR="/home/astro/server-audit/2026-11-03/suwayomi-download-parallel/.work/suwayomi-upstream"
 CANDIDATE_JAR="${1:-${PROOF_ROOT}/.work/packaged-candidate.jar}"
-EXPECTED_SHA="${2:-${CANDIDATE_PIN:-d4ecb614f2766ee9d7f940bdfb78c7459516dbcfbc4f2ff9d8754803b1455a45}}"
+EXPECTED_SHA="${2:-${CANDIDATE_PIN:-e85adb62d6e65190984e1acc3d35d552402c9915067325744c0a9cd6ed461139}}"
 PROOF_TMP="${PROOF_ROOT}/.work/resource-proof-tmp"
 
 if [ ! -f "${CANDIDATE_JAR}" ]; then

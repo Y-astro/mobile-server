@@ -15,5 +15,6 @@
     "kotlin": "2.4.10",
     "target_java": 21,
     "test_heap_mib": 384
-  }
+  },
+  "verified_packaged_jar_sha256": "e85adb62d6e65190984e1acc3d35d552402c9915067325744c0a9cd6ed461139"
 }

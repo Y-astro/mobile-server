@@ -107,5 +107,6 @@ reference accounting fails that actual preparation/write assertion.
 
 The compiled snapshot and complete patch passed the 20-test focused gate and
 21-test preserved-base runtime gate under the configured `-Xmx384m` limit. The
-source pin records the verified compilation input. The fresh packaged candidate
-still requires its paired resource gate and native phone activation acceptance.
+source pin records the verified compilation input. The packaged candidate passed its 16-trial paired resource gate and native phone
+activation acceptance. See `docs/SUWAYOMI-PARALLEL-RELEASE.md` for exact artifact,
+remaining limits, and retained rollback.
