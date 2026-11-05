@@ -126,6 +126,189 @@ class WallpaperLibraryUnitTests(unittest.TestCase):
         with self.assertRaises(WallpaperNotFoundError):
             lib.get_derivative("a" * 64, "original.png")
 
+    def test_bool_dimensions_rejected(self):
+        w_id = "a" * 64
+        disp_dir = self.lib_path / "display"
+        disp_dir.mkdir(parents=True)
+        thumb_dir = self.lib_path / "thumbnails"
+        thumb_dir.mkdir(parents=True)
+        (disp_dir / f"{w_id}.webp").write_bytes(b"disp")
+        (thumb_dir / f"{w_id}.webp").write_bytes(b"thumb")
+
+        manifest = {
+            "version": 1,
+            "default_id": w_id,
+            "wallpapers": [
+                {
+                    "id": w_id,
+                    "name": "test.png",
+                    "width": True,  # bool should be rejected
+                    "height": 1080,
+                    "display": {"path": f"display/{w_id}.webp", "sha256": "b" * 64, "bytes": 4},
+                    "thumbnail": {"path": f"thumbnails/{w_id}.webp", "sha256": "c" * 64, "bytes": 5},
+                }
+            ],
+        }
+        (self.lib_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        lib = WallpaperLibrary(self.lib_path)
+        with self.assertRaises(CorruptLibraryError):
+            lib.get_public_list()
+
+    def test_duplicate_id_and_name_rejected(self):
+        w_id = "a" * 64
+        disp_dir = self.lib_path / "display"
+        disp_dir.mkdir(parents=True)
+        thumb_dir = self.lib_path / "thumbnails"
+        thumb_dir.mkdir(parents=True)
+        (disp_dir / f"{w_id}.webp").write_bytes(b"disp")
+        (thumb_dir / f"{w_id}.webp").write_bytes(b"thumb")
+
+        # Duplicate ID
+        manifest = {
+            "version": 1,
+            "default_id": w_id,
+            "wallpapers": [
+                {
+                    "id": w_id,
+                    "name": "test1.png",
+                    "width": 1920,
+                    "height": 1080,
+                    "display": {"path": f"display/{w_id}.webp", "sha256": "b" * 64, "bytes": 4},
+                    "thumbnail": {"path": f"thumbnails/{w_id}.webp", "sha256": "c" * 64, "bytes": 5},
+                },
+                {
+                    "id": w_id,
+                    "name": "test2.png",
+                    "width": 1920,
+                    "height": 1080,
+                    "display": {"path": f"display/{w_id}.webp", "sha256": "b" * 64, "bytes": 4},
+                    "thumbnail": {"path": f"thumbnails/{w_id}.webp", "sha256": "c" * 64, "bytes": 5},
+                },
+            ],
+        }
+        (self.lib_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        lib = WallpaperLibrary(self.lib_path)
+        with self.assertRaises(CorruptLibraryError):
+            lib.get_public_list()
+
+    def test_default_id_not_in_manifest_rejected(self):
+        w_id = "a" * 64
+        disp_dir = self.lib_path / "display"
+        disp_dir.mkdir(parents=True)
+        thumb_dir = self.lib_path / "thumbnails"
+        thumb_dir.mkdir(parents=True)
+        (disp_dir / f"{w_id}.webp").write_bytes(b"disp")
+        (thumb_dir / f"{w_id}.webp").write_bytes(b"thumb")
+
+        manifest = {
+            "version": 1,
+            "default_id": "f" * 64,  # not in wallpapers
+            "wallpapers": [
+                {
+                    "id": w_id,
+                    "name": "test.png",
+                    "width": 1920,
+                    "height": 1080,
+                    "display": {"path": f"display/{w_id}.webp", "sha256": "b" * 64, "bytes": 4},
+                    "thumbnail": {"path": f"thumbnails/{w_id}.webp", "sha256": "c" * 64, "bytes": 5},
+                }
+            ],
+        }
+        (self.lib_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        lib = WallpaperLibrary(self.lib_path)
+        with self.assertRaises(CorruptLibraryError):
+            lib.get_public_list()
+
+    def test_mismatched_derivative_bytes_rejected(self):
+        w_id = "a" * 64
+        disp_dir = self.lib_path / "display"
+        disp_dir.mkdir(parents=True)
+        thumb_dir = self.lib_path / "thumbnails"
+        thumb_dir.mkdir(parents=True)
+        (disp_dir / f"{w_id}.webp").write_bytes(b"disp")
+        (thumb_dir / f"{w_id}.webp").write_bytes(b"thumb")
+
+        manifest = {
+            "version": 1,
+            "default_id": w_id,
+            "wallpapers": [
+                {
+                    "id": w_id,
+                    "name": "test.png",
+                    "width": 1920,
+                    "height": 1080,
+                    "display": {"path": f"display/{w_id}.webp", "sha256": "b" * 64, "bytes": 999},  # size mismatch
+                    "thumbnail": {"path": f"thumbnails/{w_id}.webp", "sha256": "c" * 64, "bytes": 5},
+                }
+            ],
+        }
+        (self.lib_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        lib = WallpaperLibrary(self.lib_path)
+        with self.assertRaises(CorruptLibraryError):
+            lib.get_derivative(w_id, "display.webp")
+
+    def test_manifest_replacement_equal_size_mtime_detected(self):
+        w_id1 = "1" * 64
+        w_id2 = "2" * 64
+        disp_dir = self.lib_path / "display"
+        disp_dir.mkdir(parents=True)
+        thumb_dir = self.lib_path / "thumbnails"
+        thumb_dir.mkdir(parents=True)
+        (disp_dir / f"{w_id1}.webp").write_bytes(b"disp1")
+        (thumb_dir / f"{w_id1}.webp").write_bytes(b"thmb1")
+        (disp_dir / f"{w_id2}.webp").write_bytes(b"disp2")
+        (thumb_dir / f"{w_id2}.webp").write_bytes(b"thmb2")
+
+        # Manifest 1 and Manifest 2 have identical string length
+        manifest1 = {
+            "version": 1,
+            "default_id": w_id1,
+            "wallpapers": [
+                {
+                    "id": w_id1,
+                    "name": "imgA.png",
+                    "width": 100,
+                    "height": 100,
+                    "display": {"path": f"display/{w_id1}.webp", "sha256": "b" * 64, "bytes": 5},
+                    "thumbnail": {"path": f"thumbnails/{w_id1}.webp", "sha256": "c" * 64, "bytes": 5},
+                }
+            ],
+        }
+        manifest2 = {
+            "version": 1,
+            "default_id": w_id2,
+            "wallpapers": [
+                {
+                    "id": w_id2,
+                    "name": "imgB.png",
+                    "width": 100,
+                    "height": 100,
+                    "display": {"path": f"display/{w_id2}.webp", "sha256": "d" * 64, "bytes": 5},
+                    "thumbnail": {"path": f"thumbnails/{w_id2}.webp", "sha256": "e" * 64, "bytes": 5},
+                }
+            ],
+        }
+        txt1 = json.dumps(manifest1)
+        txt2 = json.dumps(manifest2)
+        self.assertEqual(len(txt1), len(txt2))
+
+        m_file = self.lib_path / "manifest.json"
+        m_file.write_text(txt1, encoding="utf-8")
+        lib = WallpaperLibrary(self.lib_path)
+        pub1 = lib.get_public_list()
+        self.assertEqual(pub1["default_id"], w_id1)
+
+        # Atomic replacement: create temp and rename over manifest.json with same mtime
+        st1 = m_file.stat()
+        tmp_m = self.lib_path / "manifest.tmp"
+        tmp_m.write_text(txt2, encoding="utf-8")
+        os.utime(tmp_m, (st1.st_atime, st1.st_mtime))
+        tmp_m.rename(m_file)
+
+        # Inode / ctime changes even if size and mtime are equal
+        pub2 = lib.get_public_list()
+        self.assertEqual(pub2["default_id"], w_id2)
+
 
 class WallpaperToolsUnitTests(unittest.TestCase):
     def setUp(self):
@@ -212,6 +395,93 @@ class WallpaperToolsUnitTests(unittest.TestCase):
             pub_ok, pub_msg = publish_library(self.dest_dir, target_dir)
             self.assertTrue(pub_ok)
 
+    def test_unknown_extra_regular_file_rejected_by_verifier(self):
+        self._create_synthetic_image("test.png", (100, 100), "green")
+        build_library(src_dir=self.src_dir, dest_dir=self.dest_dir, inventory_path=None)
+        # Add undeclared regular file
+        extra_file = self.dest_dir / "extra.txt"
+        extra_file.write_text("rogue", encoding="utf-8")
+        ok, msg = verify_library(self.dest_dir)
+        self.assertFalse(ok)
+        self.assertIn("Unexpected file in library", msg)
+
+    def test_undeclared_symlink_rejected_by_verifier(self):
+        self._create_synthetic_image("test.png", (100, 100), "green")
+        build_library(src_dir=self.src_dir, dest_dir=self.dest_dir, inventory_path=None)
+        # Add undeclared symlink inside library
+        sentinel = self.root / "outside_sentinel.txt"
+        sentinel.write_text("secret", encoding="utf-8")
+        link_target = self.dest_dir / "sentinel_link.txt"
+        os.symlink(sentinel, link_target)
+        ok, msg = verify_library(self.dest_dir)
+        self.assertFalse(ok)
+        self.assertIn("Undeclared symlink in library", msg)
+
+    def test_parent_escape_original_path_rejected(self):
+        self._create_synthetic_image("test.png", (100, 100), "green")
+        build_library(src_dir=self.src_dir, dest_dir=self.dest_dir, inventory_path=None)
+        # Tamper manifest with ../ escape
+        manifest_path = self.dest_dir / "manifest.json"
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        data["wallpapers"][0]["original"]["path"] = "../outside.txt"
+        manifest_path.write_text(json.dumps(data), encoding="utf-8")
+        ok, msg = verify_library(self.dest_dir)
+        self.assertFalse(ok)
+        self.assertIn("canonical", msg)
+
+    def test_absolute_path_rejected(self):
+        self._create_synthetic_image("test.png", (100, 100), "green")
+        build_library(src_dir=self.src_dir, dest_dir=self.dest_dir, inventory_path=None)
+        # Tamper manifest with absolute path
+        manifest_path = self.dest_dir / "manifest.json"
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        data["wallpapers"][0]["original"]["path"] = "/etc/passwd"
+        manifest_path.write_text(json.dumps(data), encoding="utf-8")
+        ok, msg = verify_library(self.dest_dir)
+        self.assertFalse(ok)
+        self.assertIn("canonical", msg)
+
+    def test_parent_dir_symlink_rejected(self):
+        self._create_synthetic_image("test.png", (100, 100), "green")
+        build_library(src_dir=self.src_dir, dest_dir=self.dest_dir, inventory_path=None)
+        # Replace thumbnails dir with symlink to outside
+        outside_dir = self.root / "outside_thumbnails"
+        outside_dir.mkdir()
+        shutil.rmtree(self.dest_dir / "thumbnails")
+        os.symlink(outside_dir, self.dest_dir / "thumbnails")
+        ok, msg = verify_library(self.dest_dir)
+        self.assertFalse(ok)
+        self.assertIn("symlink", msg)
+
+    def test_existing_temp_staging_preserved(self):
+        # Create a pre-existing predictable staging folder with a sentinel file
+        sentinel_dir = self.root / "dest.staging"
+        sentinel_dir.mkdir()
+        sentinel_file = sentinel_dir / "keep.txt"
+        sentinel_file.write_text("do not delete", encoding="utf-8")
+
+        self._create_synthetic_image("test.png", (100, 100), "green")
+        build_library(src_dir=self.src_dir, dest_dir=self.dest_dir, inventory_path=None)
+
+        # Pre-existing staging sentinel must be completely untouched
+        self.assertTrue(sentinel_file.exists())
+        self.assertEqual(sentinel_file.read_text(encoding="utf-8"), "do not delete")
+
+    def test_conflicting_symlink_destination_preserved(self):
+        self._create_synthetic_image("test.png", (100, 100), "green")
+        build_library(src_dir=self.src_dir, dest_dir=self.dest_dir, inventory_path=None)
+
+        # Create a symlink as target_dir
+        outside_dest = self.root / "outside_dest"
+        outside_dest.mkdir()
+        symlink_target = self.root / "phone_symlink_dest"
+        os.symlink(outside_dest, symlink_target)
+
+        pub_ok, msg = publish_library(self.dest_dir, symlink_target)
+        self.assertFalse(pub_ok)
+        self.assertIn("symlink", msg)
+        self.assertTrue(symlink_target.is_symlink())
+
 
 class WallpaperHTTPIntegrationTests(unittest.TestCase):
     @classmethod
@@ -262,6 +532,8 @@ class WallpaperHTTPIntegrationTests(unittest.TestCase):
         cls.temp.cleanup()
         if cls.oldhome is not None:
             os.environ["HOME"] = cls.oldhome
+        else:
+            os.environ.pop("HOME", None)
 
     def request(self, method, path, user=None, body=None, headers=None):
         c = HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
@@ -327,6 +599,7 @@ class WallpaperHTTPIntegrationTests(unittest.TestCase):
         (thumb_dir / f"{w_id}.webp").write_bytes(fake_webp)
         (orig_dir / "sample.png").write_bytes(b"origpng")
 
+        fake_sha = "0" * 64
         manifest = {
             "version": 1,
             "default_id": w_id,
@@ -336,9 +609,9 @@ class WallpaperHTTPIntegrationTests(unittest.TestCase):
                     "name": "sample.png",
                     "width": 1920,
                     "height": 1080,
-                    "original": {"path": "originals/sample.png", "sha256": "fake", "bytes": 7},
-                    "display": {"path": f"display/{w_id}.webp", "sha256": "fake", "bytes": len(fake_webp)},
-                    "thumbnail": {"path": f"thumbnails/{w_id}.webp", "sha256": "fake", "bytes": len(fake_webp)},
+                    "original": {"path": "originals/sample.png", "sha256": w_id, "bytes": 7},
+                    "display": {"path": f"display/{w_id}.webp", "sha256": fake_sha, "bytes": len(fake_webp)},
+                    "thumbnail": {"path": f"thumbnails/{w_id}.webp", "sha256": fake_sha, "bytes": len(fake_webp)},
                 }
             ],
         }

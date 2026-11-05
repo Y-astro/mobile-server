@@ -34,13 +34,17 @@ python3 tools/prepare_wallpapers.py publish <STAGING_DIR> [TARGET_DIR]
 
 1. Transfer staged files to phone staging:
    ```bash
-   rsync -avz --checksum .work/wallpapers-library/ u0_a505@100.75.159.53:wallpapers-staging/
+   rsync -avz --checksum -e 'ssh -p 8022' .work/wallpapers-library/ u0_a505@100.75.159.53:wallpapers-staging/
    ```
-2. Verify staging on phone:
+2. Copy reviewed `tools/prepare_wallpapers.py` tool to phone:
    ```bash
-   ssh u0_a505@100.75.159.53 "python3 tools/prepare_wallpapers.py verify ~/wallpapers-staging"
+   scp -P 8022 tools/prepare_wallpapers.py u0_a505@100.75.159.53:prepare_wallpapers.py
    ```
-3. Publish on phone:
+3. Verify staging on phone:
    ```bash
-   ssh u0_a505@100.75.159.53 "python3 tools/prepare_wallpapers.py publish ~/wallpapers-staging ~/wallpapers"
+   ssh -p 8022 u0_a505@100.75.159.53 "python3 prepare_wallpapers.py verify ~/wallpapers-staging"
+   ```
+4. Publish on phone:
+   ```bash
+   ssh -p 8022 u0_a505@100.75.159.53 "python3 prepare_wallpapers.py publish ~/wallpapers-staging ~/wallpapers"
    ```

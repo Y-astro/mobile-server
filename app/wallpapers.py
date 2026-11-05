@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ALLOWED_DERIVATIVES = {"thumbnail.webp", "display.webp"}
@@ -16,6 +16,8 @@ DERIVATIVE_DIRS = {
     "thumbnail.webp": "thumbnails",
     "display.webp": "display",
 }
+MAX_MANIFEST_BYTES = 2 * 1024 * 1024  # 2 MiB
+MAX_DERIVATIVE_BYTES = 20 * 1024 * 1024  # 20 MiB
 
 
 class WallpaperError(Exception):
@@ -33,17 +35,15 @@ class WallpaperNotFoundError(WallpaperError):
     pass
 
 
-def get_default_library_path() -> Path:
-    env_path = os.environ.get("WALLPAPERS_DIR")
-    if env_path:
-        return Path(env_path)
-    return Path(os.path.expanduser("~/wallpapers"))
+def _is_valid_pos_int(val: Any) -> bool:
+    return type(val) is int and not isinstance(val, bool) and val > 0
 
 
 class WallpaperLibrary:
     def __init__(self, root_dir: Optional[Path] = None):
         self._custom_root_dir = Path(root_dir) if root_dir is not None else None
-        self._cached_stat: Optional[Tuple[int, int]] = None
+        # Cache key binds to canonical root + device + inode + ctime_ns + mtime_ns + size
+        self._cached_stat: Optional[Tuple[str, int, int, int, int, int]] = None
         self._cached_manifest: Optional[Dict[str, Any]] = None
         self._cached_public_list: Optional[Dict[str, Any]] = None
 
@@ -51,21 +51,34 @@ class WallpaperLibrary:
     def root_dir(self) -> Path:
         if self._custom_root_dir is not None:
             return self._custom_root_dir
-        return get_default_library_path()
+        return Path(os.path.expanduser("~/wallpapers"))
 
     def _read_and_validate_manifest(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        if self.root_dir.is_symlink() or not self.root_dir.is_dir():
+            empty_payload = {"version": 1, "default_id": None, "wallpapers": []}
+            return {}, empty_payload
+
+        resolved_root = self.root_dir.resolve()
         manifest_file = self.root_dir / "manifest.json"
-        if not self.root_dir.is_dir() or not manifest_file.is_file():
+        if manifest_file.is_symlink() or not manifest_file.is_file():
             empty_payload = {"version": 1, "default_id": None, "wallpapers": []}
             return {}, empty_payload
 
         try:
             st = manifest_file.stat()
-            current_stat = (st.st_mtime_ns, st.st_size)
+            if st.st_size > MAX_MANIFEST_BYTES or st.st_size == 0:
+                raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
+            current_stat = (str(resolved_root), st.st_dev, st.st_ino, st.st_ctime_ns, st.st_mtime_ns, st.st_size)
             if self._cached_stat == current_stat and self._cached_manifest is not None and self._cached_public_list is not None:
                 return self._cached_manifest, self._cached_public_list
         except OSError:
             raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
+
+        # Required subdirectories cannot be symlinks
+        for subdir in ("display", "thumbnails"):
+            sub_p = self.root_dir / subdir
+            if sub_p.is_symlink() or not sub_p.is_dir() or not sub_p.resolve().is_relative_to(resolved_root):
+                raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
 
         try:
             with open(manifest_file, "r", encoding="utf-8") as f:
@@ -84,8 +97,8 @@ class WallpaperLibrary:
 
         public_wallpapers = []
         validated_manifest = {"version": 1, "default_id": raw_manifest.get("default_id"), "wallpapers": {}}
-
-        resolved_root = self.root_dir.resolve()
+        seen_ids: Set[str] = set()
+        seen_names: Set[str] = set()
 
         for entry in wallpapers_data:
             if not isinstance(entry, dict):
@@ -94,25 +107,44 @@ class WallpaperLibrary:
             w_name = entry.get("name")
             w_width = entry.get("width")
             w_height = entry.get("height")
-            if not (isinstance(w_id, str) and ID_PATTERN.match(w_id)):
+
+            if not isinstance(w_id, str) or not ID_PATTERN.fullmatch(w_id):
                 raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
-            if not (isinstance(w_name, str) and w_name.strip()):
+            if w_id in seen_ids:
                 raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
-            if not (isinstance(w_width, int) and w_width > 0 and isinstance(w_height, int) and w_height > 0):
+            seen_ids.add(w_id)
+
+            if not isinstance(w_name, str) or not w_name.strip() or "/" in w_name or "\\" in w_name or ".." in w_name:
+                raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
+            if w_name in seen_names:
+                raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
+            seen_names.add(w_name)
+
+            if not _is_valid_pos_int(w_width) or not _is_valid_pos_int(w_height):
                 raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
 
             for deriv in ("display", "thumbnail"):
                 deriv_meta = entry.get(deriv)
                 if not isinstance(deriv_meta, dict):
                     raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
-                rel_path = deriv_meta.get("path")
-                if not isinstance(rel_path, str) or not rel_path.strip():
+                sub_name = "display" if deriv == "display" else "thumbnails"
+                expected_rel = f"{sub_name}/{w_id}.webp"
+                if deriv_meta.get("path") != expected_rel:
                     raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
-                file_path = self.root_dir / rel_path
+                d_sha = deriv_meta.get("sha256")
+                if not isinstance(d_sha, str) or not ID_PATTERN.fullmatch(d_sha):
+                    raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
+                d_bytes = deriv_meta.get("bytes")
+                if not _is_valid_pos_int(d_bytes) or d_bytes > MAX_DERIVATIVE_BYTES:
+                    raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
+
+                file_path = self.root_dir / expected_rel
                 try:
                     if file_path.is_symlink() or not file_path.is_file():
                         raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
                     if not file_path.resolve().is_relative_to(resolved_root):
+                        raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
+                    if file_path.stat().st_size != d_bytes:
                         raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
                 except OSError:
                     raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
@@ -129,7 +161,7 @@ class WallpaperLibrary:
 
         default_id = raw_manifest.get("default_id")
         if default_id is not None:
-            if not (isinstance(default_id, str) and default_id in validated_manifest["wallpapers"]):
+            if not isinstance(default_id, str) or default_id not in seen_ids:
                 raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
 
         public_list = {
@@ -148,18 +180,28 @@ class WallpaperLibrary:
         return public_list
 
     def get_derivative(self, wallpaper_id: str, derivative_name: str) -> Tuple[bytes, str]:
-        if not isinstance(wallpaper_id, str) or not ID_PATTERN.match(wallpaper_id):
+        if not isinstance(wallpaper_id, str) or not ID_PATTERN.fullmatch(wallpaper_id):
             raise WallpaperNotFoundError("Unknown wallpaper ID")
         if derivative_name not in ALLOWED_DERIVATIVES:
             raise WallpaperNotFoundError("Unknown derivative requested")
 
+        if self.root_dir.is_symlink() or not self.root_dir.is_dir():
+            raise WallpaperNotFoundError("Wallpaper not found")
+
         manifest_file = self.root_dir / "manifest.json"
-        if not self.root_dir.is_dir() or not manifest_file.is_file():
+        if manifest_file.is_symlink() or not manifest_file.is_file():
             raise WallpaperNotFoundError("Wallpaper not found")
 
         validated_manifest, _ = self._read_and_validate_manifest()
-        if wallpaper_id not in validated_manifest.get("wallpapers", {}):
+        entry = validated_manifest.get("wallpapers", {}).get(wallpaper_id)
+        if entry is None:
             raise WallpaperNotFoundError("Wallpaper not found")
+
+        deriv_key = "thumbnail" if derivative_name == "thumbnail.webp" else "display"
+        deriv_meta = entry.get(deriv_key, {})
+        expected_bytes = deriv_meta.get("bytes")
+        if not _is_valid_pos_int(expected_bytes) or expected_bytes > MAX_DERIVATIVE_BYTES:
+            raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
 
         sub_dir = DERIVATIVE_DIRS[derivative_name]
         target_file = self.root_dir / sub_dir / f"{wallpaper_id}.webp"
@@ -169,7 +211,14 @@ class WallpaperLibrary:
                 raise WallpaperNotFoundError("Wallpaper file missing")
             if not target_file.resolve().is_relative_to(self.root_dir.resolve()):
                 raise WallpaperNotFoundError("Wallpaper path escape")
-            content = target_file.read_bytes()
+            if target_file.stat().st_size != expected_bytes:
+                raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
+
+            # Bounded read
+            with open(target_file, "rb") as f:
+                content = f.read(expected_bytes + 1)
+            if len(content) != expected_bytes:
+                raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
         except OSError:
             raise WallpaperNotFoundError("Wallpaper file read failure")
 
