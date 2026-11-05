@@ -44,10 +44,10 @@ ProductBuildType=Stable GRADLE_USER_HOME=/path/to/pinned/private-gradle-cache \
   :server:shadowJar
 ```
 
-Root's focused gate passed 16 tests: four SafePath, one PageTest and eleven
+Root's focused gate passed 18 tests: four SafePath, one PageTest and thirteen
 downloader tests. Tests use a 384 MiB heap and production JVM options; the larger
 heap in the command belongs to the Gradle build process. Tests gate actual response
-streams, exact page bytes and names, cancellation settlement, quick dequeue/requeue,
+streams, exact page bytes and names, cancellation settlement, quick dequeue/requeue, stable-ID deduplication, clear/enqueue settlement,
 reorder, retries, source admission and both independent concurrency bounds. The
 network test deliberately admits ten claims to pressure six network permits.
 Limit overrides exercise serial and unbounded behavior on the real download path.
@@ -68,3 +68,15 @@ prove phone suitability. Page concurrency stays disabled until its additional
 resource gate passes. Deploy only through the separately reviewed JAR-only profile
 with a retained prior package and source/health checks. No custom JAR deployment is
 claimed by this source change.
+
+
+The packaged-runtime gate adds `PackagedClassOriginTest`: it checks the origins of
+five downloader classes and six dependency classes, then checks the test heap cap.
+All 19 tests passed against the local preserved-base candidate. Set
+`MOBILE_SERVER_PROOF_ROOT` to the maintained proof checkout and add
+`verification/packaged-runtime.init.gradle.kts` to the normal test-heap init file.
+The candidate must exist at `.work/packaged-candidate.jar`. Include
+`--tests PackagedClassOriginTest` with the three existing focused suites. The init
+file adds the Java origin check and places the packaged JAR before the configured
+test runtime. It resolves the original classpath lazily in the task context.
+This host gate does not replace the paired resource or Android acceptance gates.

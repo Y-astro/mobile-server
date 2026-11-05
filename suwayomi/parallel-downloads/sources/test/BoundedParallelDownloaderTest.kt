@@ -636,6 +636,84 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
     }
 
     @Test
+    fun testDuplicateQueuedChapterIdsNeverRunTwoWorkers() = runBlocking {
+        val opened = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val source = FakeHttpSource(
+            id = 9551L, pagesPerChapter = 1, pageStreamDelayMs = 0,
+            onPageStreamStarted = { _, _ -> opened.countDown(); release.await(10, TimeUnit.SECONDS) },
+        )
+        registerFakeSource(source)
+        val manga = createManga("DuplicateQueue", source.id)
+        val chapter = createChapter(manga, 1)
+        // Model duplicate items left by a compound enqueue race. Admission must
+        // enforce stable-ID ownership even when the incoming queue contains both.
+        val field = DownloadManager::class.java.getDeclaredField("downloadQueue")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val queue = field.get(DownloadManager) as java.util.concurrent.CopyOnWriteArrayList<suwayomi.tachidesk.manga.impl.download.model.DownloadQueueItem>
+        repeat(2) {
+            queue.add(suwayomi.tachidesk.manga.impl.download.model.DownloadQueueItem(chapter, 1, manga, source.id, 0))
+        }
+        try {
+            DownloadManager.start()
+            assertTrue(opened.await(10, TimeUnit.SECONDS))
+            assertEquals(1, DownloadManager.activeChapterCount)
+            assertEquals(1, source.activeStreams.get())
+        } finally {
+            release.countDown()
+        }
+        withTimeout(15000) {
+            while (queue.isNotEmpty() || DownloadManager.activeClaims.isNotEmpty()) delay(30)
+        }
+        assertEquals(1, source.peakStreams.get())
+        verifyChapterOutput(manga, chapter, 1)
+    }
+
+    @Test
+    fun testEnqueueAfterClearSnapshotSurvivesSettlement() = runBlocking {
+        val oldOpened = CountDownLatch(1)
+        val newOpened = CountDownLatch(1)
+        val releaseOld = CountDownLatch(1)
+        val releaseNew = CountDownLatch(1)
+        val manga = createManga("ClearThenNewEnqueue", 9552L)
+        val oldChapter = createChapter(manga, 1)
+        val newChapter = createChapter(manga, 2)
+        val source = FakeHttpSource(
+            id = 9552L, pagesPerChapter = 1, pageStreamDelayMs = 0,
+            onPageStreamStarted = { chapter, _ ->
+                if (chapter == oldChapter) {
+                    oldOpened.countDown(); releaseOld.await(10, TimeUnit.SECONDS)
+                } else {
+                    newOpened.countDown(); releaseNew.await(10, TimeUnit.SECONDS)
+                }
+            },
+        )
+        registerFakeSource(source)
+        try {
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(oldChapter)))
+            assertTrue(oldOpened.await(10, TimeUnit.SECONDS))
+            val oldClaim = DownloadManager.activeClaims[oldChapter]!!
+            val clearing = async(Dispatchers.Default) { DownloadManager.clear() }
+            withTimeout(5000) { while (!oldClaim.job.isCancelled) delay(10) }
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(newChapter)))
+            assertTrue(newOpened.await(10, TimeUnit.SECONDS))
+            releaseOld.countDown()
+            clearing.await()
+            assertTrue(DownloadManager.getStatus().queue.any { it.chapterId == newChapter },
+                       "An enqueue after the clear snapshot must survive old-job settlement")
+        } finally {
+            releaseOld.countDown()
+            releaseNew.countDown()
+        }
+        withTimeout(15000) {
+            while (DownloadManager.getStatus().queue.isNotEmpty() || DownloadManager.activeClaims.isNotEmpty()) delay(30)
+        }
+        verifyChapterOutput(manga, newChapter, 1)
+        assertEquals(0, DownloaderNetworkBudget.activeUnits.get())
+    }
+
+    @Test
     fun testConcurrentStopAndAdmissionLeavesZeroWorkersAndPermits() = runBlocking {
         val s1 = FakeHttpSource(id = 9601L, pageStreamDelayMs = 50)
         val s2 = FakeHttpSource(id = 9602L, pageStreamDelayMs = 50)

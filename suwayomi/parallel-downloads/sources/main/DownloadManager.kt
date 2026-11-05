@@ -372,7 +372,7 @@ object DownloadManager {
                     it.sourceId in allowedSources &&
                     (it.state == Queued || it.state == Finished || (it.state == Error && it.tries < MAX_RETRIES)) &&
                         !activeClaims.containsKey(it.chapterId)
-                }
+                }.distinctBy { it.chapterId }
 
             if (eligibleItems.isEmpty()) return
 
@@ -519,7 +519,7 @@ object DownloadManager {
     private fun addToQueue(
         manga: MangaDataClass,
         chapter: ChapterDataClass,
-    ): DownloadQueueItem? {
+    ): DownloadQueueItem? = synchronized(admissionLock) {
         val downloadChapter = downloadQueue.firstOrNull { it.chapterId == chapter.id }
 
         val addToQueue = downloadChapter == null
@@ -534,7 +534,7 @@ object DownloadManager {
                 )
             downloadQueue.add(newDownloadChapter)
             logger.debug { "Added chapter ${chapter.id} to download queue ($newDownloadChapter)" }
-            return newDownloadChapter
+            return@synchronized newDownloadChapter
         }
 
         val retryDownload = downloadChapter.state == Error
@@ -544,11 +544,11 @@ object DownloadManager {
             downloadChapter.state = Queued
             downloadChapter.progress = 0f
 
-            return downloadChapter
+            return@synchronized downloadChapter
         }
 
         logger.debug { "Chapter ${chapter.id} already present in queue ($downloadChapter)" }
-        return null
+        return@synchronized null
     }
 
     fun dequeue(input: EnqueueInput) {
@@ -629,19 +629,19 @@ object DownloadManager {
         refreshDownloaders()
     }
 
-    private fun reorder(reorder: ChapterDownloadReorder): DownloadQueueItem? {
+    private fun reorder(reorder: ChapterDownloadReorder): DownloadQueueItem? = synchronized(admissionLock) {
         val (chapterId, to) = reorder
 
         require(to >= 0) { "'to' must be over or equal to 0" }
 
-        val download = downloadQueue.find { it.chapterId == chapterId } ?: return null
+        val download = downloadQueue.find { it.chapterId == chapterId } ?: return@synchronized null
 
         logger.debug { "reorder download $download from ${downloadQueue.indexOf(download)} to $to" }
 
         downloadQueue -= download
         downloadQueue.add(to, download)
 
-        return download
+        return@synchronized download
     }
 
     fun start() {
@@ -688,10 +688,16 @@ object DownloadManager {
 
     suspend fun clear() {
         logger.debug { "clear" }
-
-        stop()
-        val removedDownloads = downloadQueue.toList().map { DownloadUpdate(DownloadUpdateType.DEQUEUED, it, -1) }
-        downloadQueue.clear()
+        val removedDownloads: List<DownloadUpdate>
+        val jobsToJoin: List<Job>
+        synchronized(admissionLock) {
+            isRunning.set(false)
+            removedDownloads = downloadQueue.toList().map { DownloadUpdate(DownloadUpdateType.DEQUEUED, it, -1) }
+            downloadQueue.clear()
+            jobsToJoin = activeClaims.values.map { it.job }
+            jobsToJoin.forEach { it.cancel() }
+        }
+        jobsToJoin.joinAll()
         triggerSaveDownloadQueue()
         notifyAllClients(false, removedDownloads)
     }
