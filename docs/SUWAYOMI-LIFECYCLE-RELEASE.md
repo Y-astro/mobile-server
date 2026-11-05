@@ -48,9 +48,11 @@ November 5 run or change catch-up policy.
   GraphQL reads through ports 4566, 4567 and 4569 return 200 with an empty,
   stopped download queue. A pre-existing cached thumbnail returns its matching
   bytes through the native route; the unauthenticated portal route returns 401.
-- The installed official JAR is unchanged: SHA-256
+- The installed customized upstream JAR is unchanged: SHA-256
   `9b7bf58329eccb3dcfb7246360f6818f7391b8804330a9e0491006049678bedc`.
   No custom downloader or page concurrency is deployed in this release.
+  Later artifact inspection confirmed existing reader filtering, local WebUI
+  validation and Android-native JNI customizations in this pinned input.
 
 Before integration, 365 Python tests passed in 22.806 seconds, with two optional
 Caddy checks skipped. Independent AGY Gemini 3.8 Flash High review approved the
