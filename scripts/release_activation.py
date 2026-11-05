@@ -18,11 +18,13 @@ import contextlib
 import fcntl
 import hashlib
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
 import shutil
 import stat
+import subprocess
 import sys
 import time
 import uuid
@@ -202,6 +204,44 @@ SUWAYOMI_LIFECYCLE_ALLOWED_REMOTES = (
     SUPERVISOR_REMOTE,
     SERVICE_CATALOG_REMOTE,
 )
+
+ALLOWLISTED_RECIPE_ENV_VARS = {
+    "LD_PRELOAD",
+    "PATH",
+    "TMPDIR",
+    "PREFIX",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "JAVA_HOME",
+}
+
+
+def load_catalog_services_from_bytes(
+    source_bytes: bytes,
+    home_str: str,
+    prefix_str: str,
+    tag: str = "catalog",
+) -> Dict[str, Any]:
+    """Execute catalog source bytes in an isolated namespace to obtain runtime_services."""
+    orig_path = list(sys.path)
+    orig_modules = dict(sys.modules)
+    token = f"{tag}_{uuid.uuid4().hex}"
+    try:
+        spec = importlib.util.spec_from_loader(token, loader=None)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[token] = mod
+        exec(compile(source_bytes, f"<{token}>", "exec"), mod.__dict__)
+        if not hasattr(mod, "runtime_services"):
+            raise ActivationError(f"Catalog module {token} missing runtime_services function")
+        return mod.runtime_services(home_str, prefix_str)
+    finally:
+        sys.path[:] = orig_path
+        for k in list(sys.modules.keys()):
+            if k not in orig_modules:
+                del sys.modules[k]
+            else:
+                sys.modules[k] = orig_modules[k]
 
 
 def validate_profile(profile: Any) -> str:
@@ -489,6 +529,70 @@ def load_activation_journal(tx_dir: Path) -> Dict[str, Any]:
     return data
 
 
+def validate_prior_backend_recipe(recipe: Dict[str, Any], ns_root: Path, entries: List[Dict[str, Any]]) -> None:
+    """Accept only the namespace-owned native backend and its original source bindings."""
+    if not isinstance(recipe, dict):
+        raise ActivationError("prior_backend_recipe must be a dictionary")
+    if type(recipe.get("pid")) is not int or recipe["pid"] <= 0:
+        raise ActivationError("Invalid prior_backend_recipe pid")
+    if not isinstance(recipe.get("identity"), str) or not recipe["identity"]:
+        raise ActivationError("Invalid prior_backend_recipe identity")
+    argv = recipe.get("argv")
+    if not isinstance(argv, list) or not argv or not all(isinstance(a, str) and "\0" not in a for a in argv):
+        raise ActivationError("Invalid prior_backend_recipe argv")
+    home, prefix = ns_root / "home", ns_root / "usr"
+    jar = str(home / "suwayomi/bin/Suwayomi-Server.jar")
+    root_arg = f"-Dsuwayomi.tachidesk.config.server.rootDir={home / 'suwayomi/data'}"
+    if (argv[0] != str(prefix / "bin/java") or argv.count("-jar") != 1
+            or argv[-2:] != ["-jar", jar] or argv.count(root_arg) != 1):
+        raise ActivationError("Unsupported prior native backend argv")
+    if recipe.get("cwd") != str(home / "suwayomi"):
+        raise ActivationError("Unsupported prior backend cwd")
+    env = recipe.get("env")
+    if (not isinstance(env, dict) or any(k not in ALLOWLISTED_RECIPE_ENV_VARS for k in env)
+            or any(not isinstance(v, str) or "\0" in v for v in env.values())
+            or env.get("HOME") != str(home) or env.get("PREFIX") != str(prefix)):
+        raise ActivationError("Unsupported prior backend environment")
+    if "LD_PRELOAD" in env and env["LD_PRELOAD"] != str(home / "suwayomi/libdns_fix.so"):
+        raise ActivationError("Unsupported prior backend preload")
+    for remote, field in ((SUWAYOMI_LAUNCHER_REMOTE, "prior_launcher_sha256"),
+                          (SERVICE_CATALOG_REMOTE, "prior_catalog_sha256")):
+        entry = next((e for e in entries if (e.get("dest_path") or e.get("remote")) == remote), None)
+        if entry is None or recipe.get(field) != entry.get("original_sha256"):
+            raise ActivationError(f"prior_backend_recipe {field} mismatch with original preimage")
+
+
+def capture_prior_backend_recipe(driver: ta.LifecycleDriver, ns_root: Path,
+                                 entries: List[Dict[str, Any]], uid: int) -> Dict[str, Any]:
+    """Capture one owned native Java process before guards or process changes."""
+    records = driver.matching_processes("suwayomi")
+    if len(records) != 1:
+        raise QuiescenceError("Lifecycle migration requires exactly one prior native backend")
+    pid, identity = records[0]
+    proc = getattr(driver, "proc_root", Path("/proc")) / str(pid)
+    try:
+        if proc.stat().st_uid != uid:
+            raise QuiescenceError("Prior backend process UID mismatch")
+        argv = (proc / "cmdline").read_bytes().decode().rstrip("\0").split("\0")
+        env = {}
+        for item in (proc / "environ").read_bytes().decode().split("\0"):
+            if "=" in item:
+                key, value = item.split("=", 1)
+                if key in ALLOWLISTED_RECIPE_ENV_VARS:
+                    env[key] = value
+        recipe = {"pid": pid, "identity": identity, "argv": argv,
+                  "cwd": os.readlink(proc / "cwd"), "env": env}
+        for remote, field in ((SUWAYOMI_LAUNCHER_REMOTE, "prior_launcher_sha256"),
+                              (SERVICE_CATALOG_REMOTE, "prior_catalog_sha256")):
+            recipe[field] = next(e["original_sha256"] for e in entries if e["remote"] == remote)
+        validate_prior_backend_recipe(recipe, ns_root, entries)
+        if driver.process_identity(pid) != identity or driver.matching_processes("suwayomi") != records:
+            raise QuiescenceError("Prior backend identity changed during recipe capture")
+        return recipe
+    except (OSError, UnicodeError, ValueError, StopIteration) as exc:
+        raise QuiescenceError(f"Failed to capture prior backend recipe: {exc}") from exc
+
+
 def validate_activation_journal(
     act_journal: Dict[str, Any],
     tx_journal: Dict[str, Any],
@@ -497,6 +601,8 @@ def validate_activation_journal(
     expected_uid: int,
 ) -> None:
     """Strictly validate activation journal bindings against the verified file transaction."""
+    tx_dir = Path(expected_tx_dir).resolve()
+    ns_root = Path(expected_ns_root).resolve()
     if not isinstance(act_journal, dict) or not isinstance(tx_journal, dict):
         raise ActivationError("Malformed journal dictionary")
 
@@ -564,15 +670,103 @@ def validate_activation_journal(
             raise ActivationError("Missing or invalid transition metadata in suwayomi-lifecycle activation journal")
         if transition.get("type") != "suwayomi_15_to_16":
             raise ActivationError(f"Invalid transition type: {transition.get('type')!r}")
-        if transition.get("prior_service_count") != 15:
-            raise ActivationError(f"Invalid prior service count: {transition.get('prior_service_count')!r}")
-        if transition.get("candidate_service_count") != 16:
-            raise ActivationError(f"Invalid candidate service count: {transition.get('candidate_service_count')!r}")
+        prior_cnt = transition.get("prior_service_count")
+        if type(prior_cnt) is not int or isinstance(prior_cnt, bool) or prior_cnt != 15:
+            raise ActivationError(f"Invalid prior service count: {prior_cnt!r}")
+        cand_cnt = transition.get("candidate_service_count")
+        if type(cand_cnt) is not int or isinstance(cand_cnt, bool) or cand_cnt != 16:
+            raise ActivationError(f"Invalid candidate service count: {cand_cnt!r}")
         if transition.get("new_services") != ["suwayomi_scheduler"]:
             raise ActivationError(f"Invalid new services in transition: {transition.get('new_services')!r}")
         rec_hashes = transition.get("recovery_hashes")
-        if rec_hashes is not None and rec_hashes != act_journal.get("recovery_assets"):
-            raise ActivationError("Transition recovery_hashes do not match journal recovery_assets")
+        if not isinstance(rec_hashes, dict) or rec_hashes != act_journal.get("recovery_assets"):
+            raise ActivationError("Transition recovery_hashes missing or mismatch with journal recovery_assets")
+        for req_asset in ("service_catalog.py", "server_supervisor.py"):
+            if not isinstance(rec_hashes.get(req_asset), str) or len(rec_hashes[req_asset]) != 64:
+                raise ActivationError(f"Transition recovery_hashes missing valid 64-char hash for {req_asset}")
+
+        # Bind transition metadata directly to verified file transaction entries
+        tx_entries = tx_journal.get("entries", [])
+        cat_entry = next((e for e in tx_entries if (e.get("dest_path") or e.get("remote")) == SERVICE_CATALOG_REMOTE), None)
+        if cat_entry is None or cat_entry.get("action") != rt.ACTION_REPLACE:
+            raise ActivationError(f"File transaction missing required replace entry for {SERVICE_CATALOG_REMOTE}")
+
+        orig_sha = cat_entry.get("original_sha256")
+        cand_sha = cat_entry.get("candidate_sha256")
+        if not isinstance(orig_sha, str) or len(orig_sha) != 64:
+            raise ActivationError("File transaction catalog original_sha256 invalid or missing")
+        if not isinstance(cand_sha, str) or len(cand_sha) != 64:
+            raise ActivationError("File transaction catalog candidate_sha256 invalid or missing")
+
+        if rec_hashes["service_catalog.py"].lower() != orig_sha.lower():
+            raise ActivationError("Preserved recovery catalog hash does not match file transaction original preimage")
+        if transition.get("prior_catalog_sha256", "").lower() != orig_sha.lower():
+            raise ActivationError("Transition prior_catalog_sha256 does not match file transaction original preimage")
+        if transition.get("candidate_catalog_sha256", "").lower() != cand_sha.lower():
+            raise ActivationError("Transition candidate_catalog_sha256 does not match file transaction candidate preimage")
+
+        # Verify staged, backup, and preserved files inside tx_dir before compiling
+        staged_rel = cat_entry.get("staged_file")
+        backup_rel = cat_entry.get("backup_file")
+        if not staged_rel or not backup_rel:
+            raise ActivationError("File transaction catalog entry missing staged_file or backup_file")
+
+        staged_file = tx_dir / staged_rel
+        backup_file = tx_dir / backup_rel
+        pres_file = tx_dir / "recovery_lifecycle/service_catalog.py"
+
+        for p, expected_sha, desc in (
+            (backup_file, orig_sha, "backup catalog"),
+            (staged_file, cand_sha, "staged catalog"),
+            (pres_file, orig_sha, "preserved catalog"),
+        ):
+            if not p.exists():
+                raise ActivationError(f"Missing {desc} in transaction dir: {p}")
+            try:
+                p.resolve().relative_to(tx_dir.resolve())
+            except (ValueError, OSError) as exc:
+                raise ActivationError(f"Path escape in {desc}: {exc}") from exc
+            st = p.lstat()
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                raise ActivationError(f"{desc} is not a regular file: {p}")
+            if st.st_uid != expected_uid:
+                raise ActivationError(f"{desc} UID mismatch: expected {expected_uid}, got {st.st_uid}")
+            actual_sha = compute_file_sha256(p)
+            if actual_sha.lower() != expected_sha.lower():
+                raise ActivationError(f"{desc} hash mismatch: expected {expected_sha}, got {actual_sha}")
+
+        # Recompute prior 15 and candidate 16 runtime facts from verified backup and staged bytes
+        home_str = str(ns_root / "home")
+        prefix_str = str(ns_root / "usr")
+        recomp_prior = load_catalog_services_from_bytes(backup_file.read_bytes(), home_str, prefix_str, "prior_cat")
+        recomp_cand = load_catalog_services_from_bytes(staged_file.read_bytes(), home_str, prefix_str, "cand_cat")
+        try:
+            ta.validate_catalog_transition(
+                recomp_prior,
+                recomp_cand,
+                home_str=home_str,
+                prefix_str=prefix_str,
+                profile=PROFILE_SUWAYOMI_LIFECYCLE,
+            )
+        except RuntimeError as exc:
+            raise ActivationError(f"Catalog transition validation failed during journal check: {exc}") from exc
+
+        if len(recomp_prior) != 15 or len(recomp_cand) != 16:
+            raise ActivationError(
+                f"Recomputed catalog service counts invalid: prior={len(recomp_prior)}, candidate={len(recomp_cand)}"
+            )
+
+        # A guarded active backend must always have a direct launch recipe.
+        # Calling the legacy launcher during backout would spawn an absent updater.
+        recipe = act_journal.get("prior_backend_recipe")
+        flags = act_journal.get("flags", {})
+        if recipe is None:
+            untouched = state == STATE_PREPARED and flags == {} and tx_journal.get("state") == rt.STATE_PREPARED
+            disabled = isinstance(flags, dict) and flags.get("suwayomi", {}).get("pre_existing") is True
+            if not untouched and not disabled:
+                raise ActivationError("Missing prior_backend_recipe for active lifecycle backend")
+        else:
+            validate_prior_backend_recipe(recipe, ns_root, tx_entries)
 
     tx_id = act_journal.get("tx_id")
     if not isinstance(tx_id, str) or not tx_id:
@@ -1196,9 +1390,14 @@ def apply(
         )
 
         if hasattr(driver, "validate_candidate_services"):
-            try:
+            sig = inspect.signature(driver.validate_candidate_services)
+            if "profile" in sig.parameters:
                 driver.validate_candidate_services(b_root, profile=profile)
-            except TypeError:
+            else:
+                if profile == PROFILE_SUWAYOMI_LIFECYCLE:
+                    raise ActivationError(
+                        f"Lifecycle driver does not support profile-aware validation for {profile}"
+                    )
                 driver.validate_candidate_services(b_root)
 
         tx_journal = tx.load_journal()
@@ -1231,13 +1430,41 @@ def apply(
             "recovery_assets": recovery_hashes,
         }
         if profile == PROFILE_SUWAYOMI_LIFECYCLE:
+            cat_entry = next((e for e in entries if (e.get("dest_path") or e.get("remote")) == SERVICE_CATALOG_REMOTE), None)
+            if cat_entry is None or cat_entry.get("action") != rt.ACTION_REPLACE:
+                raise ActivationError(f"suwayomi-lifecycle requires replace entry for {SERVICE_CATALOG_REMOTE}")
+            staged_file = tx_dir / cat_entry["staged_file"]
+            backup_file = tx_dir / cat_entry["backup_file"]
+            pres_file = tx_dir / "recovery_lifecycle/service_catalog.py"
+            for p, expected_sha, desc in (
+                (backup_file, cat_entry["original_sha256"], "backup catalog"),
+                (staged_file, cat_entry["candidate_sha256"], "staged catalog"),
+                (pres_file, cat_entry["original_sha256"], "preserved catalog"),
+            ):
+                if not p.exists() or not p.is_file() or p.stat().st_uid != current_uid:
+                    raise ActivationError(f"Missing or invalid {desc} during lifecycle prepare")
+                if compute_file_sha256(p).lower() != expected_sha.lower():
+                    raise ActivationError(f"{desc} hash mismatch during lifecycle prepare")
+
+            home_str = str(ns_root / "home")
+            prefix_str = str(ns_root / "usr")
+            p_svcs = load_catalog_services_from_bytes(backup_file.read_bytes(), home_str, prefix_str, "prior")
+            c_svcs = load_catalog_services_from_bytes(staged_file.read_bytes(), home_str, prefix_str, "cand")
+            ta.validate_catalog_transition(p_svcs, c_svcs, home_str, prefix_str, profile=profile)
+            new_svcs = [k for k in c_svcs.keys() if k not in p_svcs]
+            if new_svcs != ["suwayomi_scheduler"]:
+                raise ActivationError(f"Unexpected new services in lifecycle candidate: {new_svcs}")
+
             act_journal["transition"] = {
                 "type": "suwayomi_15_to_16",
-                "prior_service_count": 15,
-                "candidate_service_count": 16,
-                "new_services": ["suwayomi_scheduler"],
-                "recovery_hashes": recovery_hashes,
+                "prior_service_count": int(len(p_svcs)),
+                "candidate_service_count": int(len(c_svcs)),
+                "new_services": new_svcs,
+                "prior_catalog_sha256": str(cat_entry["original_sha256"]),
+                "candidate_catalog_sha256": str(cat_entry["candidate_sha256"]),
+                "recovery_hashes": dict(recovery_hashes),
             }
+        validate_activation_journal(act_journal, tx_journal, ns_root, tx_dir, current_uid)
         save_activation_journal(tx_dir, act_journal)
 
         disabled_dir = ns_root / "home/.config/services_disabled"
@@ -1278,6 +1505,13 @@ def apply(
                         raise QuiescenceError(
                             f"Pre-existing suwayomi_scheduler process found during initial 15-to-16 lifecycle transition: {existing_sched}; refusing unmanaged instance"
                         )
+                if profile == PROFILE_SUWAYOMI_LIFECYCLE:
+                    backend_flag = disabled_dir / "suwayomi"
+                    if not backend_flag.exists() and not backend_flag.is_symlink():
+                        act_journal["prior_backend_recipe"] = capture_prior_backend_recipe(
+                            driver, ns_root, entries, current_uid
+                        )
+                        save_activation_journal(tx_dir, act_journal)
                 active_services, _ = install_guards(
                     disabled_dir=disabled_dir,
                     affected_services=affected_services,
@@ -1287,7 +1521,11 @@ def apply(
                     tx_dir=tx_dir,
                 )
                 act_journal["state"] = STATE_GUARDED
+                validate_activation_journal(act_journal, tx.load_journal(), ns_root, tx_dir, current_uid)
                 save_activation_journal(tx_dir, act_journal)
+
+                if profile == PROFILE_SUWAYOMI_LIFECYCLE and driver.matching_processes("suwayomi_scheduler"):
+                    raise QuiescenceError("suwayomi_scheduler process appeared concurrently before quiescence")
 
                 # Quiesce active services
                 quiescence_records: Dict[str, List[Tuple[int, str]]] = {}
@@ -1446,6 +1684,66 @@ def apply(
             raise
 
 
+def _launch_prior_backend_from_recipe(
+    recipe: Dict[str, Any],
+    driver: ta.LifecycleDriver,
+    ns_root: Path,
+    tx_journal: Dict[str, Any],
+) -> None:
+    """
+    Directly launch prior verified backend process from captured recipe,
+    preserving JVM args, rootDir, cwd, and allowlisted env without invoking
+    legacy start_suwayomi.sh child spawns.
+    """
+    validate_prior_backend_recipe(recipe, ns_root, tx_journal.get("entries", []))
+    argv = recipe.get("argv")
+    cwd_str = recipe.get("cwd")
+    env = recipe.get("env", {})
+    if not isinstance(argv, list) or not argv:
+        raise ActivationError("Invalid recipe argv")
+    cwd = Path(cwd_str) if cwd_str else None
+    if cwd is None or not cwd.is_dir():
+        raise ActivationError(f"Invalid recipe cwd: {cwd}")
+
+    # Verify launcher and catalog hash bindings
+    launcher_sha = recipe.get("prior_launcher_sha256")
+    catalog_sha = recipe.get("prior_catalog_sha256")
+    entries = tx_journal.get("entries", [])
+    l_entry = next((e for e in entries if (e.get("dest_path") or e.get("remote")) == SUWAYOMI_LAUNCHER_REMOTE), None)
+    c_entry = next((e for e in entries if (e.get("dest_path") or e.get("remote")) == SERVICE_CATALOG_REMOTE), None)
+    if l_entry and l_entry.get("original_sha256") != launcher_sha:
+        raise ActivationError("Recipe prior_launcher_sha256 mismatch with file transaction original preimage")
+    if c_entry and c_entry.get("original_sha256") != catalog_sha:
+        raise ActivationError("Recipe prior_catalog_sha256 mismatch with file transaction original preimage")
+
+    run_env = os.environ.copy()
+    for key in ALLOWLISTED_RECIPE_ENV_VARS:
+        run_env.pop(key, None)
+    for k in ('container', 'PD_CONTAINER', 'PD_IMAGE', 'PD_IMAGE_ID', 'PROOT_L2S_DIR', 'ANTIGRAVITY_AGENT', 'ANTIGRAVITY_CONVERSATION_ID', 'ANTIGRAVITY_TRAJECTORY_ID'):
+        run_env.pop(k, None)
+    run_env['USER'] = 'u0_a505'
+    home_dir = getattr(driver, "home_dir", ns_root / "home")
+    state_dir = getattr(driver, "state_dir", home_dir / ".config/server_recovery")
+    state_dir.mkdir(parents=True, exist_ok=True)
+    log_path = state_dir / "suwayomi.log"
+
+    for k, v in env.items():
+        if k in ALLOWLISTED_RECIPE_ENV_VARS:
+            run_env[k] = str(v)
+
+    with log_path.open("ab", buffering=0) as out:
+        subprocess.Popen(
+            argv,
+            cwd=str(cwd),
+            env=run_env,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
+            start_new_session=True,
+            close_fds=True,
+        )
+
+
 def _rollback_internal(
     tx: rt.ReleaseTransaction,
     act_journal: Dict[str, Any],
@@ -1548,6 +1846,28 @@ def _rollback_internal(
                 raise QuiescenceError("Supervisor daemon reappeared or replaced during unlocked gap before file rollback")
 
         # 3. Rollback files
+        tx_journal = tx.load_journal()
+        if act_journal.get("profile") == PROFILE_SUWAYOMI_LIFECYCLE:
+            # If live catalog was corrupted/broken while staged file is intact,
+            # heal live file from verified staged file so release transaction engine can perform preimage rollback
+            for entry in tx_journal.get("entries", []):
+                if (entry.get("dest_path") or entry.get("remote")) == SERVICE_CATALOG_REMOTE:
+                    target_disk, _, _ = rt.resolve_disk_path(entry["remote"], ns_root)
+                    if target_disk.exists() and target_disk.is_file():
+                        cur_sha, _ = rt.compute_file_sha256(target_disk)
+                        if cur_sha.lower() not in (entry["candidate_sha256"].lower(), entry["original_sha256"].lower()):
+                            staged_path = tx_dir / entry["staged_file"]
+                            if staged_path.exists():
+                                st_sha, _ = rt.compute_file_sha256(staged_path)
+                                if st_sha.lower() == entry["candidate_sha256"].lower():
+                                    target_stat = target_disk.lstat()
+                                    if not stat.S_ISREG(target_stat.st_mode) or target_stat.st_uid != current_uid:
+                                        raise ActivationError("Refusing damaged catalog recovery for non-owned regular file")
+                                    rt.write_atomic_file(
+                                        target_disk, staged_path.read_bytes(), stat.S_IMODE(target_stat.st_mode),
+                                        expected_sha256=entry["candidate_sha256"], expected_uid=current_uid,
+                                    )
+
         tx.rollback(namespace_root=ns_root)
 
         # Reload prior lifecycle
@@ -1555,11 +1875,22 @@ def _rollback_internal(
 
         # 4. Relaunch prior services
         prior_services = driver.services()
-        prior_active = [sid for sid in active_services if sid in prior_services and sid != "suwayomi_scheduler"]
+        prior_active = [sid for sid in active_services if sid in prior_services]
         sorted_active = sort_services_by_dependencies(prior_active)
         for sid in sorted_active:
             cfg = prior_services[sid]
-            driver.launch(sid, cfg)
+            if (
+                sid == "suwayomi"
+                and act_journal.get("profile") == PROFILE_SUWAYOMI_LIFECYCLE
+            ):
+                _launch_prior_backend_from_recipe(
+                    recipe=act_journal["prior_backend_recipe"],
+                    driver=driver,
+                    ns_root=ns_root,
+                    tx_journal=tx_journal,
+                )
+            else:
+                driver.launch(sid, cfg)
             deadline = time.monotonic() + health_timeout
             is_healthy = False
             while time.monotonic() < deadline:

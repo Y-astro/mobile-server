@@ -96,20 +96,28 @@ class NativeLifecycleRecoveryTest(unittest.TestCase):
             (bundle_dir / "scripts/suwayomi_daily_update.py").write_bytes(benign_scheduler_bytes)
             os.chmod(bundle_dir / "scripts/suwayomi_daily_update.py", 0o755)
 
-            # Benign suwayomi launcher on disk
+            # Symlink temporary usr/bin/java to sys.executable
+            java_bin = bin_dir / "java"
+            if not java_bin.exists():
+                java_bin.symlink_to(sys.executable)
+
+            # Suwayomi data and jar directories
+            (home_dir / "suwayomi/bin").mkdir(parents=True, exist_ok=True)
+            (home_dir / "suwayomi/data").mkdir(parents=True, exist_ok=True)
+            (home_dir / "suwayomi/bin/Suwayomi-Server.jar").touch()
+
+            # Prior suwayomi launcher on disk: models legacy launcher that forks scheduler daemon in background if invoked!
             prior_launcher_path = home_bin / "start_suwayomi.sh"
             prior_launcher_bytes = (
-                b"#!/usr/bin/env bash\n"
-                b"# PRIOR_LAUNCHER\n"
-                b"sleep 60\n"
+                f"#!/bin/sh\n# LEGACY_LAUNCHER_WITH_FORK\n{str(bin_dir / 'python3')} {str(home_bin / 'suwayomi_daily_update.py')} --daemon >> /dev/null 2>&1 &\nexec sleep 60\n".encode("utf-8")
             )
             prior_launcher_path.write_bytes(prior_launcher_bytes)
             os.chmod(prior_launcher_path, 0o755)
 
             candidate_launcher_bytes = (
-                b"#!/usr/bin/env bash\n"
-                b"# CANDIDATE_LAUNCHER\n"
-                b"sleep 60\n"
+                b"#!/bin/sh\n"
+                b"# CANDIDATE_LAUNCHER_CLEAN\n"
+                b"exec sleep 60\n"
             )
             candidate_launcher_path = bundle_dir / "scripts/start_suwayomi.sh"
             candidate_launcher_path.write_bytes(candidate_launcher_bytes)
@@ -134,15 +142,12 @@ def healthy(sid, cfg):
             os.chmod(bundle_sup_path, 0o700)
 
             # Service catalogs: prior 15 vs candidate 16
-            orig_cat_code = (REPO_ROOT / "app/service_catalog.py").read_text(encoding="utf-8")
+            orig_cat_code = tra.prior_catalog_source()
             live_cat_path = lib_dir / "service_catalog.py"
             live_cat_path.write_text(orig_cat_code, encoding="utf-8")
             os.chmod(live_cat_path, 0o600)
 
-            candidate_cat_code = orig_cat_code.replace(
-                "'battery_guard': dict(cmd=[f'{p}/bin/bash', f'{h}/bin/battery_guard.sh', '--daemon']),",
-                "'battery_guard': dict(cmd=[f'{p}/bin/bash', f'{h}/bin/battery_guard.sh', '--daemon']),\n        'suwayomi_scheduler': dict(cmd=[f'{p}/bin/python3', f'{h}/bin/suwayomi_daily_update.py', '--foreground']),"
-            )
+            candidate_cat_code = (REPO_ROOT / "app/service_catalog.py").read_text()
             bundle_cat_path = bundle_dir / "app/service_catalog.py"
             bundle_cat_path.write_text(candidate_cat_code, encoding="utf-8")
             os.chmod(bundle_cat_path, 0o600)
@@ -230,6 +235,7 @@ def healthy(sid, cfg):
 
             uuid_hex = os.urandom(6).hex()
             tx_id = f"act_lc_proof_{uuid_hex}"
+            cat_tx_entry = next((e for e in tx_entries if (e.get("dest_path") or e.get("remote")) == ra.SERVICE_CATALOG_REMOTE), None)
             act_journal = {
                 "version": ra.JOURNAL_VERSION,
                 "profile": ra.PROFILE_SUWAYOMI_LIFECYCLE,
@@ -252,10 +258,49 @@ def healthy(sid, cfg):
                     "prior_service_count": 15,
                     "candidate_service_count": 16,
                     "new_services": ["suwayomi_scheduler"],
+                    "prior_catalog_sha256": cat_tx_entry["original_sha256"],
+                    "candidate_catalog_sha256": cat_tx_entry["candidate_sha256"],
                     "recovery_hashes": recovery_hashes,
                 },
             }
             ra.save_activation_journal(tx_dir, act_journal)
+
+            # Start real prior Java backend process
+            backend_cmd = [
+                str(java_bin),
+                "-c",
+                "import time; time.sleep(60)",
+                f"-Dsuwayomi.tachidesk.config.server.rootDir={home_dir / 'suwayomi/data'}",
+                "-jar",
+                str(home_dir / "suwayomi/bin/Suwayomi-Server.jar"),
+            ]
+            prior_sw_proc = subprocess.Popen(
+                backend_cmd,
+                cwd=str(home_dir / "suwayomi"),
+                env=dict(os.environ, HOME=str(home_dir), PREFIX=str(usr_dir)),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            def cleanup_prior_handle():
+                if prior_sw_proc.poll() is None:
+                    prior_sw_proc.terminate()
+                prior_sw_proc.wait(timeout=3)
+            self.addCleanup(cleanup_prior_handle)
+            time.sleep(0.1)
+            prior_driver = ta.TermuxLifecycleDriver(namespace_root=live_dir)
+            sw_recs = prior_driver.matching_processes("suwayomi")
+            self.assertEqual(len(sw_recs), 1)
+            sw_p_pid, sw_p_ident = sw_recs[0]
+            launcher_tx_entry = next((e for e in tx_entries if (e.get("dest_path") or e.get("remote")) == ra.SUWAYOMI_LAUNCHER_REMOTE), None)
+            act_journal["prior_backend_recipe"] = ra.capture_prior_backend_recipe(
+                prior_driver, live_dir, tx_entries, current_uid
+            )
+            # Quiesce prior backend before file change
+            prior_driver.terminate(sw_recs)
+            prior_sw_proc.wait(timeout=3.0)
+            self.assertEqual(prior_driver.matching_processes("suwayomi"), [])
 
             active_services, _ = ra.install_guards(
                 disabled_dir=disabled_dir,
@@ -319,6 +364,9 @@ def healthy(sid, cfg):
                 shutil.rmtree(bundle_dir)
                 self.assertFalse(bundle_dir.exists(), "Candidate bundle must be completely removed")
 
+                # Break live candidate catalog syntax after candidate started, before recover
+                live_cat_path.write_text("SYNTAX_ERROR_IN_LIVE_CATALOG = {\n", encoding="utf-8")
+
                 # 7. Execute copied standalone recovery CLI in a CLEAN subprocess
                 rec_cli = tx_dir / "recovery_lifecycle/release_activation.py"
                 clean_env = {
@@ -379,13 +427,20 @@ def healthy(sid, cfg):
                     "Prior 15-service catalog source must be restored",
                 )
 
-                # 10. Assert suwayomi_scheduler was NEVER launched during recovery
+                # 10. Assert suwayomi backend was restored cleanly via recipe (NOT via start_suwayomi.sh)
                 driver_post = ta.TermuxLifecycleDriver(namespace_root=live_dir)
+                sw_matches = driver_post.matching_processes("suwayomi")
+                self.assertEqual(len(sw_matches), 1, "suwayomi backend must be restored via recipe")
+                sw_restored_pid, sw_restored_ident = sw_matches[0]
+                self.assertIsNotNone(driver_post.process_identity(sw_restored_pid))
+
+                # Assert suwayomi_scheduler was NEVER launched during recovery
+                # (Proves prior launcher was NOT executed, preventing legacy fork)
                 sched_matches = driver_post.matching_processes("suwayomi_scheduler")
                 self.assertEqual(
                     sched_matches,
                     [],
-                    "suwayomi_scheduler must NEVER be launched during rollback/recovery",
+                    "suwayomi_scheduler must NEVER be launched during rollback/recovery (legacy launcher was not invoked)",
                 )
 
                 # 11. Pre-existing disabled marker retained

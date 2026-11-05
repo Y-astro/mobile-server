@@ -233,3 +233,32 @@ python3 scripts/release_activation.py status --transaction-dir /path/to/tx_dir
 - **Power Loss**: Relies on POSIX `fsync` and journal state boundaries. Does not guarantee flash controller durability against sudden power loss during raw hardware write cycles.
 - **Live Processes During File Recovery**: File recovery must never be invoked on a namespace with running candidate processes. The activation adapter guarantees candidate processes are quiesced before file rollback executes.
 - **Fail-Closed on Drift**: External modifications to owned destinations or guard flags fail-closed into `STATE_RECOVERY_REQUIRED`.
+
+
+### Suwayomi lifecycle migration profile
+
+The explicit `suwayomi-lifecycle` profile permits changes only to the existing
+backend launcher, supervisor, and service catalog. It requires the exact ordered
+15-service catalog followed by one `suwayomi_scheduler` entry. Every prior
+service configuration must remain equal. The default general and filter profiles
+retain their existing restrictions.
+
+Activation refuses an existing scheduler during this initial migration. Before
+creating guards, it captures one owned native Java backend, including its JVM
+arguments, root directory, working directory, and allowlisted environment. The
+journal binds that recipe to the prior launcher and catalog preimages. Unsupported
+or ambiguous prior runtimes are refused before service changes.
+
+Recovery verifies the staged, backup, and preserved catalogs before loading them,
+recomputes the exact transition, and requires the recipe for an active backend.
+It stops the candidate scheduler before restoring the prior catalog. Backout
+launches the prior Java command directly: invoking the old launcher would spawn
+a scheduler that was absent before migration. A damaged owned live catalog can
+be restored through verified staged bytes before the file engine restores its
+prior preimage. Recovery keeps the transaction and service intent guards when
+quiescence, file integrity, or prior service health cannot be proved.
+
+The native recovery test runs copied recovery code after deleting the bundle and
+breaking the live candidate catalog. Its temporary backend is a benign process
+model, not a real Android JVM test. Phone activation and Android runtime checks
+remain separate acceptance steps.

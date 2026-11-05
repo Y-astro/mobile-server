@@ -112,8 +112,18 @@ def _execute_supervisor(module: Any, source: bytes, filename: Path, home_dir: Pa
             module.__dict__["open"] = original
 
 
+SAFE_PYTHON_STANDALONE_FLAGS = {
+    "-u", "-B", "-E", "-s", "-S", "-O", "-OO", "-v", "-q", "-I", "-P"
+}
+
+
 def extract_python_script_and_args(cmdline: List[str]) -> Tuple[Optional[Path], List[str]]:
-    """Parse python command line tokens to extract script path and trailing arguments."""
+    """
+    Parse python command line tokens to extract script path and trailing arguments.
+    Allows only safe standalone interpreter flags.
+    Rejects combined forms, options with values (-X, -W), -c/-m execution,
+    and missing script operands.
+    """
     if not cmdline or not cmdline[0]:
         return None, []
     base = Path(cmdline[0]).name
@@ -126,11 +136,13 @@ def extract_python_script_and_args(cmdline: List[str]) -> Tuple[Optional[Path], 
         if arg == "--":
             idx += 1
             break
-        if not arg.startswith("-"):
+        if not arg.startswith("-") or arg == "-":
             break
-        if arg in ("-c", "-m") or arg.startswith("-c") or arg.startswith("-m"):
-            return None, []
-        idx += 1
+        if arg in SAFE_PYTHON_STANDALONE_FLAGS:
+            idx += 1
+            continue
+        # Reject option-value flags (-X, -W), code execution (-c, -m), or combined flags
+        return None, []
     if idx < n:
         script = Path(cmdline[idx])
         return script, cmdline[idx + 1 :]
@@ -180,17 +192,17 @@ def validate_catalog_transition(
             raise RuntimeError(
                 f"Candidate service catalog first 15 keys mismatch: expected {prior_keys}, got {cand_keys[:15]}"
             )
+        # Exact configuration equality for all 15 prior services: reject ANY added, removed, or changed attribute
         for sid, p_cfg in prior_services.items():
             c_cfg = cand_services.get(sid)
             if c_cfg is None:
                 raise RuntimeError(f"Candidate catalog missing prior service: {sid}")
-            for attr in ("port", "path", "protocol", "cmd", "is_ondemand", "client_port"):
-                p_val = p_cfg.get(attr)
-                c_val = c_cfg.get(attr)
-                if p_val != c_val:
-                    raise RuntimeError(
-                        f"Candidate service {sid} runtime drift on '{attr}': prior={p_val!r}, candidate={c_val!r}"
-                    )
+            if not isinstance(c_cfg, dict) or not isinstance(p_cfg, dict):
+                raise RuntimeError(f"Service {sid} configuration must be a dictionary")
+            if c_cfg != p_cfg:
+                raise RuntimeError(
+                    f"Candidate service {sid} configuration runtime drift: expected {p_cfg!r}, got {c_cfg!r}"
+                )
 
         if cand_keys[15] != "suwayomi_scheduler":
             raise RuntimeError(
@@ -200,11 +212,9 @@ def validate_catalog_transition(
         sched_cfg = cand_services.get("suwayomi_scheduler")
         if not isinstance(sched_cfg, dict):
             raise RuntimeError("Candidate suwayomi_scheduler configuration must be a dictionary")
-        allowed_attrs = {"cmd"}
-        extra_attrs = set(sched_cfg.keys()) - allowed_attrs
-        if extra_attrs:
+        if set(sched_cfg.keys()) != {"cmd"}:
             raise RuntimeError(
-                f"Candidate suwayomi_scheduler introduces unexpected attributes: {sorted(list(extra_attrs))}"
+                f"Candidate suwayomi_scheduler introduces unexpected attributes: {sorted(list(set(sched_cfg.keys()) - {'cmd'}))}"
             )
 
         expected_cmd = [f"{prefix_str}/bin/python3", f"{home_str}/bin/suwayomi_daily_update.py", "--foreground"]
@@ -388,6 +398,8 @@ class TermuxLifecycleDriver(LifecycleDriver):
                 m.PAUSED = self.paused_path
                 m.PUBLIC_PAUSED = self.public_paused_path
                 m.MOBILE_LIB = self.home_dir / ".local/lib/mobile-server"
+                if hasattr(m, "PROC"):
+                    m.PROC = self.proc_root
             return mod
         finally:
             sys.path[:] = orig_path
@@ -426,6 +438,21 @@ class TermuxLifecycleDriver(LifecycleDriver):
     def matching_processes(self, sid: str) -> List[Tuple[int, str]]:
         if sid == "suwayomi_scheduler":
             return self._match_suwayomi_scheduler()
+        if sid == "suwayomi":
+            # The legacy matcher also sees unrelated builds containing the word
+            # suwayomi. Activation may signal only this namespace's backend.
+            matches = []
+            jar = str(self.home_dir / "suwayomi/bin/Suwayomi-Server.jar")
+            launcher = str(self.home_dir / "bin/start_suwayomi.sh")
+            for pid, identity in self._sup.matching_processes(sid):
+                try:
+                    argv = (self.proc_root / str(pid) / "cmdline").read_bytes().decode().rstrip("\0").split("\0")
+                    native = argv[0] == str(self.prefix_dir / "bin/java") and argv[-2:] == ["-jar", jar]
+                    if (native or launcher in argv) and self.process_identity(pid) == identity:
+                        matches.append((pid, identity))
+                except (OSError, UnicodeError, IndexError):
+                    continue
+            return matches
         try:
             return self._sup.matching_processes(sid)
         except (KeyError, AttributeError):
@@ -436,20 +463,12 @@ class TermuxLifecycleDriver(LifecycleDriver):
     def _match_suwayomi_scheduler(self) -> List[Tuple[int, str]]:
         """
         Trusted native matching for owned suwayomi_scheduler processes.
-        Matches owned scheduler Python argv (absolute or cwd-resolved relative),
+        Matches owned scheduler Python argv (absolute or cwd-resolved relative strictly in home),
         foreground/daemon mode, UID/starttime. Excludes -c/-m decoys, --status, --now, and zombies.
         Independent of supervisor implementation or catalog presence.
         """
         uid = os.getuid()
-        allowed_scripts = {
-            (self.home_dir / "bin/suwayomi_daily_update.py").resolve(),
-        }
-        repo_sched = Path(__file__).resolve().parent.parent / "scripts/suwayomi_daily_update.py"
-        if repo_sched.exists():
-            allowed_scripts.add(repo_sched.resolve())
-        scripts_sched = Path(__file__).resolve().parent / "suwayomi_daily_update.py"
-        if scripts_sched.exists():
-            allowed_scripts.add(scripts_sched.resolve())
+        expected_script = (self.home_dir / "bin/suwayomi_daily_update.py").resolve()
 
         matches: List[Tuple[int, str]] = []
         if not self.proc_root.exists():
@@ -470,27 +489,19 @@ class TermuxLifecycleDriver(LifecycleDriver):
 
                 if not script_path.is_absolute():
                     try:
-                        target_cwd = Path(os.readlink(str(proc / "cwd")))
+                        target_cwd = Path(os.readlink(str(proc / "cwd"))).resolve()
+                        target_cwd.relative_to(self.home_dir.resolve())
                         resolved_script = (target_cwd / script_path).resolve()
                     except (OSError, ValueError):
                         continue
                 else:
                     resolved_script = script_path.resolve()
 
-                if resolved_script not in allowed_scripts:
+                if resolved_script != expected_script:
                     continue
 
-                # Exclude --now and --status
-                if any(arg in ("--now", "--status") or arg.startswith("--now=") or arg.startswith("--status=") for arg in remaining):
-                    continue
-
-                # Must match foreground or daemon mode
-                has_mode = False
-                for token in remaining:
-                    if token in ("--foreground", "--daemon"):
-                        has_mode = True
-                        break
-                if not has_mode:
+                # Exact one argument: either --foreground or --daemon
+                if remaining != ["--foreground"] and remaining != ["--daemon"]:
                     continue
 
                 # Exclude zombies and extract starttime identity
@@ -505,6 +516,10 @@ class TermuxLifecycleDriver(LifecycleDriver):
         return sorted(matches, key=lambda m: m[0])
 
     def process_identity(self, pid: int) -> Optional[str]:
+        if hasattr(self._sup, "process_identity"):
+            ident = self._sup.process_identity(pid)
+            if ident is not None:
+                return ident
         if self.proc_root != Path("/proc"):
             try:
                 stat_path = self.proc_root / str(pid) / "stat"
@@ -514,21 +529,11 @@ class TermuxLifecycleDriver(LifecycleDriver):
                 return stat[19]
             except (OSError, IndexError):
                 return None
-        return self._sup.process_identity(pid)
+        return None
 
     def terminate(self, records: List[Tuple[int, str]]) -> None:
         if self.proc_root != Path("/proc"):
-            for sig, deadline in ((signal.SIGTERM, 4.0), (signal.SIGKILL, 1.0)):
-                for pid, ident in records:
-                    if self.process_identity(pid) == ident:
-                        with contextlib.suppress(ProcessLookupError):
-                            os.kill(pid, sig)
-                end = time.monotonic() + deadline
-                while time.monotonic() < end:
-                    if not any(self.process_identity(pid) == ident for pid, ident in records):
-                        return
-                    time.sleep(0.1)
-            return
+            raise RuntimeError(f"Refusing signal operations against synthetic proc root: {self.proc_root}")
         self._sup.terminate(records)
 
     def stop_agy(self) -> None:
@@ -680,6 +685,7 @@ def load_isolated_lifecycle(
     recovery_dir: Path,
     namespace_root: Optional[Path] = None,
     expected_hashes: Optional[Dict[str, str]] = None,
+    proc_root: Optional[Path] = None,
 ) -> TermuxLifecycleDriver:
     """
     Load preserved supervisor and service catalog from recovery directory in an isolated
@@ -688,6 +694,7 @@ def load_isolated_lifecycle(
     """
     recovery_dir = Path(recovery_dir).resolve()
     current_uid = os.getuid()
+    p_root = Path(proc_root).resolve() if proc_root else Path("/proc")
 
     if not expected_hashes or not isinstance(expected_hashes, dict):
         raise ValueError("load_isolated_lifecycle requires non-empty expected_hashes dictionary")
@@ -762,10 +769,13 @@ def load_isolated_lifecycle(
             m.PAUSED = paused_path
             m.PUBLIC_PAUSED = public_paused_path
             m.MOBILE_LIB = mobile_lib
+            if hasattr(m, "PROC"):
+                m.PROC = p_root
 
         driver = TermuxLifecycleDriver(
             namespace_root=ns_root,
             supervisor_script=supervisor_path,
+            proc_root=p_root,
             supervisor_module=sup_mod,
         )
         return driver

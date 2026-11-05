@@ -41,10 +41,28 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
+
+def prior_catalog_source():
+    """Construct the reviewed prior catalog by removing only the appended service."""
+    source = (REPO_ROOT / "app/service_catalog.py").read_text()
+    line = "        'suwayomi_scheduler': dict(cmd=[f'{p}/bin/python3', f'{h}/bin/suwayomi_daily_update.py', '--foreground']),\n"
+    assert source.count(line) == 1
+    return source.replace(line, "", 1)
+
+
+def install_prior_catalog(live, preconds):
+    catalog = live / "home/.local/lib/mobile-server/service_catalog.py"
+    catalog.write_text(prior_catalog_source())
+    os.chmod(catalog, 0o600)
+    sha, size = ra.rt.compute_file_sha256(catalog)
+    entry = next(f for f in preconds["files"] if f["path"] == ra.SERVICE_CATALOG_REMOTE)
+    entry.update(kind="file", sha256=sha, bytes=size, mode="0o600")
+
 
 def _make_fixture(test_root: Path, modify_auth: bool = False, modify_boot: bool = False):
     import tests.test_release_transaction as trt
@@ -245,6 +263,49 @@ class TestReleaseActivation(unittest.TestCase):
                         f["mode"] = "0o600"
 
         return bundle, manifest, preconds, live, tx_dir
+
+    def _build_lifecycle_fixture(self):
+        result = self._build_activation_fixture(unchanged_all=True)
+        bundle, _, preconds, live, _ = result
+        install_prior_catalog(live, preconds)
+        shutil.copyfile(REPO_ROOT / "app/service_catalog.py", bundle / "app/service_catalog.py")
+        (bundle / "scripts/start_suwayomi.sh").write_text("# candidate launcher\n")
+
+        # Controller tests simulate processes. Native capture and direct launch are
+        # exercised separately by the copied-recovery subprocess integration proof.
+        def capture(driver, namespace, entries, uid):
+            return {
+                "pid": 1001, "identity": "sw_1001",
+                "argv": [str(namespace / "usr/bin/java"),
+                         f"-Dsuwayomi.tachidesk.config.server.rootDir={namespace / 'home/suwayomi/data'}",
+                         "-jar", str(namespace / "home/suwayomi/bin/Suwayomi-Server.jar")],
+                "cwd": str(namespace / "home/suwayomi"),
+                "env": {"HOME": str(namespace / "home"), "PREFIX": str(namespace / "usr")},
+                **{field: next(e["original_sha256"] for e in entries if e["remote"] == remote)
+                   for remote, field in ((ra.SUWAYOMI_LAUNCHER_REMOTE, "prior_launcher_sha256"),
+                                         (ra.SERVICE_CATALOG_REMOTE, "prior_catalog_sha256"))},
+            }
+        patcher = mock.patch.object(ra, "capture_prior_backend_recipe", side_effect=capture)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(ra, "_launch_prior_backend_from_recipe",
+                                    side_effect=lambda recipe, driver, ns_root, tx_journal:
+                                    driver.launch("suwayomi", driver.services()["suwayomi"]))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        def reload_lifecycle(driver):
+            driver.events.append(("reload_lifecycle",))
+            catalog = ra.load_catalog_services_from_bytes(
+                (live / "home/.local/lib/mobile-server/service_catalog.py").read_bytes(),
+                str(live / "home"), str(live / "usr"), "unit_reload")
+            if "suwayomi_scheduler" in catalog:
+                driver.services_cfg["suwayomi_scheduler"] = catalog["suwayomi_scheduler"]
+            else:
+                driver.services_cfg.pop("suwayomi_scheduler", None)
+        patcher = mock.patch.object(FakeLifecycleDriver, "reload_lifecycle", reload_lifecycle)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return result
 
     def test_plan_reports_changed_destinations_and_affected_services_without_disk_writes(self):
         bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
@@ -1483,12 +1544,9 @@ class TestReleaseActivation(unittest.TestCase):
         # Valid suwayomi-lifecycle profile on plan: restore filter to match preconditions, modify launcher & candidate catalog
         (bundle / "scripts/suwayomi_graphql_filter.py").write_text((live / "home/bin/suwayomi_graphql_filter.py").read_text(encoding="utf-8"), encoding="utf-8")
         (bundle / "scripts/start_suwayomi.sh").write_text("# CANDIDATE_LAUNCHER\n", encoding="utf-8")
-        orig_cat = (bundle / "app/service_catalog.py").read_text(encoding="utf-8")
-        cand_cat = orig_cat.replace(
-            "'battery_guard': dict(cmd=[f'{p}/bin/bash', f'{h}/bin/battery_guard.sh', '--daemon']),",
-            "'battery_guard': dict(cmd=[f'{p}/bin/bash', f'{h}/bin/battery_guard.sh', '--daemon']),\n        'suwayomi_scheduler': dict(cmd=[f'{p}/bin/python3', f'{h}/bin/suwayomi_daily_update.py', '--foreground']),"
-        )
-        (bundle / "app/service_catalog.py").write_text(cand_cat, encoding="utf-8")
+        install_prior_catalog(live, preconds)
+        preconds_file.write_text(json.dumps(preconds), encoding="utf-8")
+        shutil.copyfile(REPO_ROOT / "app/service_catalog.py", bundle / "app/service_catalog.py")
         proc_lc = subprocess.run(
             [
                 sys.executable,
@@ -1632,7 +1690,7 @@ class TestReleaseActivation(unittest.TestCase):
     def test_exact_15_to_16_vs_decoy_runtime_changes(self):
         """Exact 15->16 candidate runtime contract verified; decoys, reordering, and wrong profiles rejected."""
         import app.service_catalog as sc
-        prior_services = sc.runtime_services("/home", "/usr")
+        prior_services = ra.load_catalog_services_from_bytes(prior_catalog_source().encode(), "/home", "/usr", "test_prior")
         self.assertEqual(len(prior_services), 15)
 
         # 1. Exact valid candidate 16 services
@@ -1648,6 +1706,11 @@ class TestReleaseActivation(unittest.TestCase):
             prefix_str="/usr",
             profile="suwayomi-lifecycle",
         )
+
+        unknown_attribute = {sid: dict(value) for sid, value in valid_cand.items()}
+        unknown_attribute["dashboard"]["unexpected_runtime_switch"] = True
+        with self.assertRaises(RuntimeError):
+            ta.validate_catalog_transition(prior_services, unknown_attribute, "/home", "/usr", "suwayomi-lifecycle")
 
         # 2. Decoy commands rejected
         for bad_cmd in (
@@ -1738,7 +1801,7 @@ class TestReleaseActivation(unittest.TestCase):
 
     def test_suwayomi_lifecycle_pre_existing_scheduler_refused(self):
         """Initial 15->16 transition refuses any pre-existing owned scheduler process."""
-        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        bundle, manifest, preconds, live, tx_dir = self._build_lifecycle_fixture()
         (bundle / "scripts/start_suwayomi.sh").write_text("# LAUNCHER\n", encoding="utf-8")
 
         driver = FakeLifecycleDriver()
@@ -1750,7 +1813,7 @@ class TestReleaseActivation(unittest.TestCase):
 
     def test_suwayomi_lifecycle_concurrent_scheduler_appearance_refused(self):
         """Concurrent scheduler appearance before file mutation is detected and refused under lock."""
-        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        bundle, manifest, preconds, live, tx_dir = self._build_lifecycle_fixture()
         (bundle / "scripts/start_suwayomi.sh").write_text("# LAUNCHER\n", encoding="utf-8")
 
         driver = FakeLifecycleDriver()
@@ -1769,9 +1832,8 @@ class TestReleaseActivation(unittest.TestCase):
 
     def test_suwayomi_lifecycle_pre_disabled_marker_preserved(self):
         """Pre-existing disabled marker for suwayomi_scheduler is preserved and unstarted."""
-        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        bundle, manifest, preconds, live, tx_dir = self._build_lifecycle_fixture()
         (bundle / "scripts/start_suwayomi.sh").write_text("# LAUNCHER\n", encoding="utf-8")
-        (bundle / "app/service_catalog.py").write_text("# CATALOG\n", encoding="utf-8")
 
         disabled_dir = live / "home/.config/services_disabled"
         disabled_dir.mkdir(parents=True, exist_ok=True)
@@ -1795,7 +1857,7 @@ class TestReleaseActivation(unittest.TestCase):
 
     def test_suwayomi_lifecycle_survivor_candidate_blocks_file_writes(self):
         """Candidate process surviving termination blocks file writes and marks RECOVERY_REQUIRED."""
-        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        bundle, manifest, preconds, live, tx_dir = self._build_lifecycle_fixture()
         (bundle / "scripts/start_suwayomi.sh").write_text("# CANDIDATE_LAUNCHER\n", encoding="utf-8")
 
         driver = FakeLifecycleDriver()
@@ -1815,7 +1877,7 @@ class TestReleaseActivation(unittest.TestCase):
 
     def test_suwayomi_lifecycle_forged_or_omitted_transition_metadata_fails_closed(self):
         """Activation journal with forged/omitted transition metadata fails closed."""
-        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        bundle, manifest, preconds, live, tx_dir = self._build_lifecycle_fixture()
         (bundle / "scripts/start_suwayomi.sh").write_text("# LAUNCHER\n", encoding="utf-8")
 
         driver = FakeLifecycleDriver()
@@ -1861,9 +1923,30 @@ class TestReleaseActivation(unittest.TestCase):
             ra.validate_activation_journal(bad_j5, tx_journal, live, tx_dir, os.getuid())
         self.assertIn("Transition recovery_hashes", str(ctx.exception))
 
+    def test_lifecycle_recovery_requires_bound_native_backend_recipe(self):
+        bundle, _, preconds, live, tx_dir = self._build_lifecycle_fixture()
+        driver = FakeLifecycleDriver()
+        ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-lifecycle")
+        journal = ra.load_activation_journal(tx_dir)
+        transaction = ra.rt.ReleaseTransaction(tx_dir).load_journal()
+        cases = []
+        missing = json.loads(json.dumps(journal))
+        missing.pop("prior_backend_recipe")
+        cases.append(missing)
+        for field, value in (("argv", ["/bin/sh", "-c", "true"]),
+                             ("cwd", "/tmp"), ("env", {"HOME": "/other", "PREFIX": str(live / "usr")}),
+                             ("prior_launcher_sha256", "0" * 64), ("pid", True)):
+            bad = json.loads(json.dumps(journal))
+            bad["prior_backend_recipe"][field] = value
+            cases.append(bad)
+        for bad in cases:
+            with self.subTest(recipe=bad.get("prior_backend_recipe")):
+                with self.assertRaises(ra.ActivationError):
+                    ra.validate_activation_journal(bad, transaction, live, tx_dir, os.getuid())
+
     def test_suwayomi_lifecycle_rollback_never_relaunches_scheduler(self):
         """Rollback restores prior files and relaunches prior services, NEVER launching scheduler."""
-        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+        bundle, manifest, preconds, live, tx_dir = self._build_lifecycle_fixture()
         (bundle / "scripts/start_suwayomi.sh").write_text("# LAUNCHER\n", encoding="utf-8")
         (bundle / "scripts/server_supervisor.py").write_text("# SUPERVISOR\n", encoding="utf-8")
 
@@ -1915,6 +1998,23 @@ class TestTermuxLifecycleDriverUnit(unittest.TestCase):
         zombie_stat = "1235 (python3) Z 1 1235 1235 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 543211 1000 200"
         (zombie_dir / "stat").write_text(zombie_stat)
         self.assertIsNone(driver.process_identity(1235))
+
+    def test_backend_matching_rejects_sibling_java_and_shell_text(self):
+        driver = ta.TermuxLifecycleDriver(namespace_root=self.root, proc_root=self.proc_root)
+        jar = str(self.root / "home/suwayomi/bin/Suwayomi-Server.jar")
+        commands = {
+            5101: [str(self.root / "usr/bin/java"), "-jar", jar],
+            5102: ["/other/usr/bin/java", "-jar", "/other/home/suwayomi/bin/Suwayomi-Server.jar"],
+            5103: ["/usr/bin/java", "-Dproject=/tmp/suwayomi-upstream", "GradleDaemon"],
+            5104: ["/bin/bash", "-c", f"cat {self.root / 'home/bin/start_suwayomi.sh'}"],
+        }
+        for pid, argv in commands.items():
+            proc = self.proc_root / str(pid)
+            proc.mkdir()
+            (proc / "cmdline").write_bytes(("\0".join(argv) + "\0").encode())
+            (proc / "stat").write_text(f"{pid} (java) S 1 {pid} {pid} 0 -1 4194304 100 0 0 0 10 5 0 0 20 0 1 0 {pid}0 1000 200")
+        driver._sup.matching_processes = lambda sid: [(pid, f"{pid}0") for pid in commands]
+        self.assertEqual(driver.matching_processes("suwayomi"), [(5101, "51010")])
 
     def test_find_daemon_process_exact_and_decoy_rejection(self):
         # 1. Decoy process: python script running unrelated supervisor in /tmp
