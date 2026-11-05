@@ -102,7 +102,9 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         override fun contentType(): MediaType = mediaType
         override fun contentLength(): Long = bytes.size.toLong()
 
-        override fun source(): BufferedSource {
+        override fun source(): BufferedSource = bufferedSource
+
+        private val bufferedSource: BufferedSource by lazy {
             val bais = ByteArrayInputStream(bytes)
             val stream = object : InputStream() {
                 private var opened = false
@@ -140,7 +142,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
                     }
                 }
             }
-            return stream.source().buffer()
+            stream.source().buffer()
         }
     }
 
@@ -313,6 +315,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         File(appDirs.tempMangaCacheRoot).mkdirs()
         DownloadManager.maxChaptersPerSourceOverride = null
         DownloadManager.maxGlobalActiveOverride = null
+        serverConfig.maxSourcesInParallel.value = 6
         globalActiveStreams.set(0)
         globalPeakStreams.set(0)
         DownloaderNetworkBudget.resetForTest()
@@ -335,6 +338,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         File(appDirs.tempMangaCacheRoot).mkdirs()
         DownloadManager.maxChaptersPerSourceOverride = null
         DownloadManager.maxGlobalActiveOverride = null
+        serverConfig.maxSourcesInParallel.value = 6
         DownloaderNetworkBudget.resetForTest()
     }
 
@@ -384,7 +388,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         // Wait for both chapters to finish
         withTimeout(15000) {
             while (true) {
-                if (isChapterDownloaded(ch1) && isChapterDownloaded(ch2) && DownloadManager.getStatus().queue.isEmpty()) {
+                if (isChapterDownloaded(ch1) && isChapterDownloaded(ch2) && (DownloadManager.getStatus().queue.isEmpty() && DownloadManager.activeClaims.isEmpty())) {
                     break
                 }
                 delay(40)
@@ -429,7 +433,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         withTimeout(25000) {
             while (true) {
                 val allDone = allChapterIds.all { isChapterDownloaded(it) }
-                if (allDone && DownloadManager.getStatus().queue.isEmpty()) {
+                if (allDone && (DownloadManager.getStatus().queue.isEmpty() && DownloadManager.activeClaims.isEmpty())) {
                     break
                 }
                 delay(50)
@@ -454,49 +458,83 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
 
     @Test
     fun testNetworkBudgetPressureWithExcessWork() = runBlocking {
-        // 5 sources * 2 chapters = 10 chapters competing for 6 global permits
-        val numSources = 5
-        val sources = (1..numSources).map { i ->
-            val sourceId = 9300L + i
-            val source = FakeHttpSource(id = sourceId, pagesPerChapter = 2, pageStreamDelayMs = 30)
-            registerFakeSource(source)
-            source
+        val sixStreamsOpen = CountDownLatch(6)
+        val releaseStreams = CountDownLatch(1)
+        val closureWithoutPermit = AtomicBoolean(false)
+        // Allow ten chapter claims to pressure the independent six-unit network
+        // limiter. The separate global-concurrency test retains the real cap.
+        DownloadManager.maxGlobalActiveOverride = 10
+        val sources = (1..5).map { i ->
+            FakeHttpSource(
+                id = 9300L + i,
+                pagesPerChapter = 2,
+                pageStreamDelayMs = 0,
+                onPageStreamStarted = { _, page ->
+                    if (page == 0) {
+                        sixStreamsOpen.countDown()
+                        releaseStreams.await(10, TimeUnit.SECONDS)
+                    }
+                },
+                onPageStreamClosed = { _, _ ->
+                    if (DownloaderNetworkBudget.activeUnits.get() == 0) {
+                        closureWithoutPermit.set(true)
+                    }
+                },
+            ).also { registerFakeSource(it) }
         }
-
-        val allChapterIds = mutableListOf<Int>()
-        val mangaChapterMap = mutableListOf<Pair<Int, Int>>()
-
-        for (source in sources) {
-            val mangaId = createManga("ExcessManga-${source.id}", source.id)
-            for (c in 1..2) {
-                val chId = createChapter(mangaId, c, "Ch $c")
-                allChapterIds.add(chId)
-                mangaChapterMap.add(mangaId to chId)
-            }
+        val pairs = sources.flatMap { source ->
+            val manga = createManga("ExcessManga-${source.id}", source.id)
+            (1..2).map { manga to createChapter(manga, it, "Ch $it") }
         }
-
-        DownloadManager.enqueue(DownloadManager.EnqueueInput(allChapterIds))
-
+        try {
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(pairs.map { it.second }))
+            assertTrue(sixStreamsOpen.await(10, TimeUnit.SECONDS), "Six real bodies must hold permits")
+            assertEquals(10, DownloadManager.activeChapterCount, "More than six claims must pressure the network gate")
+            assertEquals(6, globalActiveStreams.get(), "Only six bodies may stream")
+            assertEquals(6, DownloaderNetworkBudget.activeUnits.get())
+            assertEquals(0, DownloaderNetworkBudget.availablePermits)
+        } finally {
+            releaseStreams.countDown()
+        }
         withTimeout(30000) {
-            while (true) {
-                val allDone = allChapterIds.all { isChapterDownloaded(it) }
-                if (allDone && DownloadManager.getStatus().queue.isEmpty()) {
-                    break
-                }
-                delay(50)
+            while (pairs.any { !isChapterDownloaded(it.second) } || DownloadManager.getStatus().queue.isNotEmpty() || DownloadManager.activeClaims.isNotEmpty()) {
+                delay(40)
             }
         }
+        for ((manga, chapter) in pairs) verifyChapterOutput(manga, chapter, 2)
+        assertFalse(closureWithoutPermit.get(), "A permit must cover response-body closure")
+        assertEquals(6, DownloaderNetworkBudget.peakActiveUnits.get())
+        assertEquals(6, DownloaderNetworkBudget.availablePermits)
+        assertEquals(0, globalActiveStreams.get())
+    }
 
-        // Budget never exceeded despite 10 competing tasks
-        assertTrue(DownloaderNetworkBudget.peakActiveUnits.get() <= 6, "Peak network permits must never exceed 6")
-        assertTrue(globalPeakStreams.get() <= 6, "Peak global streaming response bodies must never exceed 6")
-
-        for ((mangaId, chId) in mangaChapterMap) {
-            verifyChapterOutput(mangaId, chId, 2)
+    @Test
+    fun testOneSourceSettingStillAllowsTwoChapters() = runBlocking {
+        val bothOpen = CountDownLatch(2)
+        val release = CountDownLatch(1)
+        serverConfig.maxSourcesInParallel.value = 1
+        val first = FakeHttpSource(
+            id = 9351L, pagesPerChapter = 1, pageStreamDelayMs = 0,
+            onPageStreamStarted = { _, _ -> bothOpen.countDown(); release.await(10, TimeUnit.SECONDS) },
+        )
+        val second = FakeHttpSource(id = 9352L, pagesPerChapter = 1, pageStreamDelayMs = 0)
+        registerFakeSource(first)
+        registerFakeSource(second)
+        val firstManga = createManga("LimitedSourceFirst", first.id)
+        val secondManga = createManga("LimitedSourceSecond", second.id)
+        val chapters = listOf(createChapter(firstManga, 1), createChapter(firstManga, 2), createChapter(secondManga, 1))
+        try {
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(chapters))
+            assertTrue(bothOpen.await(10, TimeUnit.SECONDS), "The source limit must not serialize chapters")
+            assertEquals(2, first.activeStreams.get())
+            assertEquals(0, second.peakStreams.get(), "A second source must wait under the one-source setting")
+        } finally {
+            release.countDown()
         }
-
-        assertEquals(0, DownloaderNetworkBudget.activeUnits.get(), "Active network units must be 0 on quiescence")
-        assertEquals(DownloaderNetworkBudget.DEFAULT_MAX_PERMITS, DownloaderNetworkBudget.availablePermits, "Permits must fully settle to 6")
+        withTimeout(20000) {
+            while (chapters.any { !isChapterDownloaded(it) } || DownloadManager.getStatus().queue.isNotEmpty() || DownloadManager.activeClaims.isNotEmpty()) delay(40)
+        }
+        assertEquals(1, second.peakStreams.get())
     }
 
     @Test
@@ -569,7 +607,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1)))
 
         // 2. Wait until old job begins streaming
-        firstStreamStarted.await(5, TimeUnit.SECONDS)
+        assertTrue(firstStreamStarted.await(5, TimeUnit.SECONDS), "Old response body must reach its cancellation gate")
         val oldClaim = DownloadManager.activeClaims[ch1]
         assertTrue(oldClaim != null, "Old claim must exist while streaming")
 
@@ -583,7 +621,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         // 4. Wait for the new chapter job to complete
         withTimeout(15000) {
             while (true) {
-                if (isChapterDownloaded(ch1) && DownloadManager.getStatus().queue.isEmpty()) {
+                if (isChapterDownloaded(ch1) && (DownloadManager.getStatus().queue.isEmpty() && DownloadManager.activeClaims.isEmpty())) {
                     break
                 }
                 delay(40)
@@ -699,7 +737,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         withTimeout(20000) {
             while (true) {
                 val allDone = listOf(ch1, ch2, ch3).all { isChapterDownloaded(it) }
-                if (allDone && DownloadManager.getStatus().queue.isEmpty()) {
+                if (allDone && (DownloadManager.getStatus().queue.isEmpty() && DownloadManager.activeClaims.isEmpty())) {
                     break
                 }
                 delay(50)
@@ -731,7 +769,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
 
             withTimeout(15000) {
                 while (true) {
-                    if (isChapterDownloaded(ch1) && isChapterDownloaded(ch2) && DownloadManager.getStatus().queue.isEmpty()) {
+                    if (isChapterDownloaded(ch1) && isChapterDownloaded(ch2) && (DownloadManager.getStatus().queue.isEmpty() && DownloadManager.activeClaims.isEmpty())) {
                         break
                     }
                     delay(40)

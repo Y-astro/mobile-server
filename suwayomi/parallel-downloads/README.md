@@ -50,3 +50,28 @@ GRADLE_USER_HOME=/home/astro/server-audit/2026-11-03/suwayomi-download-parallel/
                --tests "suwayomi.tachidesk.manga.impl.PageTest" \
                --tests "suwayomi.tachidesk.manga.impl.download.BoundedParallelDownloaderTest"
 ```
+
+
+## Root acceptance gate
+
+The corrected implementation uses one identity-bound claim owner. Claims remain
+held until cancellation settles; dequeue captures the original job instance.
+The global chapter cap is six independently of the existing source-count setting;
+a one-source setting can still run two chapters of that source. The network cap
+covers full response-body streaming and closure. Page downloads remain serial.
+
+Root added a gated ten-claim test to pressure the independent six-permit network
+budget, corrected the fake response body's stable-source contract, and added the
+one-source/two-chapter regression. The focused suite now contains 16 tests: four
+SafePath, one PageTest and eleven downloader tests. It passed using the production
+384 MiB test heap and JVM options in
+`verification/production-test-heap.init.gradle.kts`. Compilation success and this
+host test gate alone do not prove suitability for the phone.
+
+`source-pin.json` records the current patch and source fingerprints. The complete
+compiled shadow JAR is a compilation input, not the phone deployment artifact.
+Package the reviewed class owners into the pinned installed customized base as
+specified by the separately reviewed preservation packager. Include the new
+`suwayomi/tachidesk/manga/impl/download/ChapterClaim` owner explicitly. Runtime
+verification must load production classes from that packaged JAR, followed by
+paired resource checks and the reviewed JAR-only activation profile.

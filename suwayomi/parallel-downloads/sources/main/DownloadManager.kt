@@ -293,7 +293,7 @@ object DownloadManager {
         get() = maxChaptersPerSourceOverride ?: MAX_ACTIVE_CHAPTERS_PER_SOURCE
 
     val maxGlobalActive: Int
-        get() = maxGlobalActiveOverride ?: serverConfig.maxSourcesInParallel.value.coerceIn(1, MAX_ACTIVE_CHAPTERS_GLOBAL)
+        get() = maxGlobalActiveOverride ?: MAX_ACTIVE_CHAPTERS_GLOBAL
 
     fun isSourceActive(sourceId: Long): Boolean =
         activeClaims.values.any { it.sourceId == sourceId }
@@ -307,9 +307,18 @@ object DownloadManager {
     val activeChapterIds: Set<Int>
         get() = activeClaims.keys.toSet()
 
+    private fun admittedSourceIds(): Set<Long> =
+        downloadQueue
+            .filter { it.state != Error || it.tries < MAX_RETRIES }
+            .map { it.sourceId }
+            .distinct()
+            .take(serverConfig.maxSourcesInParallel.value.coerceIn(1, MAX_ACTIVE_CHAPTERS_GLOBAL))
+            .toSet()
+
     fun isAdmitted(download: DownloadQueueItem): Boolean {
         if (!isRunning.get()) return false
         if (download !in downloadQueue) return false
+        if (download.sourceId !in admittedSourceIds()) return false
         val eligibleSourceDownloads = downloadQueue.filter { it.sourceId == download.sourceId && it.state != Error }
         val admitted = eligibleSourceDownloads.take(maxChaptersPerSource)
         return download in admitted
@@ -357,8 +366,10 @@ object DownloadManager {
             var freeGlobalSlots = (maxGlobal - activeClaims.size).coerceAtLeast(0)
             if (freeGlobalSlots <= 0) return
 
+            val allowedSources = admittedSourceIds()
             val eligibleItems =
                 downloadQueue.filter {
+                    it.sourceId in allowedSources &&
                     (it.state == Queued || it.state == Finished || (it.state == Error && it.tries < MAX_RETRIES)) &&
                         !activeClaims.containsKey(it.chapterId)
                 }
