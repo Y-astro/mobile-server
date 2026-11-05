@@ -100,7 +100,9 @@ class Downloader(
             synchronized(pathLockRegistryLock) { pathLocks[path]?.refCount ?: 0 }
 
         internal fun resetPathLocksForTest() =
-            synchronized(pathLockRegistryLock) { pathLocks.clear() }
+            synchronized(pathLockRegistryLock) {
+                check(pathLocks.isEmpty()) { "Cannot reset path locks while owners or waiters remain" }
+            }
     }
 
     private val logger = KotlinLogging.logger("${Downloader::class.java.name} source($sourceId)")

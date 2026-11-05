@@ -82,7 +82,7 @@ claimed by this source change.
 
 The packaged-runtime gate adds `PackagedClassOriginTest`: it checks the origins of
 five downloader classes and six dependency classes, then checks the test heap cap.
-All 19 tests passed against the local preserved-base candidate. Set
+All 21 tests passed against the local preserved-base candidate. Set
 `MOBILE_SERVER_PROOF_ROOT` to the maintained proof checkout and add
 `verification/packaged-runtime.init.gradle.kts` to the normal test-heap init file.
 The candidate must exist at `.work/packaged-candidate.jar`. Include
@@ -91,10 +91,21 @@ file adds the Java origin check and places the packaged JAR before the configure
 test runtime. It resolves the original classpath lazily in the task context.
 This host gate does not replace the paired resource or Android acceptance gates.
 
-## Deferred verification
+## Output-path collisions and acceptance
 
-Verification of the updated shadow JAR and packaged runtime is deferred pending release
-of the shared Gradle build cache by the concurrent resource worker. The SHA-256 pins for
-mirrored sources and `bounded-chapters.patch` are updated; `verified_compiled_jar_sha256`
-is set to null pending clean root recompilation and focused suite verification (15 downloader
-tests, SafePath, PageTest, and PackagedClassOriginTest).
+Upstream derives chapter paths from display names. Distinct IDs can therefore
+share one existing output path. A reference-counted mutex in `Downloader`
+serializes the complete lifecycle for each canonical output path. Waiting jobs
+hold no network permit; unrelated paths remain concurrent. Cancellation releases
+the waiting reference, and the final owner removes the registry entry.
+
+Existing serial behavior recognizes an already completed aliased output. This
+patch preserves that behavior and existing filenames; it does not migrate paths
+or replace a completed alias with another chapter's bytes. The gated regression
+checks exclusion while another path completes. Bypassing the mutex while retaining
+reference accounting fails that actual preparation/write assertion.
+
+The compiled snapshot and complete patch passed the 20-test focused gate and
+21-test preserved-base runtime gate under the configured `-Xmx384m` limit. The
+source pin records the verified compilation input. The fresh packaged candidate
+still requires its paired resource gate and native phone activation acceptance.

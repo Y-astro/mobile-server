@@ -926,12 +926,6 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         val manga2Id = createManga("DistinctManga", source2Id)
         val ch3 = createChapter(manga2Id, 1, "Chapter 1")
 
-        val path1 = Downloader.canonicalEffectiveOutputPath(manga1Id, ch1)
-        val path2 = Downloader.canonicalEffectiveOutputPath(manga1Id, ch2)
-        val path3 = Downloader.canonicalEffectiveOutputPath(manga2Id, ch3)
-
-        assertEquals(path1, path2, "Both chapter IDs must resolve to the identical effective output path")
-        assertTrue(path1 != path3, "Distinct chapter must have a different effective output path")
 
         val ch1StreamOpen = CountDownLatch(1)
         val releaseCh1 = CountDownLatch(1)
@@ -972,8 +966,17 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         )
         registerFakeSource(fakeSource2)
 
+        val path1 = Downloader.canonicalEffectiveOutputPath(manga1Id, ch1)
+        val path2 = Downloader.canonicalEffectiveOutputPath(manga1Id, ch2)
+        val path3 = Downloader.canonicalEffectiveOutputPath(manga2Id, ch3)
+
+        assertEquals(path1, path2, "Both chapter IDs must resolve to the identical effective output path")
+        assertTrue(path1 != path3, "Distinct chapter must have a different effective output path")
+
         try {
-            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2, ch3)))
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1)))
+            assertTrue(ch1StreamOpen.await(5, TimeUnit.SECONDS), "Chapter 1 must acquire the shared path first")
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch2, ch3)))
 
             withTimeout(5000) {
                 while (DownloadManager.activeClaims.size < 3) {
@@ -990,6 +993,7 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
             // 1) Chapter 2 cannot enter preparation or write
             assertFalse(ch2Prepared.get(), "Chapter 2 must not enter preparation while Chapter 1 holds the output path lock")
             assertFalse(ch2StreamStarted.get(), "Chapter 2 must not enter stream write while Chapter 1 holds the output path lock")
+            withTimeout(5000) { while (Downloader.pathLockRefCount(path1) != 2) delay(10) }
             assertEquals(2, Downloader.pathLockRefCount(path1), "Path lock refCount must be 2 while Chapter 2 waits")
 
             // 2) Distinct-path job Chapter 3 must progress and complete
@@ -1001,6 +1005,10 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
             }
             assertTrue(isChapterDownloaded(ch3), "Chapter 3 must be marked downloaded")
             verifyChapterOutput(manga2Id, ch3, 2)
+
+            assertFalse(ch2Prepared.get(), "Shared-path waiter must remain excluded while unrelated chapter completes")
+            assertFalse(ch2StreamStarted.get(), "Shared-path waiter must not write before owner release")
+            assertEquals(1, DownloaderNetworkBudget.activeUnits.get(), "Waiting for a path must not consume a network permit")
 
             // Releasing Chapter 1 permits Chapter 2 to proceed
             releaseCh1.countDown()
@@ -1016,10 +1024,11 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
 
             assertTrue(isChapterDownloaded(ch1), "Chapter 1 must finish successfully")
             assertTrue(isChapterDownloaded(ch2), "Chapter 2 must finish successfully")
-            assertTrue(ch2Prepared.get(), "Chapter 2 must have entered preparation after lock release")
-
+            // Existing serial behavior recognizes the completed shared output without refetching chapter 2.
+            assertFalse(ch2Prepared.get(), "Completed shared output must be reused after lock release")
+            assertFalse(ch2StreamStarted.get(), "Alias must not overwrite completed shared output")
             verifyChapterOutput(manga1Id, ch1, 2)
-            verifyChapterOutput(manga1Id, ch2, 2)
+            assertEquals(getChapterCbzPath(manga1Id, ch1), getChapterCbzPath(manga1Id, ch2))
 
             withTimeout(5000) {
                 while (DownloadManager.activeClaims.isNotEmpty()) {
@@ -1042,8 +1051,6 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         val ch1 = createChapter(mangaId, 1, "Chapter 1")
         val ch2 = createChapter(mangaId, 2, "Chapter 1")
 
-        val sharedPath = Downloader.canonicalEffectiveOutputPath(mangaId, ch1)
-        assertEquals(sharedPath, Downloader.canonicalEffectiveOutputPath(mangaId, ch2))
 
         val ch1Streaming = CountDownLatch(1)
         val releaseCh1 = CountDownLatch(1)
@@ -1061,8 +1068,13 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
         )
         registerFakeSource(fakeSource)
 
+        val sharedPath = Downloader.canonicalEffectiveOutputPath(mangaId, ch1)
+        assertEquals(sharedPath, Downloader.canonicalEffectiveOutputPath(mangaId, ch2))
+
         try {
-            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1, ch2)))
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch1)))
+            assertTrue(ch1Streaming.await(5, TimeUnit.SECONDS), "Chapter 1 must acquire the shared path first")
+            DownloadManager.enqueue(DownloadManager.EnqueueInput(listOf(ch2)))
 
             withTimeout(5000) {
                 while (DownloadManager.activeClaims.size < 2) {
@@ -1071,10 +1083,11 @@ class BoundedParallelDownloaderTest : ApplicationTest() {
             }
 
             assertTrue(ch1Streaming.await(5, TimeUnit.SECONDS), "Chapter 1 must start streaming and hold path lock")
+            withTimeout(5000) { while (Downloader.pathLockRefCount(sharedPath) != 2) delay(10) }
             assertEquals(2, Downloader.pathLockRefCount(sharedPath), "Path lock refCount must be 2 while ch2 waits")
 
             // Cancel Chapter 2 while waiting for path lock
-            DownloadManager.stopChapter(ch2)
+            DownloadManager.dequeue(DownloadManager.EnqueueInput(listOf(ch2)))
 
             withTimeout(5000) {
                 while (DownloadManager.activeClaims.containsKey(ch2)) {
