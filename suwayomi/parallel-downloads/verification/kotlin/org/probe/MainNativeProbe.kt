@@ -325,6 +325,7 @@ object MainNativeProbe {
         println("=== Starting MainNativeProbe ===")
 
         var allPassedOverall = false
+        var bootstrapped = false
         try {
             val customWorkspace = System.getProperty("mobile.proof.workspace")
                 ?: System.getenv("MOBILE_PROOF_WORKSPACE")
@@ -333,7 +334,7 @@ object MainNativeProbe {
             val workspacePath = workspaceDir.toPath().toRealPath()
 
             val initialCwd = File(".").canonicalFile.toPath()
-            check(initialCwd.startsWith(workspacePath)) {
+            check(initialCwd == workspacePath) {
                 "Process CWD $initialCwd must be inside private workspace $workspacePath before JVM startup"
             }
 
@@ -341,6 +342,42 @@ object MainNativeProbe {
             val workspaceTmp = File(workspaceDir, "tmp").canonicalFile
             val workspaceData = File(workspaceDir, "data").canonicalFile
             listOf(workspaceHome, workspaceTmp, workspaceData).forEach { it.mkdirs() }
+
+            check(File(System.getenv("HOME")).canonicalFile == workspaceHome)
+            check(File(System.getProperty("user.home")).canonicalFile == workspaceHome)
+            check(File(System.getProperty("java.io.tmpdir")).canonicalFile == workspaceTmp)
+            val flags = ManagementFactory.getRuntimeMXBean().inputArguments
+            check(flags.containsAll(listOf("-Xms64m", "-Xmx384m", "-XX:+UseSerialGC",
+                "-XX:TieredStopAtLevel=1", "-XX:CICompilerCount=2")))
+            check(Runtime.getRuntime().maxMemory() in (383L * 1024 * 1024)..(384L * 1024 * 1024))
+            check(!File("/proc/self/cmdline").readText().contains("suwayomi", ignoreCase = true))
+            val candidateFile = File(System.getProperty("mobile.proof.candidate.jar")).canonicalFile
+            val digest = MessageDigest.getInstance("SHA-256")
+            candidateFile.inputStream().use { input ->
+                val buffer = ByteArray(65536)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            }
+            val artifactSha = digest.digest().joinToString("") { "%02x".format(it) }
+            check(artifactSha == System.getProperty("mobile.proof.expected.sha"))
+            val origins = listOf(
+                "suwayomi.tachidesk.manga.impl.download.DownloadManager",
+                "suwayomi.tachidesk.manga.impl.download.Downloader",
+                "suwayomi.tachidesk.manga.impl.download.DownloaderNetworkBudget",
+                "suwayomi.tachidesk.manga.impl.download.ChapterClaim",
+                "suwayomi.tachidesk.manga.impl.download.fileProvider.ChaptersFilesProvider",
+                "kotlin.Unit", "kotlinx.coroutines.Job", "okhttp3.OkHttpClient",
+                "org.objectweb.asm.ClassReader", "com.sun.jna.Native",
+                "org.jetbrains.exposed.v1.jdbc.Database",
+            )
+            origins.forEach { name ->
+                val type = Class.forName(name, false, MainNativeProbe::class.java.classLoader)
+                check(File(type.protectionDomain.codeSource.location.toURI()).canonicalFile == candidateFile) { name }
+            }
+            println("Verified packaged class origins: ${origins.size}; SHA-256: $artifactSha")
 
             val unboundPort = ServerSocket(0).use { it.localPort }
             System.setProperty("user.home", workspaceHome.canonicalPath)
@@ -355,6 +392,7 @@ object MainNativeProbe {
 
             ApplicationTest.testingSetup()
             ApplicationTest.databaseSetup()
+            bootstrapped = true
 
             val appDirs = Injekt.get<ApplicationDirs>()
             listOf(
@@ -637,11 +675,6 @@ object MainNativeProbe {
             println("\n=== All Trials Completed in ${totalElapsedWallMs}ms ===")
 
             val runNonce = UUID.randomUUID().toString()
-            val candidateJarProp = System.getProperty("mobile.proof.candidate.jar")
-                ?: File(workspaceDir, "../page-candidate.jar").canonicalPath
-            val candidateFile = File(candidateJarProp).let { if (it.exists()) it else File(".work/page-candidate.jar") }
-            val artifactSha = if (candidateFile.exists()) sha256Hex(candidateFile.readBytes()) else "unknown"
-
             val classOrigin = ChaptersFilesProvider::class.java.protectionDomain.codeSource?.location?.toString() ?: "unknown"
             val jvmFlags = ManagementFactory.getRuntimeMXBean().inputArguments.joinToString(" ")
 
@@ -704,7 +737,7 @@ object MainNativeProbe {
         } finally {
             try {
                 // Quiescence cleanup before exit
-                runBlocking { DownloadManager.clear() }
+                if (bootstrapped) runBlocking { DownloadManager.clear() }
             } catch (_: Throwable) {}
             println("MainNativeProbe exiting with code: ${if (allPassedOverall) 0 else 1}")
             exitProcess(if (allPassedOverall) 0 else 1)
