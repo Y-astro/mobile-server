@@ -35,6 +35,10 @@ AUDITED_BASELINE_SHA256 = "85282ec24628491bdc25975dc4767d81f54d02e368cf5d652dc36
 DEFAULT_GATEWAY_LOCAL = ".work/mobile-gateway"
 DEFAULT_GATEWAY_REMOTE = "/data/data/com.termux/files/home/bin/mobile-gateway"
 
+# Built Suwayomi JAR artifact constants
+DEFAULT_SUWAYOMI_JAR_LOCAL = ".work/suwayomi-parallel.jar"
+DEFAULT_SUWAYOMI_JAR_REMOTE = "/data/data/com.termux/files/home/suwayomi/bin/Suwayomi-Server.jar"
+
 # Mobile server python helper lib destination
 MOBILE_SERVER_LIB_PREFIX = "/data/data/com.termux/files/home/.local/lib/mobile-server/"
 
@@ -199,12 +203,17 @@ def load_baseline_mapping(root_dir: Path) -> Dict[str, str]:
     return mapping
 
 
-def get_canonical_ownership(root_dir: Path, include_gateway: bool = False) -> Dict[str, str]:
+def get_canonical_ownership(
+    root_dir: Path,
+    include_gateway: bool = False,
+    include_suwayomi_jar: bool = False,
+) -> Dict[str, str]:
     """
     Construct canonical ownership table:
     1. Audited baseline rows from config/deployment-files.json
     2. Safe dynamically discovered app/*.py helpers (excluding dashboard executable)
     3. Optional declared built gateway (.work/mobile-gateway)
+    4. Optional declared built Suwayomi JAR (.work/suwayomi-parallel.jar)
     """
     ownership = load_baseline_mapping(root_dir)
     ownership.update(REVIEWED_ADDITIONAL_ASSETS)
@@ -234,6 +243,11 @@ def get_canonical_ownership(root_dir: Path, include_gateway: bool = False) -> Di
         gw_path = root_dir / DEFAULT_GATEWAY_LOCAL
         if gw_path.exists():
             ownership[DEFAULT_GATEWAY_LOCAL] = DEFAULT_GATEWAY_REMOTE
+
+    if include_suwayomi_jar:
+        jar_path = root_dir / DEFAULT_SUWAYOMI_JAR_LOCAL
+        if jar_path.exists():
+            ownership[DEFAULT_SUWAYOMI_JAR_LOCAL] = DEFAULT_SUWAYOMI_JAR_REMOTE
 
     return ownership
 
@@ -346,11 +360,17 @@ def generate_manifest(
     root_dir: Path,
     include_gateway: bool = False,
     require_gateway: bool = False,
+    include_suwayomi_jar: bool = False,
+    require_suwayomi_jar: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Generate candidate release manifest from source tree based on canonical ownership.
     """
-    canonical_ownership = get_canonical_ownership(root_dir, include_gateway=include_gateway)
+    canonical_ownership = get_canonical_ownership(
+        root_dir,
+        include_gateway=include_gateway,
+        include_suwayomi_jar=include_suwayomi_jar,
+    )
 
     if require_gateway:
         gw_path = root_dir / DEFAULT_GATEWAY_LOCAL
@@ -360,6 +380,15 @@ def generate_manifest(
                 "Build gateway first: cd gateway && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o ../.work/mobile-gateway ."
             )
         canonical_ownership[DEFAULT_GATEWAY_LOCAL] = DEFAULT_GATEWAY_REMOTE
+
+    if require_suwayomi_jar:
+        jar_path = root_dir / DEFAULT_SUWAYOMI_JAR_LOCAL
+        if not jar_path.exists():
+            raise ManifestError(
+                f"Required Suwayomi JAR built artifact not found at {jar_path}. "
+                f"Build or place JAR first at {DEFAULT_SUWAYOMI_JAR_LOCAL}"
+            )
+        canonical_ownership[DEFAULT_SUWAYOMI_JAR_LOCAL] = DEFAULT_SUWAYOMI_JAR_REMOTE
 
     seen_remotes: Dict[str, str] = {}
     entries: List[Dict[str, Any]] = []
@@ -395,6 +424,7 @@ def validate_manifest(
     manifest_entries: List[Dict[str, Any]],
     root_dir: Path,
     require_gateway: bool = False,
+    require_suwayomi_jar: bool = False,
 ) -> None:
     """
     Validate candidate release manifest entries against canonical ownership and bundle root.
@@ -404,7 +434,11 @@ def validate_manifest(
         raise ManifestError("Manifest root must be a list of file entries")
 
     # Load canonical allowed ownership
-    canonical_ownership = get_canonical_ownership(root_dir, include_gateway=True)
+    canonical_ownership = get_canonical_ownership(
+        root_dir,
+        include_gateway=True,
+        include_suwayomi_jar=True,
+    )
 
     manifest_locals: Set[str] = set()
     seen_remotes: Dict[str, str] = {}
@@ -509,6 +543,11 @@ def validate_manifest(
             f"Required Go built artifact '{DEFAULT_GATEWAY_LOCAL}' is not declared in release manifest"
         )
 
+    if require_suwayomi_jar and DEFAULT_SUWAYOMI_JAR_LOCAL not in manifest_locals:
+        raise ManifestError(
+            f"Required Suwayomi JAR built artifact '{DEFAULT_SUWAYOMI_JAR_LOCAL}' is not declared in release manifest"
+        )
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -529,6 +568,20 @@ def main() -> int:
         action="store_true",
         help=f"Require {DEFAULT_GATEWAY_LOCAL} to be built and included",
     )
+    gen_parser.add_argument(
+        "--include-suwayomi-jar",
+        "--include-jar",
+        dest="include_suwayomi_jar",
+        action="store_true",
+        help=f"Include {DEFAULT_SUWAYOMI_JAR_LOCAL} if present on disk",
+    )
+    gen_parser.add_argument(
+        "--require-suwayomi-jar",
+        "--require-jar",
+        dest="require_suwayomi_jar",
+        action="store_true",
+        help=f"Require {DEFAULT_SUWAYOMI_JAR_LOCAL} to be built/present and included",
+    )
 
     val_parser = subparsers.add_parser("validate", help="Validate candidate release manifest")
     val_parser.add_argument("--manifest", "-m", required=True, help="Path to manifest JSON file")
@@ -537,6 +590,13 @@ def main() -> int:
         "--require-gateway",
         action="store_true",
         help=f"Require {DEFAULT_GATEWAY_LOCAL} to be present in manifest and on disk",
+    )
+    val_parser.add_argument(
+        "--require-suwayomi-jar",
+        "--require-jar",
+        dest="require_suwayomi_jar",
+        action="store_true",
+        help=f"Require {DEFAULT_SUWAYOMI_JAR_LOCAL} to be present in manifest and on disk",
     )
 
     args = parser.parse_args()
@@ -553,6 +613,8 @@ def main() -> int:
                 root_dir=root_dir,
                 include_gateway=args.include_gateway,
                 require_gateway=args.require_gateway,
+                include_suwayomi_jar=args.include_suwayomi_jar,
+                require_suwayomi_jar=args.require_suwayomi_jar,
             )
 
             formatted_json = json.dumps(entries, indent=2) + "\n"
@@ -586,6 +648,7 @@ def main() -> int:
                 manifest_entries=entries,
                 root_dir=root_dir,
                 require_gateway=args.require_gateway,
+                require_suwayomi_jar=args.require_suwayomi_jar,
             )
             print(f"Release manifest validation PASSED: {len(entries)} verified entries.")
             return 0

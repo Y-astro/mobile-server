@@ -193,11 +193,19 @@ DEPENDENCY_ORDER = [
 PROFILE_GENERAL = "general"
 PROFILE_SUWAYOMI_FILTER = "suwayomi-filter"
 PROFILE_SUWAYOMI_LIFECYCLE = "suwayomi-lifecycle"
-VALID_PROFILES = (PROFILE_GENERAL, PROFILE_SUWAYOMI_FILTER, PROFILE_SUWAYOMI_LIFECYCLE)
+PROFILE_SUWAYOMI_JAR = "suwayomi-jar"
+VALID_PROFILES = (PROFILE_GENERAL, PROFILE_SUWAYOMI_FILTER, PROFILE_SUWAYOMI_LIFECYCLE, PROFILE_SUWAYOMI_JAR)
 SUWAYOMI_FILTER_REMOTE = "/data/data/com.termux/files/home/bin/suwayomi_graphql_filter.py"
 SUWAYOMI_LAUNCHER_REMOTE = "/data/data/com.termux/files/home/bin/start_suwayomi.sh"
 SUPERVISOR_REMOTE = "/data/data/com.termux/files/home/bin/server_supervisor.py"
 SERVICE_CATALOG_REMOTE = "/data/data/com.termux/files/home/.local/lib/mobile-server/service_catalog.py"
+SUWAYOMI_JAR_REMOTE = "/data/data/com.termux/files/home/suwayomi/bin/Suwayomi-Server.jar"
+DEFAULT_SUWAYOMI_JAR_LOCAL = ".work/suwayomi-parallel.jar"
+
+SUWAYOMI_FORK_FREE_LAUNCHER_SHA256 = "510d7d887255832fedf2d81e681ddcdc3082bf1ae5a09c5237e3c9ae5e12df99"
+SUWAYOMI_FORK_FREE_CATALOG_SHA256 = "9c9163f9c2e1fceaf0d9dd2989d869ce76d1566b1aa66e5f78e0cb90a7d77159"
+SUWAYOMI_ACCEPTED_JAR_SHA256 = "9b7bf58329eccb3dcfb7246360f6818f7391b8804330a9e0491006049678bedc"
+SUWAYOMI_JAR_MODE = 0o644
 
 SUWAYOMI_LIFECYCLE_ALLOWED_REMOTES = (
     SUWAYOMI_LAUNCHER_REMOTE,
@@ -333,9 +341,12 @@ def map_destination_to_component(remote_path: str) -> Optional[Tuple[str, bool, 
     """
     norm = remote_path.replace("\\", "/").rstrip("/")
 
-    # Check for Suwayomi scripts
+    # Check for Suwayomi scripts and JAR
     if norm == SUWAYOMI_FILTER_REMOTE:
         return ("suwayomi_filter", True, False)
+
+    if norm == SUWAYOMI_JAR_REMOTE:
+        return ("suwayomi", True, False)
 
     for sw in ("start_suwayomi.sh", "suwayomi_daily_update.py", "suwayomi_update.sh"):
         if norm.endswith(f"home/bin/{sw}"):
@@ -485,6 +496,23 @@ def map_changed_destinations(
                 affected_services.add("dashboard")
                 affected_services.add("suwayomi_scheduler")
                 supervisor_affected = True
+
+        elif profile == PROFILE_SUWAYOMI_JAR:
+            norm = remote.replace("\\", "/").rstrip("/")
+            if norm != SUWAYOMI_JAR_REMOTE:
+                raise ActivationError(
+                    f"Profile '{PROFILE_SUWAYOMI_JAR}' permits only {SUWAYOMI_JAR_REMOTE} to change, found: {remote}"
+                )
+            if action != rt.ACTION_REPLACE:
+                raise ActivationError(
+                    f"Profile '{PROFILE_SUWAYOMI_JAR}' permits only modifying existing {SUWAYOMI_JAR_REMOTE} with action REPLACE, found: {action} on {remote}"
+                )
+            if len(changed_destinations) > 1:
+                raise ActivationError(
+                    f"Profile '{PROFILE_SUWAYOMI_JAR}' permits only a single changed destination"
+                )
+            affected_services.add("suwayomi")
+            supervisor_affected = False
 
     if "ssh" in affected_services:
         raise ActivationError("SSH service restart is strictly prohibited")
@@ -767,6 +795,41 @@ def validate_activation_journal(
                 raise ActivationError("Missing prior_backend_recipe for active lifecycle backend")
         else:
             validate_prior_backend_recipe(recipe, ns_root, tx_entries)
+
+    elif validated_profile == PROFILE_SUWAYOMI_JAR:
+        tx_entries = tx_journal.get("entries", [])
+        assets = act_journal.get("recovery_assets", {})
+        if assets.get("service_catalog.py") != SUWAYOMI_FORK_FREE_CATALOG_SHA256:
+            raise ActivationError("JAR recovery requires the reviewed preserved 16-service catalog")
+        for remote, digest in ((SUWAYOMI_LAUNCHER_REMOTE, SUWAYOMI_FORK_FREE_LAUNCHER_SHA256),
+                               (SERVICE_CATALOG_REMOTE, SUWAYOMI_FORK_FREE_CATALOG_SHA256)):
+            entry = next((e for e in tx_entries if e.get("remote") == remote), None)
+            if (entry is None or entry.get("action") != rt.ACTION_UNTOUCHED
+                    or entry.get("original_sha256") != digest or entry.get("candidate_sha256") != digest):
+                raise ActivationError("JAR recovery lifecycle preimage binding mismatch")
+        changed_entries = [e for e in tx_entries if e.get("action") != rt.ACTION_UNTOUCHED]
+        if len(changed_entries) != 1:
+            raise ActivationError(
+                f"Profile '{PROFILE_SUWAYOMI_JAR}' requires exactly 1 changed entry, found {len(changed_entries)}"
+            )
+        jar_entry = changed_entries[0]
+        entry_remote = jar_entry.get("dest_path") or jar_entry.get("remote")
+        if entry_remote != SUWAYOMI_JAR_REMOTE:
+            raise ActivationError(
+                f"Profile '{PROFILE_SUWAYOMI_JAR}' permits only {SUWAYOMI_JAR_REMOTE} to change, found: {entry_remote}"
+            )
+        if jar_entry.get("action") != rt.ACTION_REPLACE:
+            raise ActivationError(
+                f"Profile '{PROFILE_SUWAYOMI_JAR}' permits only action REPLACE, found: {jar_entry.get('action')}"
+            )
+        if rt.normalize_mode(jar_entry.get("target_mode")) != SUWAYOMI_JAR_MODE:
+            raise ActivationError(
+                f"Profile '{PROFILE_SUWAYOMI_JAR}' target mode mismatch: expected {oct(SUWAYOMI_JAR_MODE)}, got {jar_entry.get('target_mode')}"
+            )
+        if rt.normalize_mode(jar_entry.get("original_mode")) != SUWAYOMI_JAR_MODE:
+            raise ActivationError(
+                f"Profile '{PROFILE_SUWAYOMI_JAR}' original mode mismatch: expected {oct(SUWAYOMI_JAR_MODE)}, got {jar_entry.get('original_mode')}"
+            )
 
     tx_id = act_journal.get("tx_id")
     if not isinstance(tx_id, str) or not tx_id:
@@ -1268,6 +1331,32 @@ def validate_recovery_assets(
             )
 
 
+def require_reviewed_jar_lifecycle(ns_root: Path, uid: int, driver=None) -> None:
+    """Refuse JAR activation against an absent or unreviewed lifecycle owner."""
+    for relative, digest, label in (
+        ("home/bin/start_suwayomi.sh", SUWAYOMI_FORK_FREE_LAUNCHER_SHA256, "launcher"),
+        ("home/.local/lib/mobile-server/service_catalog.py", SUWAYOMI_FORK_FREE_CATALOG_SHA256, "catalog"),
+    ):
+        path = ns_root / relative
+        if not path.exists() or path.is_symlink() or not path.is_file():
+            raise ActivationError(f"Live {label} is missing or not a regular file: {path}")
+        if path.stat().st_uid != uid:
+            raise ActivationError(f"Live {label} UID mismatch")
+        if compute_file_sha256(path).lower() != digest.lower():
+            raise ActivationError(f"Live {label} hash mismatch; refusing suwayomi-jar on unreviewed/legacy {label}")
+    if driver is not None:
+        services = driver.services()
+        if len(services) != 16:
+            raise ActivationError(f"suwayomi-jar requires exact 16 managed services, found {len(services)}")
+        disabled = ns_root / "home/.config/services_disabled/suwayomi"
+        if (disabled.exists() or disabled.is_symlink()) and driver.matching_processes("suwayomi"):
+            raise ActivationError("Disabled backend is still running; refusing JAR replacement")
+        scheduler = services.get("suwayomi_scheduler", {})
+        expected = [str(ns_root / "usr/bin/python3"), str(ns_root / "home/bin/suwayomi_daily_update.py"), "--foreground"]
+        if not isinstance(scheduler, dict) or scheduler.get("cmd") != expected:
+            raise ActivationError("Live suwayomi_scheduler command drift")
+
+
 def plan(
     bundle_root: Path,
     preconditions: Dict[str, Any],
@@ -1278,7 +1367,12 @@ def plan(
     profile = validate_profile(profile)
     b_root = Path(bundle_root).resolve()
     manifest_mod = rt._load_release_manifest_module()
-    manifest_entries = manifest_mod.generate_manifest(b_root, require_gateway=True)
+    require_suwayomi_jar = (profile == PROFILE_SUWAYOMI_JAR)
+    manifest_entries = manifest_mod.generate_manifest(
+        b_root,
+        require_gateway=True,
+        require_suwayomi_jar=require_suwayomi_jar,
+    )
 
     precond_files = {p["path"]: p for p in preconditions.get("files", [])}
     changed_destinations: List[Dict[str, Any]] = []
@@ -1341,6 +1435,20 @@ def plan(
                 profile=profile,
             )
 
+    if profile == PROFILE_SUWAYOMI_JAR:
+        jar_precond = precond_files.get(SUWAYOMI_JAR_REMOTE)
+        if not jar_precond:
+            raise ActivationError(f"Missing precondition for {SUWAYOMI_JAR_REMOTE}")
+        if jar_precond.get("kind") != "file":
+            raise ActivationError(
+                f"Precondition for {SUWAYOMI_JAR_REMOTE} must be a regular file, got kind {jar_precond.get('kind')!r}"
+            )
+        if rt.normalize_mode(jar_precond.get("mode")) != SUWAYOMI_JAR_MODE:
+            raise ActivationError(
+                f"Precondition mode mismatch for {SUWAYOMI_JAR_REMOTE}: expected {oct(SUWAYOMI_JAR_MODE)}, got {jar_precond.get('mode')}"
+            )
+        require_reviewed_jar_lifecycle(ns_root, os.getuid())
+
     return {
         "status": "plan_ok",
         "profile": profile,
@@ -1377,9 +1485,16 @@ def apply(
     with ActivationLock(ns_root):
         if driver.is_paused():
             raise ActivationError("Server is deliberately paused; activation refused")
+        if profile == PROFILE_SUWAYOMI_JAR:
+            require_reviewed_jar_lifecycle(ns_root, current_uid, driver)
 
         manifest_mod = rt._load_release_manifest_module()
-        manifest_entries = manifest_mod.generate_manifest(b_root, require_gateway=True)
+        require_suwayomi_jar = (profile == PROFILE_SUWAYOMI_JAR)
+        manifest_entries = manifest_mod.generate_manifest(
+            b_root,
+            require_gateway=True,
+            require_suwayomi_jar=require_suwayomi_jar,
+        )
 
         tx = rt.prepare(
             bundle_root=b_root,
@@ -1394,7 +1509,7 @@ def apply(
             if "profile" in sig.parameters:
                 driver.validate_candidate_services(b_root, profile=profile)
             else:
-                if profile == PROFILE_SUWAYOMI_LIFECYCLE:
+                if profile in (PROFILE_SUWAYOMI_LIFECYCLE, PROFILE_SUWAYOMI_JAR):
                     raise ActivationError(
                         f"Lifecycle driver does not support profile-aware validation for {profile}"
                     )
@@ -1499,6 +1614,9 @@ def apply(
 
         try:
             with driver.lock("services", timeout=10.0):
+                if profile == PROFILE_SUWAYOMI_JAR:
+                    require_reviewed_jar_lifecycle(ns_root, current_uid, driver)
+
                 if profile == PROFILE_SUWAYOMI_LIFECYCLE:
                     existing_sched = driver.matching_processes("suwayomi_scheduler")
                     if existing_sched:
@@ -1584,6 +1702,9 @@ def apply(
                         raise QuiescenceError(
                             f"suwayomi_scheduler process appeared concurrently before file mutation: {concurrent_sched}"
                         )
+
+                if profile == PROFILE_SUWAYOMI_JAR and driver.matching_processes("suwayomi"):
+                    raise QuiescenceError("Java is running before JAR replacement, including a disabled backend")
 
                 # Re-verify active services dead
                 for sid in active_services:
@@ -1844,6 +1965,11 @@ def _rollback_internal(
                 act_journal["state"] = STATE_RECOVERY_REQUIRED
                 save_activation_journal(tx_dir, act_journal)
                 raise QuiescenceError("Supervisor daemon reappeared or replaced during unlocked gap before file rollback")
+
+        if act_journal.get("profile") == PROFILE_SUWAYOMI_JAR and driver.matching_processes("suwayomi"):
+            act_journal["state"] = STATE_RECOVERY_REQUIRED
+            save_activation_journal(tx_dir, act_journal)
+            raise QuiescenceError("Java is running before JAR rollback, including a disabled backend")
 
         # 3. Rollback files
         tx_journal = tx.load_journal()

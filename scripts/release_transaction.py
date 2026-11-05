@@ -721,6 +721,7 @@ AUDITED_TARGET_MODE_OVERRIDES: Dict[str, int] = {
     "/data/data/com.termux/files/home/bin/suwayomi_update.sh": 0o755,
     "/data/data/com.termux/files/home/bin/termux_session.sh": 0o755,
     "/data/data/com.termux/files/home/.config/ttyd/termux_index.html": 0o644,
+    "/data/data/com.termux/files/home/suwayomi/bin/Suwayomi-Server.jar": 0o644,
 }
 
 

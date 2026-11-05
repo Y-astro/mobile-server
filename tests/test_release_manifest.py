@@ -22,6 +22,8 @@ spec.loader.exec_module(rm)
 
 DEFAULT_GATEWAY_LOCAL = rm.DEFAULT_GATEWAY_LOCAL
 DEFAULT_GATEWAY_REMOTE = rm.DEFAULT_GATEWAY_REMOTE
+DEFAULT_SUWAYOMI_JAR_LOCAL = rm.DEFAULT_SUWAYOMI_JAR_LOCAL
+DEFAULT_SUWAYOMI_JAR_REMOTE = rm.DEFAULT_SUWAYOMI_JAR_REMOTE
 AUDITED_BASELINE_SHA256 = rm.AUDITED_BASELINE_SHA256
 FORBIDDEN_SECRET_PATTERNS = rm.FORBIDDEN_SECRET_PATTERNS
 ManifestError = rm.ManifestError
@@ -479,6 +481,117 @@ class TestReleaseManifest(unittest.TestCase):
         with self.assertRaises(ManifestError) as ctx:
             validate_manifest(filtered, bundle_root)
         self.assertIn('Release manifest omits required maintained assets: web/portal-polling.js', str(ctx.exception))
+
+    def test_suwayomi_jar_optional_built_artifact(self):
+        """Opt-in 44 includes exact Suwayomi JAR; missing when required fails; symlink rejected."""
+        import scripts.release_transaction as rt
+        bundle_root = self._create_minimal_bundle()
+
+        # Add gateway
+        gw_file = bundle_root / DEFAULT_GATEWAY_LOCAL
+        gw_file.parent.mkdir(parents=True, exist_ok=True)
+        gw_file.write_bytes(b"\x7fELFfakegatewaybinary")
+
+        # Without opt-in, JAR is omitted
+        manifest_no_jar = generate_manifest(bundle_root, include_gateway=True)
+        self.assertIsNone(next((e for e in manifest_no_jar if e["local"] == DEFAULT_SUWAYOMI_JAR_LOCAL), None))
+        validate_manifest(manifest_no_jar, bundle_root, require_gateway=True)
+
+        # Full repository tree test: 42 maintained files + gateway = 43; + JAR = 44
+        full_bundle = self.test_root / "full_bundle"
+        shutil.copytree(REPO_ROOT / "config", full_bundle / "config")
+        shutil.copytree(REPO_ROOT / "web", full_bundle / "web")
+        shutil.copytree(REPO_ROOT / "scripts", full_bundle / "scripts")
+        shutil.copytree(REPO_ROOT / "app", full_bundle / "app")
+        # Ensure optional built gateway exists
+        (full_bundle / ".work").mkdir(parents=True, exist_ok=True)
+        (full_bundle / DEFAULT_GATEWAY_LOCAL).write_bytes(b"\x7fELFgateway")
+
+        manifest_43 = generate_manifest(full_bundle, include_gateway=True)
+        self.assertEqual(len(manifest_43), 43)
+        validate_manifest(manifest_43, full_bundle, require_gateway=True)
+
+        # Opt-in with JAR produces exact 44 files
+        (full_bundle / DEFAULT_SUWAYOMI_JAR_LOCAL).write_bytes(b"PK\x03\x04fulljar")
+        manifest_44 = generate_manifest(full_bundle, include_gateway=True, include_suwayomi_jar=True)
+        self.assertEqual(len(manifest_44), 44)
+        validate_manifest(manifest_44, full_bundle, require_gateway=True, require_suwayomi_jar=True)
+
+        # Requiring JAR when absent fails
+        with self.assertRaises(ManifestError) as ctx:
+            generate_manifest(bundle_root, include_gateway=True, require_suwayomi_jar=True)
+        self.assertIn("Required Suwayomi JAR built artifact not found", str(ctx.exception))
+
+        with self.assertRaises(ManifestError) as ctx:
+            validate_manifest(manifest_no_jar, bundle_root, require_gateway=True, require_suwayomi_jar=True)
+        self.assertIn("Required Suwayomi JAR built artifact", str(ctx.exception))
+
+        # Add valid benign JAR file to minimal bundle
+        jar_file = bundle_root / DEFAULT_SUWAYOMI_JAR_LOCAL
+        jar_file.write_bytes(b"PK\x03\x04fakejarcontent")
+
+        manifest_min_44 = generate_manifest(bundle_root, include_gateway=True, include_suwayomi_jar=True)
+        jar_entry = next((e for e in manifest_min_44 if e["local"] == DEFAULT_SUWAYOMI_JAR_LOCAL), None)
+        self.assertIsNotNone(jar_entry)
+        self.assertEqual(jar_entry["remote"], DEFAULT_SUWAYOMI_JAR_REMOTE)
+        validate_manifest(manifest_min_44, bundle_root, require_gateway=True, require_suwayomi_jar=True)
+
+        # Mode policy check: canonical target mode for Suwayomi JAR is fixed 0644
+        jar_target_mode = rt.get_canonical_target_mode(DEFAULT_SUWAYOMI_JAR_REMOTE)
+        self.assertEqual(jar_target_mode, 0o644)
+
+        # Symlink JAR source rejected
+        jar_file.unlink()
+        target_outside = bundle_root.parent / "escape_jar.jar"
+        target_outside.write_bytes(b"PK\x03\x04escaped")
+        jar_file.symlink_to(target_outside)
+        with self.assertRaises(ManifestError) as ctx:
+            generate_manifest(bundle_root, include_gateway=True, include_suwayomi_jar=True)
+        self.assertIn("Refused symlink escape", str(ctx.exception))
+
+    def test_suwayomi_jar_cli_generate_and_validate(self):
+        """CLI flags --include-suwayomi-jar and --require-suwayomi-jar."""
+        bundle_root = self._create_minimal_bundle()
+        jar_file = bundle_root / DEFAULT_SUWAYOMI_JAR_LOCAL
+        jar_file.parent.mkdir(parents=True, exist_ok=True)
+        jar_file.write_bytes(b"PK\x03\x04cli_jar_test")
+
+        manifest_out = self.test_root / "candidate_jar.json"
+        script_path = str(REPO_ROOT / "scripts/release-manifest.py")
+
+        res_gen = subprocess.run(
+            [
+                sys.executable,
+                script_path,
+                "generate",
+                "--root",
+                str(bundle_root),
+                "--include-suwayomi-jar",
+                "--output",
+                str(manifest_out),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_gen.returncode, 0, f"Generate failed: {res_gen.stderr}")
+        self.assertTrue(manifest_out.exists())
+
+        res_val = subprocess.run(
+            [
+                sys.executable,
+                script_path,
+                "validate",
+                "--manifest",
+                str(manifest_out),
+                "--root",
+                str(bundle_root),
+                "--require-suwayomi-jar",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_val.returncode, 0, f"Validate failed: {res_val.stderr}")
+        self.assertIn("Release manifest validation PASSED", res_val.stdout)
 
 if __name__ == "__main__":
     unittest.main()

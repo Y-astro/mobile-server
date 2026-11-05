@@ -29,6 +29,7 @@ Covers:
 """
 
 import contextlib
+import copy
 import fcntl
 import importlib.util
 import json
@@ -306,6 +307,74 @@ class TestReleaseActivation(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         return result
+
+    def _build_jar_fixture(self):
+        bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(unchanged_all=True)
+
+        # Ensure launcher on live disk matches reviewed fork-free launcher
+        launcher_src = (REPO_ROOT / "scripts/start_suwayomi.sh").read_bytes()
+        live_launcher = live / "home/bin/start_suwayomi.sh"
+        live_launcher.parent.mkdir(parents=True, exist_ok=True)
+        live_launcher.write_bytes(launcher_src)
+        os.chmod(live_launcher, 0o755)
+
+        bundle_launcher = bundle / "scripts/start_suwayomi.sh"
+        bundle_launcher.write_bytes(launcher_src)
+        os.chmod(bundle_launcher, 0o755)
+
+        l_sha, l_size = ra.rt.compute_file_sha256(live_launcher)
+        for f in preconds["files"]:
+            if f["path"] == ra.SUWAYOMI_LAUNCHER_REMOTE:
+                f["kind"] = "file"
+                f["sha256"] = l_sha
+                f["bytes"] = l_size
+                f["mode"] = "0o755"
+
+        # Ensure catalog on live disk matches reviewed 16-service catalog
+        catalog_src = (REPO_ROOT / "app/service_catalog.py").read_bytes()
+        live_catalog = live / "home/.local/lib/mobile-server/service_catalog.py"
+        live_catalog.parent.mkdir(parents=True, exist_ok=True)
+        live_catalog.write_bytes(catalog_src)
+        os.chmod(live_catalog, 0o600)
+
+        bundle_catalog = bundle / "app/service_catalog.py"
+        bundle_catalog.write_bytes(catalog_src)
+        os.chmod(bundle_catalog, 0o600)
+
+        c_sha, c_size = ra.rt.compute_file_sha256(live_catalog)
+        for f in preconds["files"]:
+            if f["path"] == ra.SERVICE_CATALOG_REMOTE:
+                f["kind"] = "file"
+                f["sha256"] = c_sha
+                f["bytes"] = c_size
+                f["mode"] = "0o600"
+
+        # Setup live JAR
+        live_jar = live / "home/suwayomi/bin/Suwayomi-Server.jar"
+        live_jar.parent.mkdir(parents=True, exist_ok=True)
+        orig_jar_bytes = b"PK\x03\x04ORIGINAL_ACCEPTED_JAR_BYTES"
+        live_jar.write_bytes(orig_jar_bytes)
+        os.chmod(live_jar, 0o644)
+        j_sha, j_size = ra.rt.compute_file_sha256(live_jar)
+
+        preconds["files"].append({
+            "path": ra.SUWAYOMI_JAR_REMOTE,
+            "kind": "file",
+            "sha256": j_sha,
+            "bytes": j_size,
+            "mode": "0o644",
+            "uid": os.getuid(),
+            "target_mode": "0o644",
+        })
+
+        # Setup candidate JAR in bundle
+        candidate_jar = bundle / ra.DEFAULT_SUWAYOMI_JAR_LOCAL
+        candidate_jar.parent.mkdir(parents=True, exist_ok=True)
+        candidate_jar_bytes = b"PK\x03\x04CANDIDATE_PARALLEL_JAR_BYTES"
+        candidate_jar.write_bytes(candidate_jar_bytes)
+        os.chmod(candidate_jar, 0o644)
+
+        return bundle, preconds, live, tx_dir
 
     def test_plan_reports_changed_destinations_and_affected_services_without_disk_writes(self):
         bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture(modify_auth=True)
@@ -1965,6 +2034,312 @@ class TestReleaseActivation(unittest.TestCase):
         # Check services launched during rollback: suwayomi_scheduler must NOT be launched!
         rollback_launches = [e[1] for e in driver.events if e[0] == "launch"]
         self.assertNotIn("suwayomi_scheduler", rollback_launches)
+
+    def test_suwayomi_jar_profile_scope_and_replace_only(self):
+        """Profile suwayomi-jar allows ONLY exact JAR path with REPLACE; affects ONLY suwayomi."""
+        # 1. Exact valid JAR replace entry
+        entries = [{"remote": ra.SUWAYOMI_JAR_REMOTE, "action": ra.rt.ACTION_REPLACE}]
+        affected, sup_aff, changed = ra.map_changed_destinations(entries, profile="suwayomi-jar")
+        self.assertEqual(affected, {"suwayomi"})
+        self.assertFalse(sup_aff)
+        self.assertEqual(changed, [ra.SUWAYOMI_JAR_REMOTE])
+
+        # 2. Disallowed actions (CREATE, DELETE, etc.)
+        for act in (ra.rt.ACTION_CREATE, "REMOVE", None):
+            with self.subTest(action=act), self.assertRaises(ra.ActivationError):
+                ra.map_changed_destinations([{"remote": ra.SUWAYOMI_JAR_REMOTE, "action": act}], profile="suwayomi-jar")
+
+        # 3. Disallowed paths
+        for remote in (
+            ra.SUWAYOMI_FILTER_REMOTE,
+            ra.SUWAYOMI_LAUNCHER_REMOTE,
+            ra.SUPERVISOR_REMOTE,
+            ra.SERVICE_CATALOG_REMOTE,
+            "/data/data/com.termux/files/home/bin/mobile-gateway",
+            "/data/data/com.termux/files/usr/bin/dashboard",
+        ):
+            with self.subTest(remote=remote), self.assertRaises(ra.ActivationError):
+                ra.map_changed_destinations([{"remote": remote, "action": ra.rt.ACTION_REPLACE}], profile="suwayomi-jar")
+
+        # 4. Mixed changes rejected
+        with self.assertRaises(ra.ActivationError):
+            ra.map_changed_destinations(
+                [
+                    {"remote": ra.SUWAYOMI_JAR_REMOTE, "action": ra.rt.ACTION_REPLACE},
+                    {"remote": ra.SUWAYOMI_LAUNCHER_REMOTE, "action": ra.rt.ACTION_REPLACE},
+                ],
+                profile="suwayomi-jar",
+            )
+
+    def test_suwayomi_jar_refused_by_general_filter_lifecycle_profiles(self):
+        """General, filter, and lifecycle profiles continue forbidding changed JAR."""
+        entries = [{"remote": ra.SUWAYOMI_JAR_REMOTE, "action": ra.rt.ACTION_REPLACE}]
+        for prof in ("general", "suwayomi-filter", "suwayomi-lifecycle"):
+            with self.subTest(profile=prof), self.assertRaises(ra.ActivationError):
+                ra.map_changed_destinations(entries, profile=prof)
+
+    def test_suwayomi_jar_requires_current_16_runtime_and_fork_free_launcher(self):
+        """Refuses legacy forking launcher, legacy 15 catalog, or non-foreground scheduler."""
+        bundle, preconds, live, tx_dir = self._build_jar_fixture()
+        sched_cmd = [f"{str(live / 'usr')}/bin/python3", f"{str(live / 'home')}/bin/suwayomi_daily_update.py", "--foreground"]
+
+        # 1. Mismatched live launcher (e.g. legacy forking launcher)
+        driver = FakeLifecycleDriver()
+        driver.services_cfg["suwayomi_scheduler"] = {"cmd": sched_cmd}
+        driver.running_processes["suwayomi"] = [(1001, "sw_1001")]
+        driver.healthy_services.add("suwayomi")
+
+        bad_l_bytes = b"#!/bin/sh\n# LEGACY_FORKING_LAUNCHER\nexec java ...\n"
+        (live / "home/bin/start_suwayomi.sh").write_bytes(bad_l_bytes)
+        (bundle / "scripts/start_suwayomi.sh").write_bytes(bad_l_bytes)
+        bad_l_sha, bad_l_size = ra.rt.compute_file_sha256(live / "home/bin/start_suwayomi.sh")
+        for f in preconds["files"]:
+            if f["path"] == ra.SUWAYOMI_LAUNCHER_REMOTE:
+                f["sha256"] = bad_l_sha
+                f["bytes"] = bad_l_size
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-jar")
+        self.assertIn("Live launcher hash mismatch", str(ctx.exception))
+
+        # Restore launcher
+        clean_l_bytes = (REPO_ROOT / "scripts/start_suwayomi.sh").read_bytes()
+        (live / "home/bin/start_suwayomi.sh").write_bytes(clean_l_bytes)
+        (bundle / "scripts/start_suwayomi.sh").write_bytes(clean_l_bytes)
+        clean_l_sha, clean_l_size = ra.rt.compute_file_sha256(live / "home/bin/start_suwayomi.sh")
+        for f in preconds["files"]:
+            if f["path"] == ra.SUWAYOMI_LAUNCHER_REMOTE:
+                f["sha256"] = clean_l_sha
+                f["bytes"] = clean_l_size
+        shutil.rmtree(tx_dir)
+        tx_dir.mkdir(parents=True, exist_ok=True)
+
+        # 2. Mismatched live catalog (e.g. legacy 15 catalog)
+        bad_c_bytes = b"# TAMPERED_CATALOG\n"
+        (live / "home/.local/lib/mobile-server/service_catalog.py").write_bytes(bad_c_bytes)
+        (bundle / "app/service_catalog.py").write_bytes(bad_c_bytes)
+        bad_c_sha, bad_c_size = ra.rt.compute_file_sha256(live / "home/.local/lib/mobile-server/service_catalog.py")
+        for f in preconds["files"]:
+            if f["path"] == ra.SERVICE_CATALOG_REMOTE:
+                f["sha256"] = bad_c_sha
+                f["bytes"] = bad_c_size
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-jar")
+        self.assertIn("Live catalog hash mismatch", str(ctx.exception))
+
+        # Restore catalog
+        clean_c_bytes = (REPO_ROOT / "app/service_catalog.py").read_bytes()
+        (live / "home/.local/lib/mobile-server/service_catalog.py").write_bytes(clean_c_bytes)
+        (bundle / "app/service_catalog.py").write_bytes(clean_c_bytes)
+        clean_c_sha, clean_c_size = ra.rt.compute_file_sha256(live / "home/.local/lib/mobile-server/service_catalog.py")
+        for f in preconds["files"]:
+            if f["path"] == ra.SERVICE_CATALOG_REMOTE:
+                f["sha256"] = clean_c_sha
+                f["bytes"] = clean_c_size
+        shutil.rmtree(tx_dir)
+        tx_dir.mkdir(parents=True, exist_ok=True)
+
+        # 3. Old 15 services (missing suwayomi_scheduler)
+        driver_15 = FakeLifecycleDriver()
+        driver_15.running_processes["suwayomi"] = [(1001, "sw_1001")]
+        driver_15.healthy_services.add("suwayomi")
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver_15, profile="suwayomi-jar")
+        self.assertIn("requires exact 16 managed services", str(ctx.exception))
+        shutil.rmtree(tx_dir)
+        tx_dir.mkdir(parents=True, exist_ok=True)
+
+        # 4. Foreground scheduler cmd drift
+        driver_drift = FakeLifecycleDriver()
+        driver_drift.services_cfg["suwayomi_scheduler"] = {"cmd": ["/usr/bin/python3", "bad_script.py"]}
+        driver_drift.running_processes["suwayomi"] = [(1001, "sw_1001")]
+        driver_drift.healthy_services.add("suwayomi")
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver_drift, profile="suwayomi-jar")
+        self.assertIn("command drift", str(ctx.exception))
+
+    def test_disabled_backend_reader_refuses_jar_write(self):
+        bundle, preconditions, live, transaction = self._build_jar_fixture()
+        marker = live / "home/.config/services_disabled/suwayomi"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_bytes(b"keep-disabled")
+        before = (live / "home/suwayomi/bin/Suwayomi-Server.jar").read_bytes()
+        driver = FakeLifecycleDriver()
+        driver.services_cfg["suwayomi_scheduler"] = {"cmd": [str(live / "usr/bin/python3"), str(live / "home/bin/suwayomi_daily_update.py"), "--foreground"]}
+        driver.running_processes["suwayomi"] = [(1001, "manual-reader")]
+        with self.assertRaisesRegex(ra.ActivationError, "Disabled backend is still running"):
+            ra.apply(bundle, preconditions, transaction, live, driver=driver, profile="suwayomi-jar")
+        self.assertEqual((live / "home/suwayomi/bin/Suwayomi-Server.jar").read_bytes(), before)
+        self.assertEqual(marker.read_bytes(), b"keep-disabled")
+        self.assertFalse(any(event[0] in ("launch", "terminate") for event in driver.events))
+
+    def test_disabled_backend_appearing_before_apply_blocks_write_and_backout(self):
+        bundle, preconditions, live, transaction = self._build_jar_fixture()
+        marker = live / "home/.config/services_disabled/suwayomi"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_bytes(b"keep-disabled")
+        before = (live / "home/suwayomi/bin/Suwayomi-Server.jar").read_bytes()
+        driver = FakeLifecycleDriver()
+        driver.services_cfg["suwayomi_scheduler"] = {"cmd": [str(live / "usr/bin/python3"), str(live / "home/bin/suwayomi_daily_update.py"), "--foreground"]}
+        original_lock = driver.lock
+        service_locks = 0
+
+        @contextlib.contextmanager
+        def appearing_reader(name, *args, **kwargs):
+            nonlocal service_locks
+            with original_lock(name, *args, **kwargs):
+                if name == "services":
+                    service_locks += 1
+                    if service_locks == 2:
+                        driver.running_processes["suwayomi"] = [(1001, "late-manual-reader")]
+                yield
+
+        driver.lock = appearing_reader
+        with self.assertRaises(ra.QuiescenceError):
+            ra.apply(bundle, preconditions, transaction, live, driver=driver, profile="suwayomi-jar")
+        self.assertEqual((live / "home/suwayomi/bin/Suwayomi-Server.jar").read_bytes(), before)
+        self.assertEqual(marker.read_bytes(), b"keep-disabled")
+        self.assertEqual(ra.load_activation_journal(transaction)["state"], ra.STATE_RECOVERY_REQUIRED)
+        self.assertEqual(driver.running_processes["suwayomi"], [(1001, "late-manual-reader")])
+
+    def test_suwayomi_jar_successful_apply(self):
+        """Successful activation: old Java quiesced, JAR replaced, new Java launched healthy, supervisor unaffected."""
+        bundle, preconds, live, tx_dir = self._build_jar_fixture()
+        sched_cmd = [f"{str(live / 'usr')}/bin/python3", f"{str(live / 'home')}/bin/suwayomi_daily_update.py", "--foreground"]
+        driver = FakeLifecycleDriver()
+        driver.services_cfg["suwayomi_scheduler"] = {"cmd": sched_cmd}
+        driver.running_processes["suwayomi"] = [(1001, "sw_1001")]
+        driver.healthy_services.add("suwayomi")
+
+        res = ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-jar")
+        self.assertEqual(res["state"], ra.STATE_COMPLETED)
+        self.assertEqual(res["profile"], "suwayomi-jar")
+        self.assertEqual(res["affected_services"], ["suwayomi"])
+
+        # Check live JAR was replaced with candidate bytes
+        live_jar = live / "home/suwayomi/bin/Suwayomi-Server.jar"
+        self.assertEqual(live_jar.read_bytes(), b"PK\x03\x04CANDIDATE_PARALLEL_JAR_BYTES")
+        self.assertEqual(stat.S_IMODE(live_jar.stat().st_mode), 0o644)
+
+        # Verify supervisor was NOT restarted
+        self.assertNotIn(("stop_daemon",), [e[:1] for e in driver.events])
+        self.assertNotIn(("start_daemon",), [e[:1] for e in driver.events])
+
+    def test_suwayomi_jar_survivor_java_blocks_write(self):
+        """Survivor Java process blocks file write and sets RECOVERY_REQUIRED."""
+        bundle, preconds, live, tx_dir = self._build_jar_fixture()
+        sched_cmd = [f"{str(live / 'usr')}/bin/python3", f"{str(live / 'home')}/bin/suwayomi_daily_update.py", "--foreground"]
+        driver = FakeLifecycleDriver()
+        driver.services_cfg["suwayomi_scheduler"] = {"cmd": sched_cmd}
+        driver.running_processes["suwayomi"] = [(1001, "sw_1001")]
+        driver.fail_quiescence = True
+
+        live_jar = live / "home/suwayomi/bin/Suwayomi-Server.jar"
+        orig_bytes = live_jar.read_bytes()
+
+        with self.assertRaises(ra.QuiescenceError):
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-jar")
+
+        # Live file untouched
+        self.assertEqual(live_jar.read_bytes(), orig_bytes)
+        act = ra.load_activation_journal(tx_dir)
+        self.assertEqual(act["state"], ra.STATE_RECOVERY_REQUIRED)
+
+    def test_suwayomi_jar_candidate_health_fail_rolls_back_coherently(self):
+        """Candidate health failure stops candidate, restores old JAR, restarts backend with fork-free launcher."""
+        bundle, preconds, live, tx_dir = self._build_jar_fixture()
+        sched_cmd = [f"{str(live / 'usr')}/bin/python3", f"{str(live / 'home')}/bin/suwayomi_daily_update.py", "--foreground"]
+        driver = FakeLifecycleDriver()
+        driver.services_cfg["suwayomi_scheduler"] = {"cmd": sched_cmd}
+        driver.running_processes["suwayomi"] = [(1001, "sw_1001")]
+        # Candidate health check fails
+        driver.fail_candidate_health.add("suwayomi")
+
+        live_jar = live / "home/suwayomi/bin/Suwayomi-Server.jar"
+        orig_bytes = live_jar.read_bytes()
+
+        with self.assertRaises(ra.HealthCheckError):
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver, health_timeout=0.1, profile="suwayomi-jar")
+
+        # Live JAR restored to original
+        self.assertEqual(live_jar.read_bytes(), orig_bytes)
+        self.assertEqual(stat.S_IMODE(live_jar.stat().st_mode), 0o644)
+
+        # Journal rolled back
+        act = ra.load_activation_journal(tx_dir)
+        self.assertEqual(act["state"], ra.STATE_ROLLED_BACK)
+
+        # Backend relaunched during rollback
+        launches = [e[1] for e in driver.events if e[0] == "launch"]
+        self.assertEqual(launches, ["suwayomi", "suwayomi"])
+
+    def test_suwayomi_jar_journal_forgery_refused(self):
+        """Forged journal profile, affected_services, or mode fails closed."""
+        bundle, preconds, live, tx_dir = self._build_jar_fixture()
+        sched_cmd = [f"{str(live / 'usr')}/bin/python3", f"{str(live / 'home')}/bin/suwayomi_daily_update.py", "--foreground"]
+        driver = FakeLifecycleDriver()
+        driver.services_cfg["suwayomi_scheduler"] = {"cmd": sched_cmd}
+        driver.running_processes["suwayomi"] = [(1001, "sw_1001")]
+        driver.healthy_services.add("suwayomi")
+
+        res = ra.apply(bundle, preconds, tx_dir, live, driver=driver, profile="suwayomi-jar")
+        self.assertEqual(res["state"], ra.STATE_COMPLETED)
+
+        journal = ra.load_activation_journal(tx_dir)
+        tx = ra.rt.ReleaseTransaction(tx_dir)
+        tx_journal = tx.load_journal()
+
+        # 1. Forged affected_services
+        bad_j1 = dict(journal)
+        bad_j1["affected_services"] = ["suwayomi", "dashboard"]
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.validate_activation_journal(bad_j1, tx_journal, live, tx_dir, os.getuid())
+        self.assertIn("Affected services mismatch", str(ctx.exception))
+
+        # 2. Forged supervisor_affected
+        bad_j2 = dict(journal)
+        bad_j2["supervisor_affected"] = True
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.validate_activation_journal(bad_j2, tx_journal, live, tx_dir, os.getuid())
+        self.assertIn("Supervisor affected mismatch", str(ctx.exception))
+
+        # 3. Mutated entry target_mode
+        bad_tx = dict(tx_journal)
+        bad_tx["entries"] = copy.deepcopy(tx_journal["entries"])
+        for e in bad_tx["entries"]:
+            if e.get("dest_path") == ra.SUWAYOMI_JAR_REMOTE or e.get("remote") == ra.SUWAYOMI_JAR_REMOTE:
+                e["target_mode"] = "0o700"
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.validate_activation_journal(journal, bad_tx, live, tx_dir, os.getuid())
+        self.assertIn("target mode mismatch", str(ctx.exception))
+
+    def test_suwayomi_jar_plan_validation(self):
+        """Dry plan returns affected_services == ['suwayomi'], total_count == 44; bad preconditions rejected."""
+        bundle, preconds, live, tx_dir = self._build_jar_fixture()
+        res = ra.plan(bundle, preconds, namespace_root=live, profile="suwayomi-jar")
+        self.assertEqual(res["status"], "plan_ok")
+        self.assertEqual(res["profile"], "suwayomi-jar")
+        self.assertEqual(res["affected_services"], ["suwayomi"])
+        self.assertFalse(res["supervisor_affected"])
+        self.assertEqual(res["total_count"], 44)
+        self.assertEqual(res["unchanged_count"], 43)
+
+        # Symlink precondition rejected
+        bad_preconds = copy.deepcopy(preconds)
+        for f in bad_preconds["files"]:
+            if f["path"] == ra.SUWAYOMI_JAR_REMOTE:
+                f["kind"] = "symlink"
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.plan(bundle, bad_preconds, namespace_root=live, profile="suwayomi-jar")
+        self.assertIn("must be a regular file", str(ctx.exception))
+
+        # Non-0644 mode precondition rejected
+        bad_mode_preconds = copy.deepcopy(preconds)
+        for f in bad_mode_preconds["files"]:
+            if f["path"] == ra.SUWAYOMI_JAR_REMOTE:
+                f["mode"] = "0o755"
+        with self.assertRaises(ra.ActivationError) as ctx:
+            ra.plan(bundle, bad_mode_preconds, namespace_root=live, profile="suwayomi-jar")
+        self.assertIn("Precondition mode mismatch", str(ctx.exception))
 
 
     

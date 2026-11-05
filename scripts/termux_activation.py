@@ -222,6 +222,41 @@ def validate_catalog_transition(
             raise RuntimeError(
                 f"Candidate suwayomi_scheduler cmd drift: expected {expected_cmd!r}, got {sched_cfg.get('cmd')!r}"
             )
+    elif profile == "suwayomi-jar":
+        if len(prior_keys) != 16:
+            raise RuntimeError(
+                f"suwayomi-jar profile requires exact 16 prior services, found {len(prior_keys)}"
+            )
+        if len(cand_keys) != 16:
+            raise RuntimeError(
+                f"suwayomi-jar profile requires exact 16 candidate services, found {len(cand_keys)}"
+            )
+        if prior_keys != cand_keys:
+            raise RuntimeError(
+                f"Candidate service catalog key order mismatch: expected {prior_keys}, got {cand_keys}"
+            )
+        if cand_keys[15] != "suwayomi_scheduler":
+            raise RuntimeError(
+                f"Candidate service catalog 16th service must be 'suwayomi_scheduler', got {cand_keys[15]!r}"
+            )
+        expected_cmd = [f"{prefix_str}/bin/python3", f"{home_str}/bin/suwayomi_daily_update.py", "--foreground"]
+        sched_cfg = cand_services.get("suwayomi_scheduler")
+        if not isinstance(sched_cfg, dict):
+            raise RuntimeError("Candidate suwayomi_scheduler configuration must be a dictionary")
+        if sched_cfg.get("cmd") != expected_cmd:
+            raise RuntimeError(
+                f"Candidate suwayomi_scheduler cmd drift: expected {expected_cmd!r}, got {sched_cfg.get('cmd')!r}"
+            )
+        for sid, p_cfg in prior_services.items():
+            c_cfg = cand_services.get(sid)
+            if c_cfg is None:
+                raise RuntimeError(f"Candidate catalog missing prior service: {sid}")
+            if not isinstance(c_cfg, dict) or not isinstance(p_cfg, dict):
+                raise RuntimeError(f"Service {sid} configuration must be a dictionary")
+            if c_cfg != p_cfg:
+                raise RuntimeError(
+                    f"Candidate service {sid} configuration runtime drift: expected {p_cfg!r}, got {c_cfg!r}"
+                )
     else:
         raise RuntimeError(f"Unsupported profile for catalog validation: {profile!r}")
 

@@ -262,3 +262,34 @@ The native recovery test runs copied recovery code after deleting the bundle and
 breaking the live candidate catalog. Its temporary backend is a benign process
 model, not a real Android JVM test. Phone activation and Android runtime checks
 remain separate acceptance steps.
+
+### Suwayomi JAR-only profile
+
+The optional declared artifact `.work/suwayomi-parallel.jar` maps only to the
+existing `/data/data/com.termux/files/home/suwayomi/bin/Suwayomi-Server.jar`.
+The frozen 35-row ownership baseline remains unchanged. Legacy generation keeps
+43 source assets; `--require-suwayomi-jar` requires the additional artifact and
+produces the 44-entry complete candidate. Validation rejects missing, unowned,
+escaped or symlinked source artifacts. The JAR retains its reviewed 0644 mode.
+
+The explicit `suwayomi-jar` activation profile permits only an existing JAR
+replacement. It selects only the backend; the supervisor, scheduler, filter,
+Caddy and dashboard remain outside its restart set. General, filter and lifecycle
+profiles continue refusing a changed JAR. A reviewed fork-free launcher and exact
+16-service catalog are required, including their source hash/UID checks and the
+foreground scheduler command. Recovery binds those unchanged transaction entries
+and its preserved catalog to the reviewed lifecycle baseline.
+
+A disabled backend with a running manual Java reader is refused before guards.
+Java is checked again before JAR replacement and restoration, including readers
+outside the active service set. A surviving or newly appeared reader prevents
+writes and retains recovery-required state. The adapter never kills a manual
+instance merely because its disabled marker exists.
+
+A copied native-process-model proof applies the candidate, deletes the original
+bundle, and invokes the retained rollback CLI from a clean working directory.
+It verifies candidate quiescence, original JAR bytes/mode, prior backend launch,
+unchanged disabled intent and idempotent repeated recovery. Its temporary Python
+processes model Java argv/ownership; actual Android startup and real packaged JAR
+resource suitability remain separate release acceptance gates. This control
+change alone does not deploy a custom JAR.
