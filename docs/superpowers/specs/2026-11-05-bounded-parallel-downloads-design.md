@@ -51,11 +51,20 @@ revoke a spare lane at a safe checkpoint without marking an incomplete chapter
 finished or increasing its retry count. Removing one chapter must not cancel a
 different chapter. Stop must release all permits and settle all workers.
 
-Output remains isolated by manga/chapter and page names. Preserve existing partial
+Preserve existing manga/chapter and page names. Preserve existing partial
 cache behavior; do not delete previous completed downloads to simplify cleanup.
 Finalize archives and hashes only after all required page work has settled.
 Concurrent progress must reflect completed and in-flight work without double
 counting, invalid fractions or final success after a failed page.
+
+Upstream builds output and cache paths from sanitized display names, rather than
+stable IDs. Different chapter IDs can therefore share a path. Serialize those
+collisions across preparation, provider selection, writing, finalization, and
+completion; retain parallel work for distinct paths. Use cancellation-safe path
+ownership without holding an admission lock or network permit while waiting.
+Do not change filenames or migrate existing downloads to solve this collision.
+Verify real shared-path exclusion, unrelated-path overlap, waiting cancellation,
+and ownership cleanup before building the deployable artifact.
 
 ## Maintained source and build
 
