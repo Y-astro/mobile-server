@@ -126,3 +126,12 @@ new release recovery paths and operational ownership. Preserve old transactions.
 DNS replacement, heap tuning, catch-up scheduling and generalized GET feed
 rewriting remain outside these releases. Record remaining questions without
 quietly changing policy or claiming unmeasured performance improvements.
+
+## Completion record
+
+Tasks 1–3 were accepted in runtime release `300ccdbd`. Tasks 4–5 were accepted in
+runtime release `f55a3e6` on 2026-11-05. See
+[the lifecycle release record](../../SUWAYOMI-LIFECYCLE-RELEASE.md) for live
+16-service acceptance, preserved settings and recovery paths. The separately
+requested bounded parallel downloader remains a distinct implementation and
+release; it is not part of this completed reliability migration.
