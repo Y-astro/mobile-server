@@ -7,11 +7,13 @@ allprojects {
             extensions.configure<org.gradle.api.plugins.JavaPluginExtension> {
                 sourceSets.named("test") {
                     java.srcDir(File(proofRoot, "suwayomi/parallel-downloads/verification/java"))
+                    java.srcDir(File(proofRoot, "suwayomi/parallel-downloads/verification/kotlin"))
                 }
             }
         }
         tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
             systemProperty("mobile.proof.jar", packagedRuntime.canonicalPath)
+            systemProperty("mobile.proof.root", proofRoot.canonicalPath)
             testLogging.showStandardStreams = false
             doFirst {
                 require(classpath.files.size > 1) { "Expected JUnit and the compiled tests" }
