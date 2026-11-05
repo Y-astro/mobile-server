@@ -1,14 +1,14 @@
 {
   "upstream_commit": "40bc5da57820324ed0ae724cbbc020cc4673b594",
-  "patch_sha256": "ad43e4e7f364c026664c59e87e4e2079b483773a1fb94f2840984b2e16d3a51c",
+  "patch_sha256": "28e8ee54bbc793599878c8d7ecb2727ba028dc5ebae28e5490f3f0eb6fa663a3",
   "source_sha256": {
     "main/DownloadManager.kt": "b3ae95f5240a96bcb54132adf5c86e5ecf3609ad9f75a713efe03e27a32f8108",
     "main/Downloader.kt": "dc5e423578406c695014cfa428b6324a3fe8b80d34a18df7e0fcd5aa8148ec45",
     "main/DownloaderNetworkBudget.kt": "6c82adee19abbd331b97287f6cde1b48b0e132b16008160cc1f9734980971e18",
-    "main/ChaptersFilesProvider.kt": "f13f349d360140510a414ac9599b97d5da508f00e87655309a92c8685c8c35dc",
-    "test/BoundedParallelDownloaderTest.kt": "45e7f51d2f42ff5ccee5a597c505e1b886cd7540f6cb30e78af155232040c2ac"
+    "main/ChaptersFilesProvider.kt": "9152d0e7315fe15819a12540f906022da7f3ed99151e678c7ee522fd62e60049",
+    "test/BoundedParallelDownloaderTest.kt": "c0be229bd7586f5a74a6dedeeadf0304eddb4616de145164b9421401ba44a339"
   },
-  "verified_compiled_jar_sha256": "447b638b89256e762e06d79a1330b14600f3d85be4a8e71980980304bff6bec9",
+  "verified_compiled_jar_sha256": "3c8eaa18810977fef1ead7d782c522b30dd12889ea3db15c7d4cb16c0572a89e",
   "toolchain": {
     "host_java": "27.0.1.0.3",
     "gradle": "9.7.1",
@@ -16,5 +16,5 @@
     "target_java": 21,
     "test_heap_mib": 384
   },
-  "verified_packaged_jar_sha256": "e85adb62d6e65190984e1acc3d35d552402c9915067325744c0a9cd6ed461139"
+  "verified_packaged_jar_sha256": "3dd150705d07486e4f890711a2d01a1a67a35d71a0fdc444cf7d5661473c221e"
 }

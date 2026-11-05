@@ -40,6 +40,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import suwayomi.tachidesk.manga.impl.Page
+import suwayomi.tachidesk.manga.impl.download.fileProvider.ChaptersFilesProvider
 import suwayomi.tachidesk.manga.impl.util.getChapterCbzPath
 import suwayomi.tachidesk.manga.impl.util.getChapterDownloadPath
 import suwayomi.tachidesk.manga.impl.util.lang.EMPTY
@@ -466,6 +467,7 @@ class PairedResourceProofTest : ApplicationTest() {
 
         serverConfig.downloadAsCbz.value = (format == "CBZ")
         DownloadManager.maxChaptersPerSourceOverride = maxOverride
+        ChaptersFilesProvider.pageWorkersOverride = 1
         serverConfig.maxSourcesInParallel.value = 6
 
         runBlocking { DownloadManager.clear() }
@@ -567,6 +569,7 @@ class PairedResourceProofTest : ApplicationTest() {
         safeCleanDir(File(appDirs.downloadsRoot), File(appDirs.dataRoot), "downloads")
         safeCleanDir(File(appDirs.tempMangaCacheRoot), File(appDirs.tempRoot), "manga-cache")
         DownloaderNetworkBudget.resetForTest()
+        ChaptersFilesProvider.resetForTest()
 
         // Explicit GC to measure true retained state after settlement
         System.gc()

@@ -110,3 +110,7 @@ The compiled snapshot and complete patch passed the 20-test focused gate and
 source pin records the verified compilation input. The packaged candidate passed its 16-trial paired resource gate and native phone
 activation acceptance. See `docs/SUWAYOMI-PARALLEL-RELEASE.md` for exact artifact,
 remaining limits, and retained rollback.
+
+## Conditional Page Concurrency Candidate Status
+
+The conditional two-page-worker slice in `ChaptersFilesProvider.kt` bounds page worker concurrency to at most 2 coroutines per chapter within structured `coroutineScope`. It ensures siblings and progress collectors settle before ComicInfo or archive finalization. The updated packaged candidate (`3dd150705d07486e4f890711a2d01a1a67a35d71a0fdc444cf7d5661473c221e`) passed 29/29 packaged-runtime unit tests and the 24-trial host native paired probe matrix (`org.probe.MainNativeProbe`). It remains local pending root phone paired execution and activation.
