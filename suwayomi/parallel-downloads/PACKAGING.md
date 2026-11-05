@@ -59,3 +59,10 @@ correctness, Android JNI loading, or resource suitability.
 
 Use the separately reviewed JAR-only activation profile and retained software
 preimage for deployment/backout. Do not copy a replacement over a running backend.
+
+
+The reviewed downloader correction introduces a top-level `ChapterClaim` data
+class. It is explicitly included as the fifth owner in `package-inputs.json`.
+The local candidate built with this exact five-owner configuration passed the
+19-test packaged-runtime gate, including the new class's loading origin. This
+configuration update does not broaden selection to arbitrary package classes.

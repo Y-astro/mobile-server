@@ -5,7 +5,8 @@
     "suwayomi/tachidesk/manga/impl/download/DownloadManager",
     "suwayomi/tachidesk/manga/impl/download/Downloader",
     "suwayomi/tachidesk/manga/impl/download/DownloaderNetworkBudget",
-    "suwayomi/tachidesk/manga/impl/download/fileProvider/ChaptersFilesProvider"
+    "suwayomi/tachidesk/manga/impl/download/fileProvider/ChaptersFilesProvider",
+    "suwayomi/tachidesk/manga/impl/download/ChapterClaim"
   ],
   "preserved_custom_entries": {
     "WebUI.zip": "9ff567868091f90653d3e544c8558fb3a9d4dd9e26ce98b2d9d85980c9253a09",
