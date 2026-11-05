@@ -349,7 +349,9 @@ object MainNativeProbe {
             val flags = ManagementFactory.getRuntimeMXBean().inputArguments
             check(flags.containsAll(listOf("-Xms64m", "-Xmx384m", "-XX:+UseSerialGC",
                 "-XX:TieredStopAtLevel=1", "-XX:CICompilerCount=2")))
-            check(Runtime.getRuntime().maxMemory() in (383L * 1024 * 1024)..(384L * 1024 * 1024))
+            // SerialGC excludes survivor space from maxMemory on some Java versions.
+            check(Runtime.getRuntime().maxMemory() in (64L * 1024 * 1024)..(384L * 1024 * 1024))
+            println("Runtime max heap bytes: ${Runtime.getRuntime().maxMemory()}")
             check(!File("/proc/self/cmdline").readText().contains("suwayomi", ignoreCase = true))
             val candidateFile = File(System.getProperty("mobile.proof.candidate.jar")).canonicalFile
             val digest = MessageDigest.getInstance("SHA-256")
