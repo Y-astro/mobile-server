@@ -45,6 +45,7 @@ from laptop import LaptopClient, LaptopError
 from service_catalog import dashboard_services, suwayomi_probe_ports
 from role_templates import read_role_template, RoleTemplateUnavailable
 from agy_sessions import AgySessions
+from wallpapers import dispatch_wallpapers
 from service_panel import (
     ServicePanel,
     probe_process_rss,
@@ -824,6 +825,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.end_headers()
             return
 
+        shared_appearance_assets = {
+            "/theme-tokens.css": ("theme-tokens.css", "text/css; charset=utf-8"),
+            "/appearance.css": ("appearance.css", "text/css; charset=utf-8"),
+            "/appearance.js": ("appearance.js", "application/javascript; charset=utf-8"),
+        }
+        asset_lookup = self.path.split("?", 1)[0]
+        if asset_lookup.startswith("/static/"):
+            asset_lookup = asset_lookup[7:]
+        if asset_lookup in shared_appearance_assets:
+            filename, content_type = shared_appearance_assets[asset_lookup]
+            asset_path = os.path.join(STATIC_DIR, filename)
+            if os.path.exists(asset_path):
+                with open(asset_path, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                if getattr(self, "command", "GET") != "HEAD":
+                    self.wfile.write(content)
+            else:
+                self.send_response(404)
+                self.end_headers()
+            return
+
         if self.path.split("?", 1)[0] in ("/api/auth-check", "/api/auth-check-admin"):
             fwd_uri = self.headers.get("X-Forwarded-Uri", "")
             if not user:
@@ -890,6 +917,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", "/login")
             self.end_headers()
+            return
+
+        clean_path = self.path.split("?", 1)[0]
+        if clean_path == "/api/wallpapers" or clean_path.startswith("/api/wallpapers/"):
+            dispatch_wallpapers(self, user=user)
             return
 
         if self.path == "/api/notes":
