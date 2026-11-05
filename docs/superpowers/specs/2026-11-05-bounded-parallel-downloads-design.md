@@ -77,6 +77,17 @@ Verify migration resources and relevant settings contracts against the baseline.
 Record custom provenance without silently presenting an unmodified official JAR.
 Do not claim that the existing installed JAR is reproducible until actually proven.
 
+### Preservation of the installed package
+
+Artifact inspection found existing reader filtering, local WebUI validation and
+Android Bionic JNI customizations in the installed upstream-based JAR. It also
+found duplicate dependency entries whose contents differ from a fresh build.
+Package the reviewed downloader class owners into the fingerprinted installed
+base, preserving every other entry occurrence and its relative order. Record
+explicit custom-build provenance. Do not replace the existing UI, native library
+or dependency contents with a newly built upstream shadow JAR. Runtime acceptance
+must exercise the resulting packaged artifact and its retained dependencies.
+
 ## Proof and resource gate
 
 Reuse upstream tests where possible, then add isolated fake-source tests that

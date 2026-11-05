@@ -1,0 +1,20 @@
+{
+  "upstream_commit": "40bc5da57820324ed0ae724cbbc020cc4673b594",
+  "base_jar_sha256": "9b7bf58329eccb3dcfb7246360f6818f7391b8804330a9e0491006049678bedc",
+  "class_owners": [
+    "suwayomi/tachidesk/manga/impl/download/DownloadManager",
+    "suwayomi/tachidesk/manga/impl/download/Downloader",
+    "suwayomi/tachidesk/manga/impl/download/DownloaderNetworkBudget",
+    "suwayomi/tachidesk/manga/impl/download/fileProvider/ChaptersFilesProvider"
+  ],
+  "preserved_custom_entries": {
+    "WebUI.zip": "9ff567868091f90653d3e544c8558fb3a9d4dd9e26ce98b2d9d85980c9253a09",
+    "androidx/preference/Preference.class": "4e00cb2b21c3129fe27acb3f492549068024ae2142ba70c251f646a02a227381",
+    "jni/aarch64/libzstd-kmp.so": "730a7e86e4e213944cc458cd67546bfab5397ef56350eaacc6de2480d24323fc",
+    "suwayomi/tachidesk/global/impl/About.class": "f48250ce094e335ebf986b2f35bec8cd2c92c08106cf986057375eec8c31360d",
+    "suwayomi/tachidesk/graphql/queries/InfoQuery.class": "945a3188ee57b669017edf2393ab0f110e96a64b12351554c02253c85536a18a",
+    "suwayomi/tachidesk/i18n/MR.class": "9fb1e7a7f4e06dbd72790769dcc646f9f3ee446b6f561e6ed58b29d9ec79fa93",
+    "suwayomi/tachidesk/server/generated/BuildConfig.class": "021347179eac9c471c0e73791a98018a95c4ffd72007b889fdfceaa542905763",
+    "suwayomi/tachidesk/server/util/WebInterfaceManager.class": "289cdc6d9180afed57c619bbd5bda698af6d0517d54c7757cfdd730632cfabb0"
+  }
+}
