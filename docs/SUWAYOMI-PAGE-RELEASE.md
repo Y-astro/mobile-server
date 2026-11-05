@@ -50,6 +50,6 @@ python "$release_tx/recovery_lifecycle/release_activation.py" rollback \
 
 The retained copied recovery code and preimage support rollback independently of the staging bundle. A live rollback was not run because the new release passed acceptance. The prior [chapter release](SUWAYOMI-PARALLEL-RELEASE.md) retains its separate recovery chain.
 
-## Remaining issue
+## Tsumiru cleanup confirmation
 
-Tsumiru's server-side deletion after reading remains under investigation. Read status sync is confirmed. Reader-exit behavior still needs confirmation; no broader read-triggered deletion hook or retrospective library cleanup was added.
+On 2026-11-05, the operator confirmed that server-side auto-deletion after reading works after allowing time to verify it. The reported issue is closed. No additional server deletion hook or retrospective library cleanup was needed.
