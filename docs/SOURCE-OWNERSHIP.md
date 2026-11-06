@@ -18,7 +18,17 @@
 - **`web/`**: Owns frontend presentation and client-side interactions (`admin.html`, `family.html`, `login.html`, `portal.css`, `laptop.js`, `interactive_player.js`, `filebrowser.js`, `agy_index.html`, `termux_index.html`). Implements the dark Material 3 design system (`--md-sys-color-*` tokens, 4px grid rhythm, sans typography, tabular numerals, 48px minimum touch targets) across administrator, family, and login pages.
 - **`tests/material3-browser.cjs`**: Owns automated visual and interaction acceptance for the Material 3 portal, testing computed tokens, typography, 48px touch targets, responsive viewports (1280px desktop, 360–412px mobile) without overflow, complete service grid states, dialog keyboard flows, and notes persistence.
 
-## Template Authority and Availability
+## Antra Ownership
+
+- `app/antra_store.py` owns the durable queue, immutable private/family destinations, publication checkpoints, and public record filtering. Changes affect both the dashboard and worker.
+- `app/antra_client.py` owns authenticated provider HTTP/WebSocket traffic. Credentials and cookies stay on the phone; browser code never talks to the provider directly.
+- `app/antra_worker.py` owns background processing, quota scheduling, replay recovery, audio validation, safe filesystem publication, and acknowledgements. It is the independently supervised `antra` service.
+- `app/antra_http.py` owns administrator-only page/API dispatch. The dashboard passes its existing authorization callback; the dispatcher must not import the legacy dashboard module.
+- `web/antra.html`, `web/antra.css`, and `web/antra.js` own the page. They reuse shared appearance and polling assets. Family users cannot access the page or change its queue.
+- `tools/split_music_storage.py` owns the completed data migration and its private recovery journal. Source rollback must preserve the split and all downloaded user files.
+- The initial catalog addition uses the reviewed `antra-service` activation profile. Subsequent ordinary updates use `general`; adding another service requires its own reviewed transition.
+
+## Role Template Authority and Availability
 
 - `app/dashboard.py` serves installed role template files from `~/.config/dashboard/static/{admin,family,login}.html` via `app/role_templates.py`.
 - If an installed role template file is missing or unreadable, the server returns a controlled HTTP 503 Service Unavailable response instead of silently falling back to obsolete embedded templates.

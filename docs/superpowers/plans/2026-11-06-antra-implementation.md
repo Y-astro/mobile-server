@@ -44,4 +44,12 @@ The phone's emulated storage rejects Linux `RENAME_NOREPLACE` with EINVAL. Publi
 
 The user explicitly selected Family for the existing library. All 115 files, totaling 5,870,101,107 bytes, were moved with original file identities preserved. Cloud storage was restarted successfully; other service processes and the four disabled-service flags were preserved. No source rollback may broaden the family Music link or move this data back.
 
-Migration source is `tools/split_music_storage.py`. Private recovery state lives under `~/.local/state/mobile-server/music-storage/`, with mode 0700 directories and 0600 journal files. Recovery validates exact roots and original file identities before continuing. The phone passed a synthetic filesystem rename check before any user data moved. The live service catalog still has 16 entries; Antra activation remains a separate reviewed release.
+Migration source is `tools/split_music_storage.py`. Private recovery state lives under `~/.local/state/mobile-server/music-storage/`, with mode 0700 directories and 0600 journal files. Recovery validates exact roots and original file identities before continuing. The phone passed a synthetic filesystem rename check before any user data moved. This storage-only step finished while the catalog still had 16 entries.
+
+## Antra activation and acceptance, 2026-11-06
+
+Release `antra-fdd95b45-20261106T140607Z`, from source `fdd95b4543b7757d983797898b4c96245942ff90`, activated through the reviewed `antra-service` profile. It verified 56 owned assets and 65 transported files, created seven assets, and replaced only the dashboard executable, service catalog, and supervisor. Activation finished in 2.584 seconds. All other service process identities, disabled markers, the gateway binary, and the Suwayomi JAR/DNS library were preserved.
+
+The server now manages 17 services, with 13 healthy and four intentionally disabled. Production browser checks verified administrator access, invalid-link rejection without queue mutation, family 403, and anonymous 401. The worker remained alive and its idle heartbeat advanced after the browser closed. Android checks also verified 24-bit decoding, collision preservation, replay without redownload, and dedicated-account authentication.
+
+Validation included 496 Python tests (two skipped), the complete default browser suite, 14 Antra browser scenarios, and cloud appearance acceptance. A real playlist and active-download browser-close test remain unverified; the requested user sample link has not been supplied. Do not report those as passed.

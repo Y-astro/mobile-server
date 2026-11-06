@@ -6,9 +6,9 @@ Authoritative technical reference for managed services, runtime lifecycle contra
 
 ## 1. Service Ownership and Endpoint Reference
 
-The server manages 15 background services via [`scripts/server_supervisor.py`](../scripts/server_supervisor.py#L37-L72) and [`app/service_catalog.py`](../app/service_catalog.py#L12-L73), plus on-demand utilities and external laptop integrations.
+The server manages 17 background services via [`scripts/server_supervisor.py`](../scripts/server_supervisor.py) and [`app/service_catalog.py`](../app/service_catalog.py), plus on-demand utilities and external laptop integrations. The 2026-11-06 Antra release verified 13 healthy services and preserved four intentionally disabled services.
 
-### Managed Supervisor Services (15 Services)
+### Managed Supervisor Services (17 Services)
 
 | Service ID (`sid`) | Category & Purpose | Maintained Source / Owner | Runtime Launcher & Executable | Endpoint & Address Binding | Health Inspection Criteria | Durable Data & Config Paths |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -27,6 +27,20 @@ The server manages 15 background services via [`scripts/server_supervisor.py`](.
 | `vaultwarden` *(disabled)* | Bitwarden password vault | Vaultwarden binary in Debian PRoot | `$PREFIX/bin/proot-distro login debian -- /usr/bin/env ROCKET_PORT=8082 ROCKET_ADDRESS=127.0.0.1 DATA_FOLDER=$HOME/vaultwarden/data WEB_VAULT_FOLDER=$HOME/vaultwarden/web-vault $HOME/vaultwarden/vaultwarden` | `127.0.0.1:8082` (HTTP, loopback passed via ROCKET_ADDRESS) | `GET /alive` (supervisor accepts 200, redirects, 401/403) | Vault data: `$HOME/vaultwarden/data/` (`db.sqlite3`, RSA keys)<br>Web UI: `$HOME/vaultwarden/web-vault/` |
 | `terminal` *(disabled)* | Admin Termux web shell | `ttyd` pkg + [`scripts/termux_session.sh`](../scripts/termux_session.sh), [`web/termux_index.html`](../web/termux_index.html) | `$PREFIX/bin/ttyd -W -i 127.0.0.1 -p 7681 -b /terminal -I $HOME/.config/ttyd/termux_index.html $HOME/bin/termux_session.sh` | `127.0.0.1:7681` (HTTP/WS, pinned loopback via `-i`) | `GET /terminal/` (supervisor accepts 200, redirects, 401/403) | Config: `$HOME/.config/ttyd/termux_index.html` |
 | `tor` *(disabled)* | Tor SOCKS proxy | Termux Tor pkg + [`config/torrc`](../config/torrc) | `$PREFIX/bin/tor -f $HOME/.config/tor/torrc` | `127.0.0.1:9050` (SOCKS5, pinned in config/torrc) | SOCKS5 handshake (`\x05\x01\x00` -> `\x05\x00`) | Config: [`config/torrc`](../config/torrc)<br>Data: `$HOME/.local/share/mobile-server-tor` |
+| `suwayomi_scheduler` | Daily manga update scheduler | [`scripts/suwayomi_daily_update.py`](../scripts/suwayomi_daily_update.py) | `$PREFIX/bin/python3 $HOME/bin/suwayomi_daily_update.py --foreground` | None | One owned process, matching PID file, and held scheduler lock | `$HOME/suwayomi/data/scheduler.pid` and `logs/scheduler_status.json` |
+| `antra` | Persistent administrator-controlled music downloads | [`app/antra_worker.py`](../app/antra_worker.py), client and store helpers | `$PREFIX/bin/python3 -u $HOME/.local/lib/mobile-server/antra_worker.py` | No listener; administrator page `/antra/` and API `/api/antra/jobs` use the dashboard | Owned worker process; queue API reports worker state | Queue: `$HOME/.local/share/mobile-server/antra/queue.sqlite3`<br>Account: `$HOME/.config/antra/`<br>Music: `/storage/emulated/0/Music/{Astro,Family}` |
+
+### Antra and Music Storage
+
+Open **Antra Music** from the administrator dashboard. Paste a supported HTTPS music link, choose private or family storage, and queue it. The independent worker continues after the page closes. Family accounts cannot access this page or its API.
+
+Private output goes to `Music/Astro`; shared output goes to `Music/Family`. The family FileBrowser scope uses `$HOME/family_share/Music`, which must point only to `Music/Family`. All 115 pre-existing library files were moved into Family with original identities preserved. Never broaden this link during source rollback. Migration recovery state is private under `$HOME/.local/state/mobile-server/music-storage/`.
+
+The worker requests 24-bit FLAC, validates its encoded metadata, and tests decode integrity with the existing FFmpeg binary. It skips other bit depths and does not re-encode. On this phone, each track is published inside its own directory because emulated storage rejects atomic no-replace file renames. Do not replace this with an unchecked file overwrite.
+
+One upstream folder-mode job handles the full playlist; the website's 100-track ZIP batch limit does not require more accounts. Real daily quotas still apply. Unknown submissions are held for review, known jobs reconnect without resubmission, and quota waits resume after the reset. Credentials and Mozilla cookies remain private on the phone. The pinned Python dependency is `websockets==17.2`; the worker alone uses the existing pinned DNS shim.
+
+The 2026-11-06 release passed the Python and browser suites, live role checks, native private-storage checks, and synthetic 24-bit audio/publication checks on Android. A real user playlist download remains unverified until a link is supplied.
 
 ### On-Demand Utility
 
@@ -99,7 +113,7 @@ Sensitive credentials, databases, keys, user content, and session records are ex
 
 ## 3. Supervisor Authority and Lifecycle Contracts
 
-The 15 managed services listed above use [`scripts/server_supervisor.py`](../scripts/server_supervisor.py). This does not establish ownership of every unmanaged process on the phone.
+The 17 managed services listed above use [`scripts/server_supervisor.py`](../scripts/server_supervisor.py). This does not establish ownership of every unmanaged process on the phone.
 
 ### Supervisor Locks
 
