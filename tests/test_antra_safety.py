@@ -126,12 +126,12 @@ class AntraSafetyTests(unittest.TestCase):
 
     def test_cancel_after_validation_does_not_publish(self):
         job, _ = self.prepare_track()
-        validate = worker_module.verify_flac_24bit
+        validate = getattr(worker_module, "verify_flac", worker_module.verify_flac_24bit)
         def cancel(*args, **kwargs):
             result = validate(*args, **kwargs)
             self.store.cancel_job(job["id"])
             return result
-        with patch.object(worker_module, "verify_flac_24bit", side_effect=cancel):
+        with patch.object(worker_module, "verify_flac", side_effect=cancel):
             self.download(job)
         self.assertEqual(self.store.get_tracks(job["id"])[0]["status"], "cancelled")
         self.assertEqual(list(self.output_roots["private"].rglob("*.flac")), [])
@@ -193,7 +193,7 @@ class AntraSafetyTests(unittest.TestCase):
     def test_plausible_header_without_valid_audio_is_rejected(self):
         path = self.base_dir / "invalid.flac"
         path.write_bytes(fixtures.create_header_only_flac() + b"\xff\xf8" + b"\0" * 100)
-        self.assertFalse(worker_module.verify_flac_24bit(path)[0])
+        self.assertFalse(worker_module.verify_flac(path)[0])
 
     def test_large_metadata_does_not_require_loading_cover_art(self):
         _, audio = self.prepare_track()
@@ -201,7 +201,7 @@ class AntraSafetyTests(unittest.TestCase):
         self.assertEqual(data[4] & 0x80, 0)
         padding = b"\x01" + (300000).to_bytes(3, "big") + b"\0" * 300000
         audio.write_bytes(data[:42] + padding + data[42:])
-        self.assertTrue(worker_module.verify_flac_24bit(audio)[0])
+        self.assertTrue(worker_module.verify_flac(audio)[0])
 
     def test_acknowledgement_retry_does_not_fetch_audio_again(self):
         job, _ = self.prepare_track()

@@ -2,7 +2,7 @@
 
 Supervised worker process for durable Antra music downloads.
 Handles singleton execution lock, Termux DNS fix re-exec,
-folder-mode continuation for playlists > 100 tracks, FLAC 24-bit validation,
+folder-mode continuation for playlists > 100 tracks, FLAC validation (16-bit and 24-bit),
 streaming path traversal protection, atomic publication, and acknowledgements.
 Nothing starts on import; main loop executes under __main__ or run_forever().
 """
@@ -76,11 +76,11 @@ def maybe_reexec_dns_fix() -> bool:
     return True
 
 
-def verify_flac_24bit(
+def verify_flac(
     file_path: Path,
     expected_length: Optional[int] = None,
 ) -> Tuple[bool, Optional[int], Optional[int], str]:
-    """Inspect FLAC STREAMINFO header to verify exact 24-bit depth, sensible sample rate,
+    """Inspect FLAC STREAMINFO header to verify valid native FLAC bit depth (16-bit or 24-bit), sensible sample rate,
 
     and ensure actual audio frames exist past metadata.
     """
@@ -134,17 +134,17 @@ def verify_flac_24bit(
     if file_size <= offset or (file_size - offset) < 16:
         return False, None, None, "Header-only FLAC stream: missing audio frames"
 
-    if bits_per_sample != 24:
+    if bits_per_sample not in (16, 24):
         return (
             False,
             bits_per_sample,
             sample_rate,
-            f"Skipped: {bits_per_sample}-bit audio ({sample_rate} Hz, {channels} ch); 24-bit FLAC required",
+            f"Unsupported FLAC bit depth: {bits_per_sample}-bit ({sample_rate} Hz, {channels} ch)",
         )
 
     decoder = shutil.which("ffmpeg")
     if not decoder:
-        return False, 24, sample_rate, "Audio verifier unavailable"
+        return False, bits_per_sample, sample_rate, "Audio verifier unavailable"
     try:
         verified = subprocess.run(
             [decoder, "-v", "error", "-xerror", "-f", "flac", "-i", str(file_path),
@@ -152,15 +152,18 @@ def verify_flac_24bit(
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return False, 24, sample_rate, "FLAC decode verification failed"
+        return False, bits_per_sample, sample_rate, "FLAC decode verification failed"
     if verified.returncode:
-        return False, 24, sample_rate, "FLAC decode verification failed"
+        return False, bits_per_sample, sample_rate, "FLAC decode verification failed"
     return (
         True,
-        24,
+        bits_per_sample,
         sample_rate,
-        f"Verified 24-bit FLAC ({sample_rate} Hz, {channels} ch)",
+        f"Verified {bits_per_sample}-bit FLAC ({sample_rate} Hz, {channels} ch)",
     )
+
+
+verify_flac_24bit = verify_flac
 
 
 MAX_TRACK_BYTES = 8 * 1024 * 1024 * 1024
@@ -503,12 +506,9 @@ class AntraWorker:
                     digest.update(chunk)
                 output.flush()
                 os.fsync(output.fileno())
-            valid, bits, rate, message = verify_flac_24bit(temporary, expected_length=length)
+            valid, bits, rate, message = verify_flac(temporary, expected_length=length)
             if not valid:
-                state = "skipped" if bits is not None and bits != 24 else "failed"
-                self.store.update_track(job_id, global_index, status=state, bit_depth=bits, sample_rate=rate, message=message, ack_pending=1 if state == "skipped" else 0)
-                if state == "skipped":
-                    self._acknowledge(job_id, global_index, upstream_job_id)
+                self.store.update_track(job_id, global_index, status="failed", bit_depth=bits, sample_rate=rate, message=message, ack_pending=0)
                 return
             self.store.update_track(job_id, global_index, file_sha256=digest.hexdigest(), file_size=written, bit_depth=bits, sample_rate=rate)
             if self.store.is_job_cancelled(job_id):

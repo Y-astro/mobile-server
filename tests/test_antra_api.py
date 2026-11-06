@@ -240,7 +240,7 @@ class TestAntraApiUnit(unittest.TestCase):
         settings = handler_settings.get_json_body()["settings"]
         self.assertEqual(settings["output_directories"], LOGICAL_OUTPUT_DIRECTORIES)
         self.assertEqual(settings["output_directory"], "Music/Astro")
-        self.assertEqual(settings["quality"], "24-bit FLAC")
+        self.assertEqual(settings["quality"], "Best Available FLAC")
         # Physical paths must NOT be present
         self.assertNotIn("/storage", json.dumps(settings))
 
@@ -411,7 +411,7 @@ class TestDashboardAntraIntegration(unittest.TestCase):
         self.assertIn("jobs", body)
         self.assertIn("worker", body)
         self.assertIn("settings", body)
-        self.assertEqual(body["settings"]["quality"], "24-bit FLAC")
+        self.assertEqual(body["settings"]["quality"], "Best Available FLAC")
 
         # 2. POST /api/antra/jobs with family destination
         conn2 = http.client.HTTPConnection("127.0.0.1", self.port)

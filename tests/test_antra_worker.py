@@ -22,6 +22,7 @@ from antra_client import (
 )
 from antra_worker import (
     AntraWorker,
+    verify_flac,
     verify_flac_24bit,
     sanitize_track_path,
     maybe_reexec_dns_fix,
@@ -117,42 +118,134 @@ class TestAntraWorker(unittest.TestCase):
         with patch.dict(os.environ, {"ANTRA_DNS_FIXED": "1"}):
             self.assertFalse(maybe_reexec_dns_fix())
 
-    def test_flac_24bit_real_and_corruption_rejections(self):
+    def test_flac_real_and_corruption_rejections(self):
         # 1. Real 24-bit FLAC audio generated via ffmpeg
         real_24 = self.base_dir / "real_24bit.flac"
         generate_real_flac(real_24, bits=24, sample_rate=48000)
-        valid, bps, rate, msg = verify_flac_24bit(real_24)
+        valid, bps, rate, msg = verify_flac(real_24)
         self.assertTrue(valid)
         self.assertEqual(bps, 24)
         self.assertEqual(rate, 48000)
         self.assertIn("Verified 24-bit FLAC", msg)
 
-        # 2. Real 16-bit FLAC rejected as skipped
+        # 2. Real 16-bit FLAC accepted as native quality
         real_16 = self.base_dir / "real_16bit.flac"
         generate_real_flac(real_16, bits=16, sample_rate=44100)
-        valid_16, bps_16, rate_16, msg_16 = verify_flac_24bit(real_16)
-        self.assertFalse(valid_16)
+        valid_16, bps_16, rate_16, msg_16 = verify_flac(real_16)
+        self.assertTrue(valid_16)
         self.assertEqual(bps_16, 16)
-        self.assertIn("24-bit FLAC required", msg_16)
+        self.assertEqual(rate_16, 44100)
+        self.assertIn("Verified 16-bit FLAC", msg_16)
+
+        # Alias verify_flac_24bit accepts both 16 and 24-bit
+        self.assertTrue(verify_flac_24bit(real_24)[0])
+        self.assertTrue(verify_flac_24bit(real_16)[0])
 
         # 3. Header-only FLAC stream rejected
         header_only = self.base_dir / "header_only.flac"
         header_only.write_bytes(create_header_only_flac(24, 96000))
-        valid_hdr, _, _, msg_hdr = verify_flac_24bit(header_only)
+        valid_hdr, _, _, msg_hdr = verify_flac(header_only)
         self.assertFalse(valid_hdr)
         self.assertIn("missing audio frames", msg_hdr)
 
         # 4. Zero sample rate rejected
         zero_rate = self.base_dir / "zero_rate.flac"
         zero_rate.write_bytes(create_header_only_flac(24, 0))
-        valid_zero, _, _, msg_zero = verify_flac_24bit(zero_rate)
+        valid_zero, _, _, msg_zero = verify_flac(zero_rate)
         self.assertFalse(valid_zero)
         self.assertIn("Invalid or zero sample rate", msg_zero)
 
         # 5. Content-Length mismatch rejected
-        valid_cl, _, _, msg_cl = verify_flac_24bit(real_24, expected_length=999999)
+        valid_cl, _, _, msg_cl = verify_flac(real_24, expected_length=999999)
         self.assertFalse(valid_cl)
         self.assertIn("does not match Content-Length", msg_cl)
+
+        # 6. Corrupt audio frames rejected by decoder
+        corrupt_flac = self.base_dir / "corrupt.flac"
+        corrupt_data = bytearray(real_24.read_bytes())
+        corrupt_data[-40:] = b"\x00" * 40
+        corrupt_flac.write_bytes(bytes(corrupt_data))
+        valid_corrupt, _, _, msg_corrupt = verify_flac(corrupt_flac)
+        self.assertFalse(valid_corrupt)
+        self.assertIn("decode verification failed", msg_corrupt)
+
+    def test_real_16bit_flac_download_and_save_not_ack_delete(self):
+        """16-bit fallback FLAC is saved to library as completed, not acked+deleted."""
+        self._write_credentials()
+        job = self.store.create_job("https://tidal.com/album/sixteen", destination="private")
+        job_id = job["id"]
+
+        real_16 = self.base_dir / "incoming_16.flac"
+        generate_real_flac(real_16, bits=16, sample_rate=44100)
+        incoming_bytes = real_16.read_bytes()
+
+        self.client.resolve = MagicMock(return_value={
+            "title": "Album 16",
+            "artist": "Artist 16",
+            "total": 1,
+            "tracks": [{"index": 0, "title": "Track 16", "artist": "Artist 16"}],
+        })
+        self.client.submit_job = MagicMock(return_value=("upstream_16", "tok_16"))
+        self.client.connect_job_ws = MagicMock(return_value=[
+            {"type": "track_done", "index": 0, "path": "Artist 16/Album 16/01 - Track 16.flac"},
+            {"type": "complete"},
+        ])
+        self.client.download_track_stream = MagicMock(return_value=io.BytesIO(incoming_bytes))
+        self.client.ack_track = MagicMock(return_value=True)
+
+        self.worker.process_job(job)
+
+        # DB shows completed with 16-bit and 44100 Hz
+        trks = self.store.get_tracks(job_id)
+        self.assertEqual(trks[0]["status"], "completed")
+        self.assertEqual(trks[0]["bit_depth"], 16)
+        self.assertEqual(trks[0]["sample_rate"], 44100)
+
+        # Saved to disk, not deleted!
+        saved_file = self.output_roots["private"] / trks[0]["filename"]
+        self.assertTrue(saved_file.exists())
+        self.assertEqual(saved_file.read_bytes(), incoming_bytes)
+
+        # Ack called AFTER save
+        self.client.ack_track.assert_called_once_with("upstream_16", 0)
+
+    def test_corrupt_stream_marks_failed_without_upstream_ack(self):
+        """Corrupt audio stream marks track failed and does not acknowledge upstream."""
+        self._write_credentials()
+        job = self.store.create_job("https://tidal.com/album/corrupt", destination="private")
+        job_id = job["id"]
+
+        real_audio = self.base_dir / "valid_for_corrupt.flac"
+        generate_real_flac(real_audio, bits=24, sample_rate=48000)
+        corrupted_bytes = bytearray(real_audio.read_bytes())
+        corrupted_bytes[-50:] = b"\x00" * 50
+
+        self.client.resolve = MagicMock(return_value={
+            "title": "Album Corrupt",
+            "artist": "Artist Corrupt",
+            "total": 1,
+            "tracks": [{"index": 0, "title": "Track Corrupt", "artist": "Artist Corrupt"}],
+        })
+        self.client.submit_job = MagicMock(return_value=("upstream_corrupt", "tok_corrupt"))
+        self.client.connect_job_ws = MagicMock(return_value=[
+            {"type": "track_done", "index": 0, "path": "Artist Corrupt/01 - Corrupt.flac"},
+            {"type": "complete"},
+        ])
+        self.client.download_track_stream = MagicMock(return_value=io.BytesIO(bytes(corrupted_bytes)))
+        self.client.ack_track = MagicMock(return_value=True)
+
+        self.worker.process_job(job)
+
+        # Track marked as failed
+        trks = self.store.get_tracks(job_id)
+        self.assertEqual(trks[0]["status"], "failed")
+        self.assertIn("decode verification failed", trks[0]["message"])
+
+        # Ack must NOT be called for failed track
+        self.client.ack_track.assert_not_called()
+
+        # No audio published
+        self.assertEqual(list(self.output_roots["private"].rglob("*.flac")), [])
 
     def test_existing_file_preservation_and_collision_safe_publish(self):
         """Root defect reproduction: verify existing user music is NEVER overwritten."""

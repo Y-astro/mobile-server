@@ -14,7 +14,7 @@
  * - Form inputs, submit pending guard, explicit network error handling, bounded timeouts
  * - Work after page reload & progress updates
  * - 250 track details & index 101+/250 proof without missing rows
- * - Strict 24-bit only rule: 24-bit accepted vs 16-bit skipped
+ * - Best-available FLAC rule: 24-bit and 16-bit accepted and completed
  * - Cancel & retry transitions
  * - XSS strings safely render as text
  * - Mobile touch targets (>= 48px) and responsive table overflow
@@ -57,11 +57,11 @@ function createInitialState() {
       artist: i === 0
         ? '<img src=x onerror="window.pwned=2">Artist Zero'
         : `Orchestra ${Math.floor(i / 10) + 1}`,
-      status: is24Bit ? (i < 120 ? 'completed' : 'downloading') : 'skipped',
+      status: i < 120 ? 'completed' : 'downloading',
       bit_depth: is24Bit ? 24 : 16,
       sample_rate: is24Bit ? 96000 : 44100,
-      filename: is24Bit ? `Orchestra/Symphony_${i + 1}.flac` : null,
-      message: is24Bit ? 'Verified 24-bit FLAC' : 'Skipped: 16-bit stream (24-bit only rule)'
+      filename: `Orchestra/Symphony_${i + 1}.flac`,
+      message: is24Bit ? 'Verified 24-bit FLAC (96000 Hz, 2 ch)' : 'Verified 16-bit FLAC (44100 Hz, 2 ch)'
     });
   }
 
@@ -109,7 +109,7 @@ function createInitialState() {
         private: 'Music/Astro',
         family: 'Music/Family'
       },
-      quality: '24-bit FLAC'
+      quality: 'Best Available FLAC'
     },
     jobs: initialJobs,
     tracksByJobId: {
@@ -478,16 +478,20 @@ function createInitialState() {
     assert.strictEqual(destDetailsText.trim(), 'My music (private)');
 
     // =========================================================================
-    // 7. STRICT 24-BIT ONLY RULE VERIFICATION (24-BIT VS 16-BIT SKIPPED)
+    // 7. BEST AVAILABLE FLAC QUALITY ENFORCEMENT (16-BIT & 24-BIT COMPLETED)
     // =========================================================================
-    console.log('[Test 7] Verifying strict 24-bit only rule enforcement...');
+    console.log('[Test 7] Verifying best available FLAC quality enforcement (16-bit & 24-bit completed)...');
     const row1Quality = await trackRows.nth(1).locator('td').nth(3).textContent();
     assert.match(row1Quality, /24-bit/);
+    assert.match(row1Quality, /96 kHz/);
+    const row1Status = await trackRows.nth(1).locator('td').nth(4).textContent();
+    assert.strictEqual(row1Status.trim(), 'completed');
 
     const row3Quality = await trackRows.nth(3).locator('td').nth(3).textContent();
-    assert.match(row3Quality, /Skipped - 24-bit only rule/);
+    assert.match(row3Quality, /16-bit/);
+    assert.match(row3Quality, /44\.1 kHz/);
     const row3Status = await trackRows.nth(3).locator('td').nth(4).textContent();
-    assert.strictEqual(row3Status.trim(), 'skipped');
+    assert.strictEqual(row3Status.trim(), 'completed');
 
     // =========================================================================
     // 8. XSS MITIGATION / SAFE STRING RENDERING PROOF

@@ -4,7 +4,7 @@ Status: approved by the user with "continue" on 2026-11-06. Research is complete
 
 ## Goal
 
-An administrator pastes a supported song or playlist link into a small page matching the current dark Material 3 website. A phone-side worker fetches and saves music after the local browser closes. Only verified 24-bit FLAC files enter the finished library. Show completed, skipped, failed, and waiting tracks explicitly.
+An administrator pastes a supported song or playlist link into a small page matching the current dark Material 3 website. A phone-side worker fetches and saves music after the local browser closes. Only verified native FLAC files (best available quality: 24-bit or 16-bit) enter the finished library. Show completed, failed, and waiting tracks explicitly.
 
 ## Evidence and corrected assumptions
 
@@ -44,9 +44,9 @@ Proposed output directory: /storage/emulated/0/Music/Antra, subject to a read/wr
 
 Load the existing pinned DNS library only for the new worker process if still required. Do not alter global DNS settings or Suwayomi.
 
-## Strict quality behavior
+## Best-available quality behavior
 
-Always request flac24. Verify actual downloaded FLAC STREAMINFO bit depth and sample rate before publishing; do not trust a format label, extension, or requested setting alone. Accept 24-bit FLAC with its original sample rate. Show that rate in the UI. Do not re-encode, upsample, or silently accept 16-bit FLAC, ALAC, AAC, or MP3. Report unavailable quality as skipped.
+Always request flac24 from upstream provider. Verify actual downloaded FLAC STREAMINFO bit depth and sample rate before publishing; do not trust a format label, extension, or requested setting alone. Accept valid native FLAC with its original bit depth (24-bit or 16-bit fallback) and sample rate. Show accurate bit depth and rate in the UI. Do not re-encode, upsample, or convert. Reject corrupt, truncated, non-FLAC, or undecodable streams. Save 16-bit fallback tracks rather than rejecting them.
 
 This proves the file's encoded format, not whether the upstream provider's master was originally recorded at that quality.
 

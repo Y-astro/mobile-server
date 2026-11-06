@@ -2,7 +2,7 @@
  * =========================================================================
  * ANTRA HI-RES MUSIC DOWNLOADER
  * Client Controller & Lifecycle Management
- * Strict 24-bit FLAC enforcement, visibility-aware polling, zero XSS,
+ * Best-available native FLAC enforcement, visibility-aware polling, zero XSS,
  * multi-destination routing (private vs family).
  * =========================================================================
  */
@@ -75,12 +75,18 @@
     if (bitDepth === 24) {
       span.className = 'quality-badge-24';
       span.textContent = rateKhz ? `24-bit / ${rateKhz}` : '24-bit FLAC';
-    } else if (bitDepth && bitDepth !== 24) {
-      span.className = 'quality-badge-skipped';
-      span.textContent = `${bitDepth}-bit (Skipped - 24-bit only rule)`;
+    } else if (bitDepth === 16) {
+      span.className = 'quality-badge-16';
+      span.textContent = rateKhz ? `16-bit / ${rateKhz}` : '16-bit FLAC';
+    } else if (bitDepth) {
+      span.className = 'quality-badge-16';
+      span.textContent = rateKhz ? `${bitDepth}-bit / ${rateKhz}` : `${bitDepth}-bit FLAC`;
     } else if (track.status === 'skipped') {
       span.className = 'quality-badge-skipped';
-      span.textContent = 'Skipped (24-bit required)';
+      span.textContent = 'Skipped';
+    } else if (track.status === 'failed') {
+      span.className = 'text-xs text-muted';
+      span.textContent = 'Failed';
     } else {
       span.className = 'text-xs text-muted';
       span.textContent = 'Pending stream';
@@ -466,7 +472,10 @@
       const skippedCount = tracks.filter(t => t.status === 'skipped').length;
       const failedCount = tracks.filter(t => t.status === 'failed').length;
 
-      tracksSummary.textContent = `${tracks.length} tracks total • ${completedCount} completed (24-bit) • ${skippedCount} skipped (24-bit required) • ${failedCount} failed`;
+      const summaryParts = [`${tracks.length} tracks total`, `${completedCount} completed`];
+      if (skippedCount > 0) summaryParts.push(`${skippedCount} skipped`);
+      if (failedCount > 0) summaryParts.push(`${failedCount} failed`);
+      tracksSummary.textContent = summaryParts.join(' • ');
 
       // Render All Tracks into Tbody (Zero loss, proofs index 101+/250)
       const tbodyFrag = document.createDocumentFragment();
@@ -493,7 +502,7 @@
         tdArtist.textContent = track.artist || 'Unknown';
         tr.appendChild(tdArtist);
 
-        // Column 4: Audio Format (24-bit only rule proof)
+        // Column 4: Audio Format (bit depth and sample rate)
         const tdFormat = document.createElement('td');
         tdFormat.className = 'py-3 px-3';
         tdFormat.appendChild(createQualityBadge(track));

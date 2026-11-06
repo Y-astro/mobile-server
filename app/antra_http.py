@@ -175,7 +175,7 @@ def dispatch_antra(
             settings = {
                 "output_directories": dict(LOGICAL_OUTPUT_DIRECTORIES),
                 "output_directory": LOGICAL_OUTPUT_DIRECTORIES["private"],
-                "quality": "24-bit FLAC",
+                "quality": "Best Available FLAC",
             }
             _send_response(handler, 200, {
                 "jobs": jobs,
