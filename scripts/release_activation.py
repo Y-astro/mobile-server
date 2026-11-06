@@ -196,12 +196,14 @@ PROFILE_SUWAYOMI_FILTER = "suwayomi-filter"
 PROFILE_SUWAYOMI_LIFECYCLE = "suwayomi-lifecycle"
 PROFILE_SUWAYOMI_JAR = "suwayomi-jar"
 PROFILE_ANTRA_SERVICE = "antra-service"
+PROFILE_NAVIDROME_SERVICE = "navidrome-service"
 VALID_PROFILES = (
     PROFILE_GENERAL,
     PROFILE_SUWAYOMI_FILTER,
     PROFILE_SUWAYOMI_LIFECYCLE,
     PROFILE_SUWAYOMI_JAR,
     PROFILE_ANTRA_SERVICE,
+    PROFILE_NAVIDROME_SERVICE,
 )
 SUWAYOMI_FILTER_REMOTE = "/data/data/com.termux/files/home/bin/suwayomi_graphql_filter.py"
 SUWAYOMI_LAUNCHER_REMOTE = "/data/data/com.termux/files/home/bin/start_suwayomi.sh"
@@ -535,6 +537,38 @@ def map_changed_destinations(
             affected_services.add("suwayomi")
             supervisor_affected = False
 
+        elif profile == PROFILE_NAVIDROME_SERVICE:
+            norm = remote.replace("\\", "/").rstrip("/")
+            if norm == SERVICE_CATALOG_REMOTE:
+                if action != rt.ACTION_REPLACE:
+                    raise ActivationError(
+                        f"Profile '{PROFILE_NAVIDROME_SERVICE}' permits only modifying existing {SERVICE_CATALOG_REMOTE} with action REPLACE, found: {action}"
+                    )
+                affected_services.add("dashboard")
+                affected_services.add("navidrome")
+                supervisor_affected = True
+            elif norm == SUPERVISOR_REMOTE:
+                if action != rt.ACTION_REPLACE:
+                    raise ActivationError(
+                        f"Profile '{PROFILE_NAVIDROME_SERVICE}' permits only modifying existing {SUPERVISOR_REMOTE} with action REPLACE, found: {action}"
+                    )
+                supervisor_affected = True
+            elif norm.endswith("home/.local/lib/mobile-server/navidrome.py"):
+                if action not in (rt.ACTION_CREATE, rt.ACTION_REPLACE):
+                    raise ActivationError(
+                        f"Profile '{PROFILE_NAVIDROME_SERVICE}' permits only creating or replacing navidrome.py launcher"
+                    )
+                affected_services.add("navidrome")
+            elif norm.endswith("home/.config/caddy/Caddyfile") or norm.endswith("config/Caddyfile"):
+                if action != rt.ACTION_REPLACE:
+                    raise ActivationError(
+                        f"Profile '{PROFILE_NAVIDROME_SERVICE}' permits only modifying existing Caddyfile with action REPLACE"
+                    )
+                affected_services.add("caddy")
+            else:
+                raise ActivationError(
+                    f"Profile '{PROFILE_NAVIDROME_SERVICE}' prohibits changes to {remote}"
+                )
         elif profile == PROFILE_ANTRA_SERVICE:
             norm = remote.replace("\\", "/").rstrip("/")
             if norm == SERVICE_CATALOG_REMOTE:
@@ -1845,6 +1879,8 @@ def apply(
                 if profile == PROFILE_SUWAYOMI_LIFECYCLE and driver.matching_processes("suwayomi_scheduler"):
                     raise QuiescenceError("suwayomi_scheduler process appeared concurrently before quiescence")
 
+                if profile == PROFILE_NAVIDROME_SERVICE and driver.matching_processes("navidrome"):
+                    raise QuiescenceError("navidrome process appeared concurrently before quiescence")
                 if profile == PROFILE_ANTRA_SERVICE and driver.matching_processes("antra"):
                     raise QuiescenceError("antra worker process appeared concurrently before quiescence")
 
@@ -2183,7 +2219,7 @@ def _rollback_internal(
 
         # 3. Rollback files
         tx_journal = tx.load_journal()
-        if act_journal.get("profile") in (PROFILE_SUWAYOMI_LIFECYCLE, PROFILE_ANTRA_SERVICE):
+        if act_journal.get("profile") in (PROFILE_SUWAYOMI_LIFECYCLE, PROFILE_ANTRA_SERVICE, PROFILE_NAVIDROME_SERVICE):
             # If live catalog was corrupted/broken while staged file is intact,
             # heal live file from verified staged file so release transaction engine can perform preimage rollback
             for entry in tx_journal.get("entries", []):

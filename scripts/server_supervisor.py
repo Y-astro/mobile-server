@@ -175,6 +175,10 @@ def matching_processes(sid):
                                                 match = True
                                 except OSError:
                                     pass
+            elif sid == 'navidrome':
+                match = (base.startswith('python') and str(HOME / '.local/lib/mobile-server/navidrome.py') in args) or \
+                        ('proot' in base and any('navidrome' in a for a in args) and not any('suwayomi' in a.lower() for a in args)) or \
+                        (base == 'navidrome' and any('--configfile' in a for a in args))
             elif sid == 'antra':
                 match = False
                 if base.startswith('python') and len(args) >= 2:

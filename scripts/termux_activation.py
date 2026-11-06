@@ -249,19 +249,24 @@ def validate_catalog_transition(
             raise RuntimeError(
                 f"Candidate suwayomi_scheduler cmd drift: expected {expected_cmd!r}, got {sched_cfg.get('cmd')!r}"
             )
-        if len(cand_keys) == 17:
+        if len(cand_keys) in (17, 18):
             if cand_keys[16] != "antra":
                 raise RuntimeError(
                     f"Candidate service catalog 17th service must be 'antra', got {cand_keys[16]!r}"
                 )
             expected_antra = [f"{prefix_str}/bin/python3", "-u", f"{home_str}/.local/lib/mobile-server/antra_worker.py"]
             antra_cfg = cand_services.get("antra")
-            if not isinstance(antra_cfg, dict):
-                raise RuntimeError("Candidate antra configuration must be a dictionary")
-            if antra_cfg.get("cmd") != expected_antra:
-                raise RuntimeError(
-                    f"Candidate antra cmd drift: expected {expected_antra!r}, got {antra_cfg.get('cmd')!r}"
-                )
+            if not isinstance(antra_cfg, dict) or antra_cfg.get("cmd") != expected_antra:
+                raise RuntimeError("Candidate antra cmd drift")
+            if len(cand_keys) == 18:
+                if cand_keys[17] != "navidrome":
+                    raise RuntimeError(
+                        f"Candidate service catalog 18th service must be 'navidrome', got {cand_keys[17]!r}"
+                    )
+                expected_nav = [f"{prefix_str}/bin/python3", "-u", f"{home_str}/.local/lib/mobile-server/navidrome.py"]
+                nav_cfg = cand_services.get("navidrome")
+                if not isinstance(nav_cfg, dict) or nav_cfg.get("cmd") != expected_nav or nav_cfg.get("port") != 4533:
+                    raise RuntimeError("Candidate navidrome configuration drift")
         for sid, p_cfg in prior_services.items():
             c_cfg = cand_services.get(sid)
             if c_cfg is None:
@@ -272,6 +277,45 @@ def validate_catalog_transition(
                 raise RuntimeError(
                     f"Candidate service {sid} configuration runtime drift: expected {p_cfg!r}, got {c_cfg!r}"
                 )
+    elif profile == "navidrome-service":
+        if len(prior_keys) != 17:
+            raise RuntimeError(
+                f"navidrome-service profile requires exact 17 prior services, found {len(prior_keys)}"
+            )
+        if len(cand_keys) != 18:
+            raise RuntimeError(
+                f"navidrome-service profile requires exact 18 candidate services, found {len(cand_keys)}"
+            )
+        if cand_keys[:17] != prior_keys:
+            raise RuntimeError(
+                f"Candidate service catalog first 17 keys mismatch: expected {prior_keys}, got {cand_keys[:17]}"
+            )
+        for sid, p_cfg in prior_services.items():
+            c_cfg = cand_services.get(sid)
+            if c_cfg is None:
+                raise RuntimeError(f"Candidate catalog missing prior service: {sid}")
+            if not isinstance(c_cfg, dict) or not isinstance(p_cfg, dict):
+                raise RuntimeError(f"Service {sid} configuration must be a dictionary")
+            if c_cfg != p_cfg:
+                raise RuntimeError(
+                    f"Candidate service {sid} configuration runtime drift: expected {p_cfg!r}, got {c_cfg!r}"
+                )
+        if cand_keys[17] != "navidrome":
+            raise RuntimeError(
+                f"Candidate service catalog 18th service must be 'navidrome', got {cand_keys[17]!r}"
+            )
+        nav_cfg = cand_services.get("navidrome")
+        if not isinstance(nav_cfg, dict):
+            raise RuntimeError("Candidate navidrome configuration must be a dictionary")
+        if set(nav_cfg.keys()) != {"port", "path", "cmd"}:
+            raise RuntimeError(
+                f"Candidate navidrome introduces unexpected attributes: {sorted(list(set(nav_cfg.keys()) - {'port', 'path', 'cmd'}))}"
+            )
+        expected_cmd = [f"{prefix_str}/bin/python3", "-u", f"{home_str}/.local/lib/mobile-server/navidrome.py"]
+        if nav_cfg.get("cmd") != expected_cmd or nav_cfg.get("port") != 4533 or nav_cfg.get("path") != "/ping":
+            raise RuntimeError(
+                f"Candidate navidrome configuration drift: {nav_cfg!r}"
+            )
     elif profile == "antra-service":
         if len(prior_keys) != 16:
             raise RuntimeError(
@@ -527,6 +571,8 @@ class TermuxLifecycleDriver(LifecycleDriver):
     def matching_processes(self, sid: str) -> List[Tuple[int, str]]:
         if sid == "suwayomi_scheduler":
             return self._match_suwayomi_scheduler()
+        if sid == "navidrome":
+            return self._match_navidrome()
         if sid == "antra":
             return self._match_antra_worker()
         if sid == "suwayomi":
@@ -552,6 +598,43 @@ class TermuxLifecycleDriver(LifecycleDriver):
             if sid == "antra":
                 return self._match_antra_worker()
             raise
+
+    def _match_navidrome(self) -> List[Tuple[int, str]]:
+        """Match owned navidrome launcher or proot container processes."""
+        uid = os.getuid()
+        expected_launcher = (self.home_dir / ".local/lib/mobile-server/navidrome.py").resolve()
+        matches: List[Tuple[int, str]] = []
+        if not self.proc_root.exists():
+            return matches
+
+        for proc in self.proc_root.iterdir():
+            if not proc.name.isdigit() or int(proc.name) == os.getpid():
+                continue
+            try:
+                if proc.stat().st_uid != uid:
+                    continue
+                cmdline_bytes = (proc / "cmdline").read_bytes()
+                cmdline = cmdline_bytes.decode(errors="replace").rstrip("\0").split("\0")
+                if not cmdline or not cmdline[0]:
+                    continue
+                base = Path(cmdline[0]).name
+                is_match = False
+                if base.startswith("python"):
+                    script_path, _ = extract_python_script_and_args(cmdline)
+                    if script_path and script_path.resolve() == expected_launcher:
+                        is_match = True
+                elif "proot" in base and any("navidrome" in a for a in cmdline) and not any("suwayomi" in a.lower() for a in cmdline):
+                    is_match = True
+                elif base == "navidrome" and any("--configfile" in a for a in cmdline):
+                    is_match = True
+
+                if is_match:
+                    ident = self.process_identity(int(proc.name))
+                    if ident is not None:
+                        matches.append((int(proc.name), ident))
+            except (OSError, IndexError, ValueError):
+                continue
+        return sorted(matches, key=lambda m: m[0])
 
     def _match_antra_worker(self) -> List[Tuple[int, str]]:
         """

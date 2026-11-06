@@ -152,11 +152,11 @@ class ServiceCatalogTests(unittest.TestCase):
         cards = service_catalog.dashboard_services()
         expected_keys = [
             'filebrowser', 'suwayomi', 'vaultwarden', 'adguard', 'terminal',
-            'agy', 'converter', 'syncthing', 'battery_guard', 'antra'
+            'agy', 'converter', 'syncthing', 'battery_guard', 'antra', 'navidrome'
         ]
         self.assertEqual(list(cards.keys()), expected_keys)
         self.assertEqual(list(cards.keys())[:9], list(char['dashboard_services_config'].keys()))
-        self.assertEqual(len(cards), 10)
+        self.assertEqual(len(cards), 11)
 
         for k in expected_keys[:9]:
             orig = dict(char['dashboard_services_config'][k])
@@ -169,6 +169,12 @@ class ServiceCatalogTests(unittest.TestCase):
         self.assertEqual(cards['antra']['category'], 'Media')
         self.assertEqual(cards['antra']['open_url'], '/antra/')
         self.assertTrue(cards['antra']['can_toggle'])
+
+        self.assertEqual(cards['navidrome']['name'], 'Music Player')
+        self.assertEqual(cards['navidrome']['category'], 'Storage & Media')
+        self.assertEqual(cards['navidrome']['open_url'], '/music/')
+        self.assertEqual(cards['navidrome']['port'], 4533)
+        self.assertTrue(cards['navidrome']['can_toggle'])
 
         # Verify no stale keys remain in cards
         for sid, card in cards.items():

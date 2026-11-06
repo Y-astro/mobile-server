@@ -27,6 +27,7 @@ SERVICE_ENDPOINTS: Dict[str, Dict[str, Any]] = {
     'battery_guard': {},
     'converter': {'is_ondemand': True},
     'antra': {},
+    'navidrome': {'port': 4533, 'path': '/ping'},
 }
 
 
@@ -72,6 +73,7 @@ def runtime_services(home: str, prefix: str) -> Dict[str, Dict[str, Any]]:
         'battery_guard': dict(cmd=[f'{p}/bin/bash', f'{h}/bin/battery_guard.sh', '--daemon']),
         'suwayomi_scheduler': dict(cmd=[f'{p}/bin/python3', f'{h}/bin/suwayomi_daily_update.py', '--foreground']),
         'antra': dict(cmd=[f'{p}/bin/python3', '-u', f'{h}/.local/lib/mobile-server/antra_worker.py']),
+        'navidrome': dict(port=SERVICE_ENDPOINTS['navidrome']['port'], path=SERVICE_ENDPOINTS['navidrome']['path'], cmd=[f'{p}/bin/python3', '-u', f'{h}/.local/lib/mobile-server/navidrome.py']),
     }
 
 
@@ -202,6 +204,18 @@ def dashboard_services() -> Dict[str, Dict[str, Any]]:
             "desc": "High-Resolution Music Downloader (FLAC 24-bit)",
             "open_url": "/antra/",
             "open_label": "Open Antra",
+            "can_toggle": True
+        },
+        "navidrome": {
+            "id": "navidrome",
+            "name": "Music Player",
+            "category": "Storage & Media",
+            "port": SERVICE_ENDPOINTS['navidrome']['port'],
+            "pattern": "navidrome",
+            "icon": "music",
+            "desc": "Personal Music Server & Streamer (Navidrome • Port 4533)",
+            "open_url": "/music/",
+            "open_label": "Open Player",
             "can_toggle": True
         }
     }
