@@ -445,6 +445,8 @@ class AntraWorker:
             return
         temporary = None
         temporary_identity = None
+        publication_directory = None
+        directory_publication = False
         try:
             if not self.check_output_storage(self.store.get_job(job_id)["destination"])[0]:
                 raise ValueError("Music isolation is unavailable")
@@ -459,14 +461,13 @@ class AntraWorker:
                     self.store.update_track(job_id, global_index, status="completed", filename=record["publication_path"], ack_pending=1)
                     self._acknowledge(job_id, global_index, upstream_job_id)
                     return
-            else:
-                supplied = sanitize_track_path(rel_path, destination_root)
-                stem = os.fsencode(supplied.stem)[:120].decode("utf-8", errors="ignore")
-                final = supplied.with_name(f"{stem}--{job_id[:12]}-{global_index}.flac")
-                ensure_track_parent(final, destination_root)
-                while final.exists() or final.is_symlink():
-                    final = final.with_name(f"{stem}--{uuid.uuid4().hex}.flac")
-                self.store.update_track(job_id, global_index, publication_path=str(final.relative_to(destination_root.resolve())))
+            supplied = sanitize_track_path(rel_path, destination_root)
+            stem = os.fsencode(supplied.stem)[:120].decode("utf-8", errors="ignore")
+            final = supplied.with_name(f"{stem}--{job_id[:12]}-{global_index}.flac")
+            ensure_track_parent(final, destination_root)
+            while final.exists() or final.is_symlink():
+                final = final.with_name(f"{stem}--{uuid.uuid4().hex}.flac")
+            self.store.update_track(job_id, global_index, publication_path=str(final.relative_to(destination_root.resolve())))
             if record.get("temporary_path"):
                 temporary = sanitize_track_path(record["temporary_path"], destination_root)
                 if temporary.exists() or temporary.is_symlink():
@@ -513,13 +514,39 @@ class AntraWorker:
             if self.store.is_job_cancelled(job_id):
                 return
             ensure_track_parent(final, destination_root)
-            publish_noreplace(temporary, final)
+            try:
+                publish_noreplace(temporary, final)
+            except OSError as error:
+                if error.errno not in (22, 38, 95):
+                    raise
+                # Android FUSE lacks RENAME_NOREPLACE. A nonempty directory rename cannot overwrite existing files.
+                publication_directory = temporary.parent / f".antra-commit-{uuid.uuid4().hex}"
+                publication_directory.mkdir(mode=0o700)
+                target_directory = final.with_suffix("")
+                while os.path.lexists(target_directory):
+                    target_directory = final.parent / f"{final.stem}--{uuid.uuid4().hex}"
+                staged_file = publication_directory / final.name
+                target_file = target_directory / final.name
+                self.store.update_track(
+                    job_id, global_index,
+                    publication_path=str(target_file.relative_to(destination_root.resolve())),
+                    temporary_path=str(staged_file.relative_to(destination_root.resolve())),
+                )
+                os.rename(temporary, staged_file)
+                temporary = staged_file
+                os.rename(publication_directory, target_directory)
+                final = target_file
+                directory_publication = True
+                sync_track_directory(target_directory.parent)
             temporary = None
             sync_track_directory(final.parent)
             if self.store.is_job_cancelled(job_id):
                 identity = final.lstat()
                 if (identity.st_dev, identity.st_ino) == temporary_identity and not final.is_symlink():
                     final.unlink()
+                    if directory_publication:
+                        with contextlib.suppress(OSError):
+                            final.parent.rmdir()
                 return
             self.store.update_track(job_id, global_index, status="completed", filename=str(final.relative_to(destination_root.resolve())), temporary_path=None, message="", ack_pending=1)
             self._acknowledge(job_id, global_index, upstream_job_id)
@@ -532,6 +559,9 @@ class AntraWorker:
                     identity = temporary.lstat()
                     if not temporary.is_symlink() and (identity.st_dev, identity.st_ino) == temporary_identity:
                         temporary.unlink()
+            if publication_directory is not None:
+                with contextlib.suppress(OSError):
+                    publication_directory.rmdir()
 
     def run_once(self) -> bool:
         """Process one runnable job if available."""

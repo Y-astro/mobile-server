@@ -93,6 +93,37 @@ class AntraSafetyTests(unittest.TestCase):
         self.client.ack_track.assert_not_called()
         self.assertEqual(list(self.output_roots["private"].rglob("*.part")), [])
 
+    def test_android_directory_publication_and_replay(self):
+        job, audio = self.prepare_track()
+        with patch.object(worker_module, "publish_noreplace", side_effect=OSError(22, "unsupported mount")):
+            self.download(job)
+        record = self.store.get_tracks(job["id"])[0]
+        final = self.output_roots["private"] / record["filename"]
+        self.assertEqual(record["status"], "completed")
+        self.assertEqual(final.read_bytes(), audio.read_bytes())
+        self.assertTrue(final.parent.name.endswith("-0"))
+        self.download(job)
+        self.assertEqual(self.client.download_track_stream.call_count, 1)
+        self.assertEqual(list(self.output_roots["private"].rglob(".antra-commit-*")), [])
+
+    def test_android_directory_publication_preserves_racing_user_data(self):
+        job, _ = self.prepare_track()
+        rename = worker_module.os.rename
+        targets = []
+        def racing(source, destination):
+            source, destination = Path(source), Path(destination)
+            if source.is_dir():
+                destination.mkdir()
+                sentinel = destination / "USER_MUSIC"
+                sentinel.write_bytes(b"KEEP")
+                targets.append(sentinel)
+            return rename(source, destination)
+        with patch.object(worker_module, "publish_noreplace", side_effect=OSError(22, "unsupported mount")), patch.object(worker_module.os, "rename", side_effect=racing):
+            self.download(job)
+        self.assertEqual(targets[0].read_bytes(), b"KEEP")
+        self.assertEqual(self.store.get_tracks(job["id"])[0]["status"], "failed")
+        self.client.ack_track.assert_not_called()
+
     def test_cancel_after_validation_does_not_publish(self):
         job, _ = self.prepare_track()
         validate = worker_module.verify_flac_24bit
