@@ -266,3 +266,26 @@ class AntraSafetyTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_submit_job_success_payload_and_validation(self):
+        client = AntraClient(base_url="https://antra.fake.local", config_dir=self.config_dir)
+        captured = {}
+        def fake_request(method, endpoint, data=None, is_submission=False):
+            captured["method"] = method
+            captured["endpoint"] = endpoint
+            captured["data"] = data
+            captured["is_submission"] = is_submission
+            return 200, {}, json.dumps({"job_id": "job_valid_123", "ws_token": "token_xyz"}).encode("utf-8")
+
+        client._request = fake_request
+        job_id, ws_token = client.submit_job("https://open.spotify.com/playlist/fake", 0, 5, format_pref="flac")
+        self.assertEqual(job_id, "job_valid_123")
+        self.assertEqual(ws_token, "token_xyz")
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["endpoint"], "/api/jobs")
+        self.assertTrue(captured["is_submission"])
+        self.assertEqual(captured["data"]["url"], "https://open.spotify.com/playlist/fake")
+        self.assertEqual(captured["data"]["start_index"], 0)
+        self.assertEqual(captured["data"]["end_index"], 5)
+        self.assertTrue(captured["data"]["client_packaging"])
+        self.assertEqual(captured["data"]["format"], "flac")
