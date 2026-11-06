@@ -27,3 +27,7 @@ The user approved the written Antra design with "continue". Implement one accoun
 5. Acceptance: realistic fixture playlist>100 and restart/browser-close proof, strict quality/path/auth/quota tests, actual page controls, complete owned-manifest verification, preserved prior services/flags/JAR/DNS. A user sample playlist is still requested for the live>100 proof; do not fabricate that result.
 
 No player, alternate sources, account rotation, scheduled sync, or held YouTube/media/torrent additions. At most one narrowed continuation per owner, then root resolves residual issues. Never poll active detached AGY jobs; consume exact completion once.
+
+## User storage correction, approved directly 2026-11-06
+
+Provide Family and Astro/private music areas. Add immutable Job.destination=private|family; POST jobs accepts that enum and defaults to private. Retry preserves it. Settings may expose output_directories with logical labels Music/Astro and Music/Family while retaining output_directory as the legacy default. Admin page offers only those two destinations. Actual physical roots depend on verified FileBrowser scope/rule isolation; do not hardcode a publicly exposed private path before verification. No private writes or worker activation until family listing and direct-path denial are proven. Family still cannot control the Antra admin page/API. Root privacy research and safe native configuration are part of this explicitly requested correction.
