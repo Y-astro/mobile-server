@@ -829,6 +829,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/theme-tokens.css": ("theme-tokens.css", "text/css; charset=utf-8"),
             "/appearance.css": ("appearance.css", "text/css; charset=utf-8"),
             "/appearance.js": ("appearance.js", "application/javascript; charset=utf-8"),
+            "/antra.css": ("antra.css", "text/css; charset=utf-8"),
+            "/antra.js": ("antra.js", "application/javascript; charset=utf-8"),
         }
         asset_lookup = self.path.split("?", 1)[0]
         if asset_lookup.startswith("/static/"):

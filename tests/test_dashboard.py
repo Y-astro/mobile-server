@@ -45,6 +45,25 @@ class DashboardTests(unittest.TestCase):
   c=HTTPConnection('127.0.0.1',self.server.server_port,timeout=5);h=headers or {}
   if user:h['Cookie']='session_token='+self.mod.sign_session_token(user)
   c.request(method,path,body=body,headers=h);r=c.getresponse();result=(r.status,r.read());c.close();return result
+ def test_antra_public_assets_are_exact_and_head_safe(self):
+  for filename, content_type in [('antra.css', 'text/css; charset=utf-8'), ('antra.js', 'application/javascript; charset=utf-8')]:
+   source = (self.web_dir / filename).read_bytes()
+   target = self.static_dir / filename
+   target.write_bytes(source)
+   self.addCleanup(target.unlink, missing_ok=True)
+   for user in (None, 'testadmin', 'testfamily'):
+    for prefix in ('/', '/static/'):
+     with self.subTest(filename=filename, user=user, prefix=prefix):
+      status, body, headers = self.request_resp('GET', prefix + filename + '?v=1', user=user)
+      self.assertEqual(status, 200)
+      self.assertEqual(body, source)
+      self.assertEqual(headers['content-type'], content_type)
+      self.assertEqual(headers['cache-control'], 'no-cache')
+      status, body, headers = self.request_resp('HEAD', prefix + filename, user=user)
+      self.assertEqual(status, 200)
+      self.assertEqual(body, b'')
+      self.assertEqual(int(headers['content-length']), len(source))
+
  def request_resp(self,method,path,user=None,body=None,headers=None):
   c=HTTPConnection('127.0.0.1',self.server.server_port,timeout=5);h=headers or {}
   if user:h['Cookie']='session_token='+self.mod.sign_session_token(user)

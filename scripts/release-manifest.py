@@ -50,6 +50,9 @@ REVIEWED_ADDITIONAL_ASSETS: Dict[str, str] = {
     "web/appearance.js": "/data/data/com.termux/files/home/.config/dashboard/static/appearance.js",
     "web/filebrowser.css": "/data/data/com.termux/files/home/.config/dashboard/static/filebrowser.css",
     "web/filebrowser-entry.js": "/data/data/com.termux/files/home/.config/dashboard/static/filebrowser-entry.js",
+    "web/antra.html": "/data/data/com.termux/files/home/.config/dashboard/static/antra.html",
+    "web/antra.css": "/data/data/com.termux/files/home/.config/dashboard/static/antra.css",
+    "web/antra.js": "/data/data/com.termux/files/home/.config/dashboard/static/antra.js",
 }
 
 # Forbidden secret, runtime, credential, database, and history patterns.

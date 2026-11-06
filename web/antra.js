@@ -153,7 +153,7 @@
 
     const controller = new AbortController();
     activeMainFetchController = controller;
-    const fetchSignal = signal || controller.signal;
+    const fetchSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000), ...(signal ? [signal] : [])]);
 
     try {
       const res = await fetch('/api/antra/jobs', {
@@ -175,7 +175,7 @@
       const data = await res.json();
 
       // Guard late or disposed state
-      if (isAccessDenied || isPageHidden || (signal && signal.aborted)) return;
+      if (isAccessDenied || isPageHidden || fetchSignal.aborted) return;
 
       renderWorker(data.worker, data.settings);
       renderJobs(data.jobs || []);
@@ -422,7 +422,7 @@
 
     const controller = new AbortController();
     activeTrackController = controller;
-    const fetchSignal = signal || controller.signal;
+    const fetchSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000), ...(signal ? [signal] : [])]);
 
     try {
       const res = await fetch(`/api/antra/jobs/${encodeURIComponent(jobId)}`, {
@@ -737,17 +737,21 @@
   }
 
   // Lifecycle & Polling Setup
-  if (typeof window !== 'undefined' && window.PortalPolling && typeof window.PortalPolling.createPolling === 'function') {
-    pollingLoop = window.PortalPolling.createPolling((signal) => fetchJobs(signal), 4000, { name: 'antra' });
-  } else {
-    // If house portal helper missing, do NOT duplicate timer loop.
-    // Display load failure notice and run safe single initial read.
-    if (helperAlert) {
-      helperAlert.textContent = 'Portal polling helper not available. Automatic background polling disabled; use Refresh button.';
-      helperAlert.classList.remove('hidden');
+  function startPolling() {
+    if (pollingLoop || isAccessDenied || isPageHidden) return;
+    if (window.PortalPolling && typeof window.PortalPolling.createPolling === 'function') {
+      pollingLoop = window.PortalPolling.createPolling((signal) => fetchJobs(signal), 4000, { name: 'antra' });
+    } else {
+      // If house portal helper missing, do NOT duplicate timer loop.
+      // Display load failure notice and run safe single initial read.
+      if (helperAlert) {
+        helperAlert.textContent = 'Portal polling helper not available. Automatic background polling disabled; use Refresh button.';
+        helperAlert.classList.remove('hidden');
+      }
+      fetchJobs();
     }
-    fetchJobs();
   }
+  startPolling();
 
   // Page Lifecycle & Unload Cleanup
   window.addEventListener('pagehide', () => {
@@ -768,6 +772,7 @@
 
   window.addEventListener('pageshow', () => {
     isPageHidden = false;
+    startPolling();
   });
 
 })();

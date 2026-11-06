@@ -174,6 +174,14 @@ class TestReleaseManifest(unittest.TestCase):
         for asset in required_independent:
             self.assertIn(asset, ownership)
 
+    def test_antra_web_assets_have_exact_owned_destinations(self):
+        ownership = get_canonical_ownership(REPO_ROOT)
+        for extension in ("html", "css", "js"):
+            self.assertEqual(
+                ownership[f"web/antra.{extension}"],
+                f"/data/data/com.termux/files/home/.config/dashboard/static/antra.{extension}",
+            )
+
     def test_generate_candidate_manifest_deterministic(self):
         """Candidate manifest generation must be deterministic and sorted by local path."""
         entries1 = generate_manifest(REPO_ROOT)

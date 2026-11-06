@@ -586,6 +586,36 @@ function createInitialState() {
     const pollsAfter = state.pollCounts.jobs;
     assert.strictEqual(pollsAfter <= pollsBefore + 1, true, 'Polling ceased after pagehide');
 
+    console.log('[Test 13] Verifying restored page resumes reads...');
+    const restoredRead = page.waitForResponse(response => new URL(response.url()).pathname === '/api/antra/jobs');
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+    await restoredRead;
+    assert.strictEqual(state.pollCounts.jobs > pollsAfter, true, 'Restored page resumes polling');
+
+    console.log('[Test 14] Verifying close aborts detail fetch started by polling...');
+    await page.locator('.job-card[data-job-id="job-uuid-250"] button:has-text("View Tracks")').click();
+    await page.waitForSelector('#tracks-section:not(.hidden)');
+    await page.evaluate(() => {
+      const originalFetch = window.fetch;
+      window.__detailAborted = false;
+      window.fetch = function(input, options) {
+        if (String(input) === '/api/antra/jobs/job-uuid-250' && options && options.signal) {
+          options.signal.addEventListener('abort', () => { window.__detailAborted = true; }, { once: true });
+        }
+        return originalFetch.apply(this, arguments);
+      };
+    });
+    state.delayTrackJobId = 'job-uuid-250';
+    state.delayMs = 1000;
+    const detailRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/api/antra/jobs/job-uuid-250');
+    await page.click('#btn-refresh');
+    await detailRequest;
+    await page.click('#btn-close-tracks');
+    await page.waitForFunction(() => window.__detailAborted === true, null, { timeout: 2000 });
+    assert.strictEqual(await page.locator('#tracks-section').evaluate(el => el.classList.contains('hidden')), true);
+    state.delayTrackJobId = null;
+    state.delayMs = 0;
+
     await page.close();
     await context.close();
     console.log('ALL ANTRA BROWSER ACCEPTANCE TESTS PASSED');
