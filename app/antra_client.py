@@ -1,15 +1,16 @@
 """Antra upstream HTTP and WebSocket client.
 
 Handles authenticated API communication with Antra server,
-session cookies, track downloads, acknowledgements, and WebSocket event streams.
+MozillaCookieJar cookies.txt persistence, expired-session recovery,
+track downloads, acknowledgements, and WebSocket event streams.
 Never logs credentials, session cookies, ws_tokens, or raw bodies.
 Nothing starts on import.
 """
 import http.cookiejar
 import json
+import logging
 import os
 from pathlib import Path
-import re
 import socket
 import ssl
 import time
@@ -17,10 +18,13 @@ from typing import Any, Dict, Generator, List, Optional, Tuple
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
+
+logger = logging.getLogger("antra_client")
 
 DEFAULT_CONFIG_DIR = Path(os.path.expanduser("~/.config/antra"))
 DEFAULT_CREDENTIALS_FILE = DEFAULT_CONFIG_DIR / "credentials.json"
-DEFAULT_COOKIES_FILE = DEFAULT_CONFIG_DIR / "cookies.json"
+DEFAULT_COOKIES_FILE = DEFAULT_CONFIG_DIR / "cookies.txt"
 DEFAULT_BASE_URL = "https://antra.hoshi.cfd"
 
 SUPPORTED_MUSIC_HOSTS = (
@@ -54,7 +58,6 @@ def is_supported_music_url(url: str) -> bool:
     if not host:
         return False
 
-    # Guard against IP addresses and localhost
     if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1") or host.endswith(".local") or host.endswith(".internal"):
         return False
 
@@ -103,9 +106,9 @@ class AntraClient:
         self.base_url = base_url.rstrip("/")
         self.config_dir = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
         self.credentials_file = self.config_dir / "credentials.json"
-        self.cookies_file = self.config_dir / "cookies.json"
+        self.cookies_file = self.config_dir / "cookies.txt"
         self.timeout = timeout
-        self.cookie_jar = http.cookiejar.CookieJar()
+        self.cookie_jar = http.cookiejar.MozillaCookieJar(filename=str(self.cookies_file))
         self._load_cookies()
 
     def _ensure_config_dir(self) -> None:
@@ -116,7 +119,7 @@ class AntraClient:
             pass
 
     def has_credentials(self) -> bool:
-        if not self.credentials_file.is_file():
+        if not self.credentials_file.is_file() or self.credentials_file.is_symlink():
             return False
         try:
             with open(self.credentials_file, "r", encoding="utf-8") as f:
@@ -136,50 +139,25 @@ class AntraClient:
             return None, None
 
     def _load_cookies(self) -> None:
-        if not self.cookies_file.is_file():
-            return
-        try:
-            with open(self.cookies_file, "r", encoding="utf-8") as f:
-                cookie_dict = json.load(f)
-            parsed_base = urllib.parse.urlparse(self.base_url)
-            domain = parsed_base.hostname or ""
-            for name, val in cookie_dict.items():
-                ck = http.cookiejar.Cookie(
-                    version=0,
-                    name=name,
-                    value=val,
-                    port=None,
-                    port_specified=False,
-                    domain=domain,
-                    domain_specified=bool(domain),
-                    domain_initial_dot=False,
-                    path="/",
-                    path_specified=True,
-                    secure=parsed_base.scheme == "https",
-                    expires=None,
-                    discard=True,
-                    comment=None,
-                    comment_url=None,
-                    rest={},
-                )
-                self.cookie_jar.set_cookie(ck)
-        except Exception:
-            pass
+        if self.cookies_file.is_file() and not self.cookies_file.is_symlink():
+            try:
+                self.cookie_jar.load(ignore_discard=True, ignore_expires=True)
+            except Exception:
+                pass
 
     def _save_cookies(self) -> None:
         self._ensure_config_dir()
-        parsed_base = urllib.parse.urlparse(self.base_url)
-        domain = parsed_base.hostname or ""
-        out = {}
-        for ck in self.cookie_jar:
-            if not domain or ck.domain == domain or domain.endswith(ck.domain.lstrip(".")):
-                out[ck.name] = ck.value
+        if self.cookies_file.is_symlink():
+            return
+        tmp_file = self.cookies_file.parent / f".tmp_{uuid.uuid4().hex}"
         try:
-            with open(self.cookies_file, "w", encoding="utf-8") as f:
-                json.dump(out, f)
+            self.cookie_jar.save(filename=str(tmp_file), ignore_discard=True, ignore_expires=True)
+            os.chmod(tmp_file, 0o600)
+            os.replace(tmp_file, self.cookies_file)
             os.chmod(self.cookies_file, 0o600)
         except OSError:
-            pass
+            if tmp_file.exists():
+                tmp_file.unlink(missing_ok=True)
 
     def _build_opener(self) -> urllib.request.OpenerDirector:
         handlers: List[Any] = [urllib.request.HTTPCookieProcessor(self.cookie_jar)]
@@ -195,6 +173,8 @@ class AntraClient:
         data: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         stream: bool = False,
+        is_submission: bool = False,
+        _reauth_attempt: bool = False,
     ) -> Any:
         url = f"{self.base_url}{path}"
         req_headers = {"User-Agent": "Antra-Runtime/1.0"}
@@ -214,18 +194,39 @@ class AntraClient:
             self._save_cookies()
             if stream:
                 return resp
-            resp_body = resp.read()
-            return resp.status, resp.headers, resp_body
+            with resp:
+                resp_body = resp.read(2 * 1024 * 1024)
+                return resp.status, resp.headers, resp_body
         except urllib.error.HTTPError as e:
             self._save_cookies()
-            err_body = e.read()
-            error_code = e.headers.get("X-Antra-Error-Code", "")
+            with e:
+                err_body = e.read(64 * 1024)
+                error_code = e.headers.get("X-Antra-Error-Code", "")
+
+            # Expired session recovery: 401 on authenticated endpoint -> try login once
+            if e.code == 401 and not _reauth_attempt and path != "/api/auth/login":
+                if self.has_credentials():
+                    try:
+                        if self.login():
+                            return self._request(
+                                method, path, data=data, headers=headers,
+                                stream=stream, is_submission=is_submission,
+                                _reauth_attempt=True
+                            )
+                    except Exception:
+                        pass
+
             if e.code == 429:
                 if error_code == "DAILY_LIMIT" or b"DAILY_LIMIT" in err_body or b"daily" in err_body.lower():
                     raise DailyLimitError("Daily track limit reached on Antra upstream")
                 raise ConcurrencyLimitError("Concurrency limit reached on Antra upstream; backing off")
+
             raise AntraClientError(f"HTTP {e.code}: upstream request failed")
         except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as e:
+            if is_submission:
+                raise UncertainSubmissionError(
+                    f"Job submission timed out without confirmed job_id: {e}"
+                )
             raise AntraClientError(f"Network error communicating with Antra: {e}")
 
     def login(self) -> bool:
@@ -234,7 +235,7 @@ class AntraClient:
         if not user or not pwd:
             raise MissingCredentialsError("No Antra credentials found in credentials.json")
 
-        status, _, body = self._request("POST", "/api/auth/login", data={"username": user, "password": pwd})
+        status, _, _ = self._request("POST", "/api/auth/login", data={"username": user, "password": pwd})
         if status == 200:
             self._save_cookies()
             return True
@@ -287,7 +288,16 @@ class AntraClient:
         end_index: int,
         format_pref: str = "flac24",
     ) -> Tuple[str, str]:
-        """Submit a download batch. Raises UncertainSubmissionError on ambiguous timeout."""
+        """Submit a download batch.
+
+        Indices are zero-based integer start and exclusive integer end per app.js1276 / queue.js300.
+        Raises UncertainSubmissionError on timeout or response without job_id.
+        """
+        if type(start_index) is not int or type(end_index) is not int or isinstance(start_index, bool) or isinstance(end_index, bool):
+            raise ValueError("Indices must be integers, not bool")
+        if start_index < 0 or end_index <= start_index:
+            raise ValueError("Invalid index range")
+
         payload = {
             "url": music_url,
             "format": format_pref,
@@ -295,24 +305,41 @@ class AntraClient:
             "end_index": end_index,
             "client_packaging": True,
         }
-        try:
-            status, _, body = self._request("POST", "/api/jobs", data=payload)
-        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as e:
-            # Ambiguous timeout with no confirmed upstream job ID
-            raise UncertainSubmissionError(
-                f"Job submission timed out without confirmed job_id: {e}"
-            )
+
+        status, _, body = self._request("POST", "/api/jobs", data=payload, is_submission=True)
 
         if status not in (200, 201, 202):
             raise AntraClientError(f"Job submission failed: HTTP {status}")
 
-        resp_data = json.loads(body.decode("utf-8"))
+        try:
+            resp_data = json.loads(body.decode("utf-8"))
+        except Exception:
+            raise UncertainSubmissionError("Submission response was malformed JSON")
+
         job_id = resp_data.get("job_id")
         ws_token = resp_data.get("ws_token") or ""
         if not job_id:
             raise UncertainSubmissionError("Submission response missing job_id")
 
         return str(job_id), str(ws_token)
+
+    def get_job_status(self, upstream_job_id: str) -> Dict[str, Any]:
+        """Check status of known upstream job."""
+        status, _, body = self._request("GET", f"/api/jobs/{upstream_job_id}/status")
+        if status != 200:
+            raise AntraClientError(f"Status check failed: HTTP {status}")
+        return json.loads(body.decode("utf-8"))
+
+    def fresh_ws_token(self, upstream_job_id: str) -> Optional[str]:
+        """Request a fresh WebSocket token for an existing job (queue.js254)."""
+        try:
+            status, _, body = self._request("POST", f"/api/jobs/{upstream_job_id}/ws-token")
+            if status == 200:
+                data = json.loads(body.decode("utf-8"))
+                return data.get("ws_token")
+        except Exception:
+            pass
+        return None
 
     def download_track_stream(self, upstream_job_id: str, track_index: int) -> Any:
         """Stream audio data for a single track."""
@@ -333,10 +360,7 @@ class AntraClient:
         upstream_job_id: str,
         ws_token: str,
     ) -> Generator[Dict[str, Any], None, None]:
-        """Connect to WebSocket event stream for job and yield events.
-
-        Requires 'websockets' pure-Python / standard package.
-        """
+        """Connect to WebSocket event stream for job and yield events with bounded timeouts."""
         try:
             import websockets.sync.client
         except ImportError:
@@ -348,14 +372,26 @@ class AntraClient:
         host = urllib.parse.urlparse(self.base_url).netloc
         ws_url = f"{ws_proto}://{host}/api/jobs/{upstream_job_id}/ws?ws_token={urllib.parse.quote(ws_token)}"
 
-        # Forward session cookies if available
         headers = {}
         cookie_header = "; ".join(f"{c.name}={c.value}" for c in self.cookie_jar)
         if cookie_header:
             headers["Cookie"] = cookie_header
 
-        with websockets.sync.client.connect(ws_url, additional_headers=headers) as ws:
-            for message in ws:
+        with websockets.sync.client.connect(
+            ws_url,
+            additional_headers=headers,
+            open_timeout=15,
+            close_timeout=10,
+        ) as ws:
+            while True:
+                try:
+                    message = ws.recv(timeout=30)
+                except TimeoutError:
+                    # Inactivity timeout without completion
+                    break
+                except Exception:
+                    break
+
                 if isinstance(message, bytes):
                     message = message.decode("utf-8")
                 try:

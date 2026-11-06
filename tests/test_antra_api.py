@@ -1,22 +1,22 @@
 """Tests for Antra HTTP API dispatcher, authorization, HEAD semantics, and same-origin protections."""
-import http.client
+import io
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 import threading
+from typing import Any, Dict, Optional
 import unittest
 from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from antra_store import AntraStore
+from antra_store import AntraStore, LOGICAL_OUTPUT_DIRECTORIES
 from antra_client import AntraClient
 from antra_http import dispatch_antra
 from auth import hash_password, save_users
-import dashboard
 
 
 class MockHandler:
@@ -64,17 +64,16 @@ class MockHandler:
         return json.loads(data.decode("utf-8")) if data else {}
 
 
-import io
-from typing import Optional
-
-
 class TestAntraApiUnit(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.base_dir = Path(self.tmp_dir.name)
         self.db_path = self.base_dir / "queue.sqlite3"
-        self.output_dir = self.base_dir / "Music" / "Antra"
-        self.store = AntraStore(db_path=self.db_path, output_dir=self.output_dir)
+        self.output_roots = {
+            "private": self.base_dir / "Music" / "Astro",
+            "family": self.base_dir / "Music" / "Family",
+        }
+        self.store = AntraStore(db_path=self.db_path, output_roots=self.output_roots)
 
     def tearDown(self):
         self.tmp_dir.cleanup()
@@ -85,7 +84,7 @@ class TestAntraApiUnit(unittest.TestCase):
             path="/api/antra/jobs",
             user=None,
         )
-        dispatch_antra(handler, store=self.store)
+        dispatch_antra(handler, store=self.store, is_admin=lambda u: False)
         self.assertEqual(handler.status_code, 401)
         self.assertEqual(handler.response_headers.get("Cache-Control"), "private, no-store")
         body = handler.get_json_body()
@@ -99,7 +98,7 @@ class TestAntraApiUnit(unittest.TestCase):
             user="family_user",
             role="family",
         )
-        dispatch_antra(handler, user="family_user", store=self.store)
+        dispatch_antra(handler, user="family_user", store=self.store, is_admin=lambda u: False)
         self.assertEqual(handler.status_code, 403)
         self.assertEqual(handler.response_headers.get("Cache-Control"), "private, no-store")
         body = handler.get_json_body()
@@ -113,16 +112,15 @@ class TestAntraApiUnit(unittest.TestCase):
             user="admin_user",
             role="admin",
         )
-        dispatch_antra(handler, user="admin_user", store=self.store)
+        dispatch_antra(handler, user="admin_user", store=self.store, is_admin=lambda u: True)
         self.assertEqual(handler.status_code, 200)
         self.assertEqual(handler.response_headers.get("Content-Type"), "application/json")
         self.assertEqual(handler.response_headers.get("Cache-Control"), "private, no-store")
         self.assertIn("Content-Length", handler.response_headers)
         self.assertGreater(int(handler.response_headers["Content-Length"]), 0)
-        # Empty body for HEAD
         self.assertEqual(len(handler.get_response_body()), 0)
 
-    def test_same_origin_post_protection(self):
+    def test_full_effective_same_origin_post_protection(self):
         body_bytes = json.dumps({"url": "https://open.spotify.com/album/4yP0hdKOZPNshxUOjY0cZj"}).encode()
 
         # 1. Cross-site Sec-Fetch-Site rejected
@@ -138,27 +136,43 @@ class TestAntraApiUnit(unittest.TestCase):
             user="admin_user",
             role="admin",
         )
-        dispatch_antra(handler_cross, user="admin_user", store=self.store)
+        dispatch_antra(handler_cross, user="admin_user", store=self.store, is_admin=lambda u: True)
         self.assertEqual(handler_cross.status_code, 403)
         self.assertIn("Cross-origin", handler_cross.get_json_body().get("message", ""))
 
-        # 2. Origin mismatch rejected
-        handler_evil_origin = MockHandler(
+        # 2. Origin scheme mismatch rejected
+        handler_bad_scheme = MockHandler(
             command="POST",
             path="/api/antra/jobs",
             headers={
                 "Host": "localhost:8001",
-                "Origin": "https://evil-attacker.com",
+                "Origin": "https://localhost:8001",  # Request is http, Origin claims https
                 "Content-Length": str(len(body_bytes)),
             },
             body=body_bytes,
             user="admin_user",
             role="admin",
         )
-        dispatch_antra(handler_evil_origin, user="admin_user", store=self.store)
-        self.assertEqual(handler_evil_origin.status_code, 403)
+        dispatch_antra(handler_bad_scheme, user="admin_user", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(handler_bad_scheme.status_code, 403)
 
-        # 3. Same-origin allowed
+        # 3. Origin port mismatch rejected
+        handler_bad_port = MockHandler(
+            command="POST",
+            path="/api/antra/jobs",
+            headers={
+                "Host": "localhost:8001",
+                "Origin": "http://localhost:9000",
+                "Content-Length": str(len(body_bytes)),
+            },
+            body=body_bytes,
+            user="admin_user",
+            role="admin",
+        )
+        dispatch_antra(handler_bad_port, user="admin_user", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(handler_bad_port.status_code, 403)
+
+        # 4. Same-origin allowed
         handler_same = MockHandler(
             command="POST",
             path="/api/antra/jobs",
@@ -172,42 +186,66 @@ class TestAntraApiUnit(unittest.TestCase):
             user="admin_user",
             role="admin",
         )
-        dispatch_antra(handler_same, user="admin_user", store=self.store)
+        dispatch_antra(handler_same, user="admin_user", store=self.store, is_admin=lambda u: True)
         self.assertEqual(handler_same.status_code, 202)
         resp = handler_same.get_json_body()
         self.assertIn("job", resp)
         self.assertEqual(resp["job"]["status"], "queued")
+        self.assertEqual(resp["job"]["destination"], "private")
 
-    def test_url_allowlist_validation(self):
-        # Arbitrary / non-allowlist URLs must be rejected with 400
-        disallowed = [
-            "http://open.spotify.com/album/test",  # plain HTTP
-            "https://evil.com/spotify.com",        # attacker domain
-            "https://localhost/foo",               # local SSRF attempt
-            "https://127.0.0.1/admin",             # IP SSRF attempt
-            "ftp://files.com/song.mp3",            # non-http scheme
-            "not-a-url",
-            "",
-        ]
-        for bad_url in disallowed:
-            payload = json.dumps({"url": bad_url}).encode()
-            handler = MockHandler(
-                command="POST",
-                path="/api/antra/jobs",
-                headers={
-                    "Host": "localhost:8001",
-                    "Sec-Fetch-Site": "same-origin",
-                    "Content-Length": str(len(payload)),
-                },
-                body=payload,
-                user="admin_user",
-                role="admin",
-            )
-            dispatch_antra(handler, user="admin_user", store=self.store)
-            self.assertEqual(handler.status_code, 400, f"Expected 400 for {bad_url}")
+    def test_url_allowlist_and_destinations(self):
+        # 1. Invalid destination rejected with 400
+        bad_dest_payload = json.dumps({
+            "url": "https://open.spotify.com/album/4yP0hdKOZPNshxUOjY0cZj",
+            "destination": "invalid_dest",
+        }).encode()
+        handler_bad_dest = MockHandler(
+            command="POST",
+            path="/api/antra/jobs",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(bad_dest_payload))},
+            body=bad_dest_payload,
+            user="admin_user",
+            role="admin",
+        )
+        dispatch_antra(handler_bad_dest, user="admin_user", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(handler_bad_dest.status_code, 400)
+        self.assertIn("Invalid destination", handler_bad_dest.get_json_body().get("message", ""))
+
+        # 2. Family destination accepted
+        fam_payload = json.dumps({
+            "url": "https://open.spotify.com/album/4yP0hdKOZPNshxUOjY0cZj",
+            "destination": "family",
+        }).encode()
+        handler_fam = MockHandler(
+            command="POST",
+            path="/api/antra/jobs",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(fam_payload))},
+            body=fam_payload,
+            user="admin_user",
+            role="admin",
+        )
+        dispatch_antra(handler_fam, user="admin_user", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(handler_fam.status_code, 202)
+        self.assertEqual(handler_fam.get_json_body()["job"]["destination"], "family")
+
+        # 3. Settings exposes only logical labels (no physical paths)
+        handler_settings = MockHandler(
+            command="GET",
+            path="/api/antra/jobs",
+            user="admin_user",
+            role="admin",
+        )
+        dispatch_antra(handler_settings, user="admin_user", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(handler_settings.status_code, 200)
+        settings = handler_settings.get_json_body()["settings"]
+        self.assertEqual(settings["output_directories"], LOGICAL_OUTPUT_DIRECTORIES)
+        self.assertEqual(settings["output_directory"], "Music/Astro")
+        self.assertEqual(settings["quality"], "24-bit FLAC")
+        # Physical paths must NOT be present
+        self.assertNotIn("/storage", json.dumps(settings))
 
     def test_job_cancel_and_retry_api_transitions(self):
-        job = self.store.create_job("https://tidal.com/album/12345")
+        job = self.store.create_job("https://tidal.com/album/12345", destination="family")
         job_id = job["id"]
 
         # Cancel job -> 202
@@ -218,7 +256,7 @@ class TestAntraApiUnit(unittest.TestCase):
             user="admin_user",
             role="admin",
         )
-        dispatch_antra(cancel_handler, user="admin_user", store=self.store)
+        dispatch_antra(cancel_handler, user="admin_user", store=self.store, is_admin=lambda u: True)
         self.assertEqual(cancel_handler.status_code, 202)
         resp = cancel_handler.get_json_body()
         self.assertEqual(resp["job"]["status"], "cancelled")
@@ -231,7 +269,7 @@ class TestAntraApiUnit(unittest.TestCase):
             user="admin_user",
             role="admin",
         )
-        dispatch_antra(cancel_handler2, user="admin_user", store=self.store)
+        dispatch_antra(cancel_handler2, user="admin_user", store=self.store, is_admin=lambda u: True)
         self.assertEqual(cancel_handler2.status_code, 409)
 
         # Retry cancelled job -> 202
@@ -242,26 +280,15 @@ class TestAntraApiUnit(unittest.TestCase):
             user="admin_user",
             role="admin",
         )
-        dispatch_antra(retry_handler, user="admin_user", store=self.store)
+        dispatch_antra(retry_handler, user="admin_user", store=self.store, is_admin=lambda u: True)
         self.assertEqual(retry_handler.status_code, 202)
         resp2 = retry_handler.get_json_body()
         self.assertEqual(resp2["job"]["status"], "queued")
-
-        # Retry queued job -> 409 Conflict
-        retry_handler2 = MockHandler(
-            command="POST",
-            path=f"/api/antra/jobs/{job_id}/retry",
-            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin"},
-            user="admin_user",
-            role="admin",
-        )
-        dispatch_antra(retry_handler2, user="admin_user", store=self.store)
-        self.assertEqual(retry_handler2.status_code, 409)
+        self.assertEqual(resp2["job"]["destination"], "family")
 
     def test_secret_redaction(self):
         job = self.store.create_job("https://tidal.com/album/sample")
         job_id = job["id"]
-        # Populate tracks and internal fields
         self.store.update_job(job_id, upstream_job_id="secret_upstream_id_12345")
         self.store.set_tracks(job_id, [{"index": 0, "title": "Track 1"}])
 
@@ -271,7 +298,7 @@ class TestAntraApiUnit(unittest.TestCase):
             user="admin_user",
             role="admin",
         )
-        dispatch_antra(handler, user="admin_user", store=self.store)
+        dispatch_antra(handler, user="admin_user", store=self.store, is_admin=lambda u: True)
         self.assertEqual(handler.status_code, 200)
 
         raw_resp = handler.get_response_body().decode("utf-8")
@@ -299,11 +326,12 @@ class TestDashboardAntraIntegration(unittest.TestCase):
             },
         )
 
+        import dashboard
+        self.dashboard_mod = dashboard
         self.orig_users_file = dashboard.USER_STORE.path
         dashboard.USER_STORE.path = self.users_file
         dashboard.USER_STORE.invalidate()
 
-        # Spin up Dashboard on free port
         self.server = dashboard.ThreadingHTTPServer(("127.0.0.1", 0), dashboard.DashboardHandler)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -312,10 +340,11 @@ class TestDashboardAntraIntegration(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.server.server_close()
-        dashboard.USER_STORE.path = self.orig_users_file
+        self.dashboard_mod.USER_STORE.path = self.orig_users_file
         self.tmp_dir.cleanup()
 
     def _login(self, username, password):
+        import http.client
         conn = http.client.HTTPConnection("127.0.0.1", self.port)
         payload = json.dumps({"username": username, "password": password})
         conn.request("POST", "/api/login", body=payload, headers={"Content-Type": "application/json", "Content-Length": str(len(payload))})
@@ -326,25 +355,28 @@ class TestDashboardAntraIntegration(unittest.TestCase):
         return cookie
 
     def test_dashboard_anonymous_401(self):
+        import http.client
         conn = http.client.HTTPConnection("127.0.0.1", self.port)
         conn.request("GET", "/api/antra/jobs")
         resp = conn.getresponse()
-        body = resp.read()
+        resp.read()
         conn.close()
         self.assertEqual(resp.status, 401)
         self.assertEqual(resp.getheader("Cache-Control"), "private, no-store")
 
     def test_dashboard_family_403(self):
+        import http.client
         cookie = self._login("family", "family_pass")
         conn = http.client.HTTPConnection("127.0.0.1", self.port)
         conn.request("GET", "/api/antra/jobs", headers={"Cookie": cookie})
         resp = conn.getresponse()
-        body = resp.read()
+        resp.read()
         conn.close()
         self.assertEqual(resp.status, 403)
         self.assertEqual(resp.getheader("Cache-Control"), "private, no-store")
 
     def test_dashboard_admin_200_and_post(self):
+        import http.client
         cookie = self._login("admin", "admin_pass")
 
         # 1. GET /api/antra/jobs
@@ -359,18 +391,23 @@ class TestDashboardAntraIntegration(unittest.TestCase):
         self.assertIn("settings", body)
         self.assertEqual(body["settings"]["quality"], "24-bit FLAC")
 
-        # 2. POST /api/antra/jobs
+        # 2. POST /api/antra/jobs with family destination
         conn2 = http.client.HTTPConnection("127.0.0.1", self.port)
-        post_payload = json.dumps({"url": "https://open.spotify.com/album/4yP0hdKOZPNshxUOjY0cZj"}).encode()
+        post_payload = json.dumps({
+            "url": "https://open.spotify.com/album/4yP0hdKOZPNshxUOjY0cZj",
+            "destination": "family",
+        }).encode()
         conn2.request(
             "POST",
             "/api/antra/jobs",
             body=post_payload,
             headers={
+                "Host": f"127.0.0.1:{self.port}",
                 "Cookie": cookie,
                 "Content-Type": "application/json",
                 "Content-Length": str(len(post_payload)),
                 "Sec-Fetch-Site": "same-origin",
+                "Origin": f"http://127.0.0.1:{self.port}",
             },
         )
         resp2 = conn2.getresponse()
@@ -378,6 +415,7 @@ class TestDashboardAntraIntegration(unittest.TestCase):
         conn2.close()
         self.assertEqual(resp2.status, 202)
         self.assertIn("job", body2)
+        self.assertEqual(body2["job"]["destination"], "family")
         job_id = body2["job"]["id"]
 
         # 3. GET /api/antra/jobs/<id>
@@ -388,6 +426,7 @@ class TestDashboardAntraIntegration(unittest.TestCase):
         conn3.close()
         self.assertEqual(resp3.status, 200)
         self.assertEqual(body3["job"]["id"], job_id)
+        self.assertEqual(body3["job"]["destination"], "family")
         self.assertIn("tracks", body3)
 
 

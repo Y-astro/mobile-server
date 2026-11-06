@@ -1,9 +1,10 @@
 """HTTP request dispatcher for Antra administration endpoints.
 
-Enforces administrator-only authentication, same-origin POST validation,
+Enforces administrator-only authentication, full effective same-origin POST validation,
 bounded body inputs, HEAD semantics, and strict Cache-Control: private, no-store.
 Nothing starts on import.
 """
+import io
 import json
 import os
 from pathlib import Path
@@ -11,10 +12,15 @@ import re
 from typing import Any, Dict, Optional
 import urllib.parse
 
-from antra_store import AntraStore, InvalidTransitionError, JobNotFoundError
+from antra_store import (
+    AntraStore,
+    InvalidTransitionError,
+    JobNotFoundError,
+    LOGICAL_OUTPUT_DIRECTORIES,
+    VALID_DESTINATIONS,
+)
 from antra_client import AntraClient, is_supported_music_url
 
-# Match 32-char hex UUID or 36-char hyphenated UUID
 UUID_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 MAX_REQUEST_BYTES = 64 * 1024  # 64 KiB
 STATIC_DIR = os.path.expanduser("~/.config/dashboard/static")
@@ -50,29 +56,42 @@ def _send_error(handler: Any, status_code: int, message: str) -> None:
     _send_response(handler, status_code, {"status": "error", "message": message})
 
 
-def _is_same_origin(handler: Any) -> bool:
-    """Validate same-origin protection for state-modifying requests."""
-    # Check Sec-Fetch-Site if present
+def _is_full_same_origin(handler: Any) -> bool:
+    """Validate full effective origin (scheme + host + port) for state-modifying requests."""
     fetch_site = handler.headers.get("Sec-Fetch-Site", "").lower()
-    if fetch_site and fetch_site not in ("same-origin", "same-site", "none"):
+    if fetch_site and fetch_site not in ("same-origin", "none"):
         return False
 
-    # Check Origin / Referer if present
-    host = handler.headers.get("Host", "").split(":")[0].lower()
-    origin = handler.headers.get("Origin", "")
+    host_header = handler.headers.get("Host", "").strip().lower()
+    if not host_header:
+        return False
+
+    # Trust X-Forwarded-Proto only if specifically https, else fall back to http
+    fwd_proto = handler.headers.get("X-Forwarded-Proto", "").strip().lower()
+    expected_scheme = "https" if fwd_proto == "https" else "http"
+
+    origin = handler.headers.get("Origin", "").strip()
     if origin:
         try:
-            origin_host = urllib.parse.urlparse(origin).hostname or ""
-            if origin_host.lower() != host:
+            parsed = urllib.parse.urlsplit(origin)
+            origin_scheme = parsed.scheme.lower()
+            origin_netloc = parsed.netloc.lower()
+            if origin_scheme != expected_scheme:
+                return False
+            if origin_netloc != host_header:
                 return False
         except Exception:
             return False
 
-    referer = handler.headers.get("Referer", "")
+    referer = handler.headers.get("Referer", "").strip()
     if referer and not origin:
         try:
-            ref_host = urllib.parse.urlparse(referer).hostname or ""
-            if ref_host.lower() != host:
+            parsed_ref = urllib.parse.urlsplit(referer)
+            ref_scheme = parsed_ref.scheme.lower()
+            ref_netloc = parsed_ref.netloc.lower()
+            if ref_scheme != expected_scheme:
+                return False
+            if ref_netloc != host_header:
                 return False
         except Exception:
             return False
@@ -85,6 +104,7 @@ def dispatch_antra(
     user: Optional[str] = None,
     store: Optional[AntraStore] = None,
     client: Optional[AntraClient] = None,
+    is_admin: Optional[Any] = None,
 ) -> None:
     """Route and dispatch Antra API and page requests."""
     method = getattr(handler, "command", "GET")
@@ -102,19 +122,11 @@ def dispatch_antra(
         return
 
     # 2. Authorization check (admin only)
-    is_admin_fn = getattr(handler, "is_admin", None)
-    if is_admin_fn and callable(is_admin_fn):
-        admin_ok = is_admin_fn(user)
-    else:
-        try:
-            import dashboard
-            admin_ok = dashboard.is_admin(user)
-        except Exception:
-            try:
-                from auth import CredentialStore
-                admin_ok = CredentialStore().is_admin(user)
-            except Exception:
-                admin_ok = False
+    admin_ok = False
+    if callable(is_admin):
+        admin_ok = is_admin(user)
+    elif hasattr(handler, "is_admin") and callable(handler.is_admin):
+        admin_ok = handler.is_admin(user)
 
     if not admin_ok:
         _send_error(handler, 403, "Administrator access required")
@@ -122,7 +134,7 @@ def dispatch_antra(
 
     # 3. Same-origin protection for POST
     if method == "POST":
-        if not _is_same_origin(handler):
+        if not _is_full_same_origin(handler):
             _send_error(handler, 403, "Cross-origin request forbidden")
             return
 
@@ -137,7 +149,7 @@ def dispatch_antra(
         ]
         html_bytes = None
         for cand in template_candidates:
-            if cand.is_file():
+            if cand.is_file() and not cand.is_symlink():
                 try:
                     with open(cand, "rb") as f:
                         html_bytes = f.read()
@@ -161,7 +173,8 @@ def dispatch_antra(
             jobs = ant_store.list_jobs()
             worker_stat = ant_store.get_worker_status()
             settings = {
-                "output_directory": ant_store.output_dir_str,
+                "output_directories": dict(LOGICAL_OUTPUT_DIRECTORIES),
+                "output_directory": LOGICAL_OUTPUT_DIRECTORIES["private"],
                 "quality": "24-bit FLAC",
             }
             _send_response(handler, 200, {
@@ -172,7 +185,6 @@ def dispatch_antra(
             return
 
         if method == "POST":
-            # Create a new job
             content_length_str = handler.headers.get("Content-Length", "")
             if not content_length_str.isdigit():
                 _send_error(handler, 400, "Invalid Content-Length")
@@ -203,11 +215,16 @@ def dispatch_antra(
                 _send_error(handler, 400, "Unsupported or unallowed music URL")
                 return
 
+            destination = payload.get("destination", "private")
+            if destination not in VALID_DESTINATIONS:
+                _send_error(handler, 400, "Invalid destination: must be 'private' or 'family'")
+                return
+
             try:
-                job = ant_store.create_job(url=url.strip())
+                job = ant_store.create_job(url=url.strip(), destination=destination)
                 _send_response(handler, 202, {"job": job})
             except Exception as e:
-                _send_error(handler, 500, f"Failed to enqueue job: {e}")
+                _send_error(handler, 500, "Failed to enqueue job")
             return
 
     # Sub-routes for /api/antra/jobs/<id>[/cancel|/retry]
@@ -246,8 +263,8 @@ def dispatch_antra(
                     _send_error(handler, 404, "Job not found")
                 except InvalidTransitionError as e:
                     _send_error(handler, 409, str(e))
-                except Exception as e:
-                    _send_error(handler, 500, f"Cancel failed: {e}")
+                except Exception:
+                    _send_error(handler, 500, "Cancel operation failed")
                 return
 
             if action == "retry":
@@ -258,8 +275,8 @@ def dispatch_antra(
                     _send_error(handler, 404, "Job not found")
                 except InvalidTransitionError as e:
                     _send_error(handler, 409, str(e))
-                except Exception as e:
-                    _send_error(handler, 500, f"Retry failed: {e}")
+                except Exception:
+                    _send_error(handler, 500, "Retry operation failed")
                 return
 
             _send_error(handler, 404, "Unknown job action")

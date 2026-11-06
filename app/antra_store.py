@@ -14,7 +14,18 @@ import uuid
 
 DEFAULT_DB_DIR = Path(os.path.expanduser("~/.local/share/mobile-server/antra"))
 DEFAULT_DB_PATH = DEFAULT_DB_DIR / "queue.sqlite3"
-DEFAULT_OUTPUT_DIR = Path("/storage/emulated/0/Music/Antra")
+
+# Logical output labels exposed to API (no physical paths)
+LOGICAL_OUTPUT_DIRECTORIES = {
+    "private": "Music/Astro",
+    "family": "Music/Family",
+}
+DEFAULT_OUTPUT_ROOTS = {
+    "private": Path("/storage/emulated/0/Music/Astro"),
+    "family": Path("/storage/emulated/0/Music/Family"),
+}
+
+VALID_DESTINATIONS = frozenset({"private", "family"})
 
 VALID_JOB_STATUSES = frozenset({
     "queued",
@@ -73,6 +84,7 @@ def _row_to_job_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "id": row["id"],
         "url": row["url"],
         "title": row["title"],
+        "destination": row["destination"] if "destination" in row.keys() else "private",
         "status": row["status"],
         "total": row["total"],
         "completed": row["completed"],
@@ -103,15 +115,18 @@ class AntraStore:
     def __init__(
         self,
         db_path: Optional[Path] = None,
-        output_dir: Optional[Path] = None,
+        output_roots: Optional[Dict[str, Path]] = None,
     ):
         self.db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
-        self.output_dir = Path(output_dir) if output_dir is not None else DEFAULT_OUTPUT_DIR
+        self.output_roots = (
+            {k: Path(v) for k, v in output_roots.items()}
+            if output_roots is not None
+            else dict(DEFAULT_OUTPUT_ROOTS)
+        )
         self._init_db()
 
-    @property
-    def output_dir_str(self) -> str:
-        return str(self.output_dir)
+    def get_output_root(self, destination: str = "private") -> Path:
+        return self.output_roots.get(destination, self.output_roots["private"])
 
     def _init_db(self) -> None:
         db_dir = self.db_path.parent
@@ -129,6 +144,7 @@ class AntraStore:
                     id TEXT PRIMARY KEY,
                     url TEXT NOT NULL,
                     title TEXT NOT NULL DEFAULT '',
+                    destination TEXT NOT NULL DEFAULT 'private',
                     status TEXT NOT NULL DEFAULT 'queued',
                     total INTEGER NOT NULL DEFAULT 0,
                     completed INTEGER NOT NULL DEFAULT 0,
@@ -138,7 +154,12 @@ class AntraStore:
                     updated_at REAL NOT NULL,
                     message TEXT NOT NULL DEFAULT '',
                     upstream_job_id TEXT,
-                    format TEXT NOT NULL DEFAULT 'flac24'
+                    format TEXT NOT NULL DEFAULT 'flac24',
+                    chunk_start INTEGER NOT NULL DEFAULT 0,
+                    chunk_end INTEGER NOT NULL DEFAULT 0,
+                    submission_intent INTEGER NOT NULL DEFAULT 0,
+                    concurrency_retry_after REAL NOT NULL DEFAULT 0,
+                    retry_attempts INTEGER NOT NULL DEFAULT 0
                 );
             """)
             conn.execute("""
@@ -152,6 +173,7 @@ class AntraStore:
                     sample_rate INTEGER,
                     filename TEXT,
                     message TEXT NOT NULL DEFAULT '',
+                    ack_pending INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (job_id, track_index),
                     FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
                 );
@@ -164,6 +186,27 @@ class AntraStore:
                     message TEXT NOT NULL DEFAULT ''
                 );
             """)
+
+            # Safe schema upgrades for existing DBs
+            cursor = conn.execute("PRAGMA table_info(jobs);")
+            columns = {row["name"] for row in cursor.fetchall()}
+            if "destination" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN destination TEXT NOT NULL DEFAULT 'private';")
+            if "chunk_start" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN chunk_start INTEGER NOT NULL DEFAULT 0;")
+            if "chunk_end" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN chunk_end INTEGER NOT NULL DEFAULT 0;")
+            if "submission_intent" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN submission_intent INTEGER NOT NULL DEFAULT 0;")
+            if "concurrency_retry_after" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN concurrency_retry_after REAL NOT NULL DEFAULT 0;")
+            if "retry_attempts" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN retry_attempts INTEGER NOT NULL DEFAULT 0;")
+
+            cursor_trk = conn.execute("PRAGMA table_info(tracks);")
+            trk_columns = {row["name"] for row in cursor_trk.fetchall()}
+            if "ack_pending" not in trk_columns:
+                conn.execute("ALTER TABLE tracks ADD COLUMN ack_pending INTEGER NOT NULL DEFAULT 0;")
 
         if self.db_path.exists():
             try:
@@ -237,6 +280,12 @@ class AntraStore:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def is_job_cancelled(self, job_id: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("SELECT status FROM jobs WHERE id = ?;", (job_id,))
+            row = cur.fetchone()
+            return bool(row and row["status"] == "cancelled")
+
     def get_tracks(self, job_id: str) -> List[Dict[str, Any]]:
         with self._connect() as conn:
             cur = conn.execute(
@@ -249,19 +298,23 @@ class AntraStore:
         self,
         url: str,
         title: str = "",
+        destination: str = "private",
         format_pref: str = "flac24",
     ) -> Dict[str, Any]:
+        if destination not in VALID_DESTINATIONS:
+            destination = "private"
         job_id = uuid.uuid4().hex
         now = time.time()
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO jobs (
-                    id, url, title, status, total, completed, skipped, failed,
-                    created_at, updated_at, message, format
-                ) VALUES (?, ?, ?, 'queued', 0, 0, 0, 0, ?, ?, '', ?);
+                    id, url, title, destination, status, total, completed, skipped, failed,
+                    created_at, updated_at, message, format, chunk_start, chunk_end,
+                    submission_intent, concurrency_retry_after, retry_attempts
+                ) VALUES (?, ?, ?, ?, 'queued', 0, 0, 0, 0, ?, ?, '', ?, 0, 0, 0, 0, 0);
                 """,
-                (job_id, url, title, now, now, format_pref),
+                (job_id, url, title, destination, now, now, format_pref),
             )
         job = self.get_job(job_id)
         if job is None:
@@ -275,6 +328,8 @@ class AntraStore:
         allowed_fields = {
             "title", "status", "total", "completed", "skipped", "failed",
             "message", "upstream_job_id", "updated_at", "format",
+            "chunk_start", "chunk_end", "submission_intent",
+            "concurrency_retry_after", "retry_attempts",
         }
         updates = {}
         for k, v in fields.items():
@@ -321,8 +376,8 @@ class AntraStore:
                     """
                     INSERT INTO tracks (
                         job_id, track_index, title, artist, status,
-                        bit_depth, sample_rate, filename, message
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                        bit_depth, sample_rate, filename, message, ack_pending
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0);
                     """,
                     (job_id, idx, title, artist, status, bit_depth, sample_rate, filename, msg),
                 )
@@ -337,7 +392,10 @@ class AntraStore:
         track_index: int,
         **fields: Any,
     ) -> None:
-        allowed = {"title", "artist", "status", "bit_depth", "sample_rate", "filename", "message"}
+        allowed = {
+            "title", "artist", "status", "bit_depth", "sample_rate",
+            "filename", "message", "ack_pending"
+        }
         updates = {}
         for k, v in fields.items():
             if k in allowed:
@@ -357,7 +415,6 @@ class AntraStore:
                 f"UPDATE tracks SET {set_clauses} WHERE job_id = ? AND track_index = ?;",
                 values,
             )
-            # Recompute counts for job
             conn.execute(
                 """
                 UPDATE jobs SET
@@ -388,7 +445,6 @@ class AntraStore:
                 "UPDATE jobs SET status = 'cancelled', updated_at = ? WHERE id = ?;",
                 (now, job_id),
             )
-            # Cancel in-progress and queued tracks, preserve completed
             conn.execute(
                 """
                 UPDATE tracks SET status = 'cancelled', message = 'Job cancelled'
@@ -404,7 +460,7 @@ class AntraStore:
 
     def retry_job(self, job_id: str) -> Dict[str, Any]:
         with self._connect() as conn:
-            cur = conn.execute("SELECT status FROM jobs WHERE id = ?;", (job_id,))
+            cur = conn.execute("SELECT status, destination FROM jobs WHERE id = ?;", (job_id,))
             row = cur.fetchone()
             if not row:
                 raise JobNotFoundError(f"Job not found: {job_id}")
@@ -416,11 +472,22 @@ class AntraStore:
                 )
 
             now = time.time()
+            # Preserves destination, resets chunking and intent
             conn.execute(
-                "UPDATE jobs SET status = 'queued', message = '', updated_at = ? WHERE id = ?;",
+                """
+                UPDATE jobs SET
+                    status = 'queued',
+                    message = '',
+                    updated_at = ?,
+                    chunk_start = 0,
+                    chunk_end = 0,
+                    submission_intent = 0,
+                    concurrency_retry_after = 0,
+                    retry_attempts = 0
+                WHERE id = ?;
+                """,
                 (now, job_id),
             )
-            # Reset non-completed tracks to queued, preserve completed ones
             conn.execute(
                 """
                 UPDATE tracks SET status = 'queued', message = ''
@@ -434,10 +501,19 @@ class AntraStore:
             raise JobNotFoundError(f"Job not found: {job_id}")
         return job
 
-    def get_next_queued_job(self) -> Optional[Dict[str, Any]]:
+    def get_next_runnable_job(self) -> Optional[Dict[str, Any]]:
+        """Find next runnable job (queued, or interrupted resolving/downloading) whose backoff has passed."""
+        now = time.time()
         with self._connect() as conn:
             cur = conn.execute(
-                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1;"
+                """
+                SELECT * FROM jobs
+                WHERE status IN ('queued', 'resolving', 'downloading')
+                  AND concurrency_retry_after <= ?
+                ORDER BY created_at ASC
+                LIMIT 1;
+                """,
+                (now,),
             )
             row = cur.fetchone()
             return dict(row) if row else None

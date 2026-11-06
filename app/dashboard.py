@@ -410,7 +410,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         clean_path = self.path.split("?", 1)[0]
         if clean_path == "/api/antra" or clean_path.startswith("/api/antra/"):
-            dispatch_antra(self)
+            dispatch_antra(self, is_admin=is_admin)
             return
         slot = None
         acquired = False
@@ -922,7 +922,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if clean_path == "/api/antra" or clean_path.startswith("/api/antra/") or clean_path in ("/antra", "/antra/"):
-            dispatch_antra(self, user=user)
+            dispatch_antra(self, user=user, is_admin=is_admin)
             return
 
         # Protected Endpoints

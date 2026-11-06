@@ -18,14 +18,13 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
-# Ensure local lib directory is on path for installed layout
 MOBILE_LIB = os.path.expanduser("~/.local/lib/mobile-server")
 if os.path.isdir(MOBILE_LIB) and MOBILE_LIB not in sys.path:
     sys.path.insert(0, MOBILE_LIB)
 elif str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from antra_store import AntraStore, DEFAULT_OUTPUT_DIR
+from antra_store import AntraStore, DEFAULT_OUTPUT_ROOTS
 from antra_client import (
     AntraClient,
     DailyLimitError,
@@ -49,12 +48,11 @@ def maybe_reexec_dns_fix() -> bool:
     if os.environ.get("ANTRA_DNS_FIXED") == "1":
         return False
 
-    # Check for real Termux filesystem
     if not os.path.isdir("/data/data/com.termux"):
         return False
 
     shim_path = Path(PINNED_LIBDNS_PATH)
-    if not shim_path.is_file():
+    if not shim_path.is_file() or shim_path.is_symlink():
         return False
 
     try:
@@ -75,38 +73,70 @@ def maybe_reexec_dns_fix() -> bool:
     return True
 
 
-def verify_flac_24bit(file_path: Path) -> Tuple[bool, Optional[int], Optional[int], str]:
-    """Inspect FLAC STREAMINFO header to verify exact 24-bit depth and sample rate.
+def verify_flac_24bit(
+    file_path: Path,
+    expected_length: Optional[int] = None,
+) -> Tuple[bool, Optional[int], Optional[int], str]:
+    """Inspect FLAC STREAMINFO header to verify exact 24-bit depth, sensible sample rate,
 
-    Returns:
-        (is_valid_24bit, bits_per_sample, sample_rate, message)
+    and ensure actual audio frames exist past metadata.
     """
     try:
+        file_size = file_path.stat().st_size
+    except OSError as e:
+        return False, None, None, f"Failed to inspect file size: {e}"
+
+    if file_size < 42:
+        return False, None, None, "File too small to be a valid FLAC stream"
+
+    if expected_length is not None and file_size != expected_length:
+        return False, None, None, f"Downloaded size {file_size} does not match Content-Length {expected_length}"
+
+    try:
         with open(file_path, "rb") as f:
-            header = f.read(42)
+            data = f.read(min(file_size, 256 * 1024))
     except OSError as e:
         return False, None, None, f"Failed to read audio file: {e}"
 
-    if len(header) < 42:
-        return False, None, None, "File too small to be a valid FLAC stream"
-
-    if header[:4] != b"fLaC":
+    if len(data) < 42 or data[:4] != b"fLaC":
         return False, None, None, "Invalid audio format: missing FLAC marker"
 
-    # Block header check: block_type must be 0 (STREAMINFO)
-    block_type = header[4] & 0x7F
-    if block_type != 0:
-        return False, None, None, f"Unexpected initial FLAC metadata block type: {block_type}"
+    offset = 4
+    is_last = False
+    streaminfo = None
 
-    length = int.from_bytes(header[5:8], "big")
-    if length < 34:
-        return False, None, None, f"Corrupted FLAC STREAMINFO length: {length}"
+    while offset + 4 <= len(data) and not is_last:
+        header = data[offset:offset + 4]
+        is_last = bool(header[0] & 0x80)
+        block_type = header[0] & 0x7F
+        block_len = int.from_bytes(header[1:4], "big")
+        offset += 4
 
-    # STREAMINFO bytes 10-17 (8 bytes)
-    info_bytes = int.from_bytes(header[18:26], "big")
+        if offset + block_len > len(data):
+            return False, None, None, "Truncated FLAC metadata block"
+
+        block_data = data[offset:offset + block_len]
+        offset += block_len
+
+        if block_type == 0:
+            if block_len != 34:
+                return False, None, None, f"Corrupted FLAC STREAMINFO length: {block_len} != 34"
+            streaminfo = block_data
+
+    if streaminfo is None:
+        return False, None, None, "Missing FLAC STREAMINFO metadata block"
+
+    info_bytes = int.from_bytes(streaminfo[10:18], "big")
     sample_rate = (info_bytes >> 44) & 0xFFFFF
     channels = ((info_bytes >> 41) & 0x7) + 1
     bits_per_sample = ((info_bytes >> 36) & 0x1F) + 1
+
+    if sample_rate == 0 or sample_rate < 8000 or sample_rate > 384000:
+        return False, bits_per_sample, sample_rate, f"Invalid or zero sample rate: {sample_rate} Hz"
+
+    # Audio frames must exist past the last metadata block
+    if file_size <= offset or (file_size - offset) < 16:
+        return False, None, None, "Header-only FLAC stream: missing audio frames"
 
     if bits_per_sample != 24:
         return (
@@ -132,12 +162,9 @@ def sanitize_track_path(raw_rel_path: str, base_dir: Path) -> Path:
 
     safe_segments = []
     for seg in segments:
-        # Strip ASCII control characters
         s = "".join(c for c in seg if 31 < ord(c) < 127 or ord(c) >= 128)
-        # Replace illegal filesystem characters
         for bad in ('<', '>', ':', '"', '|', '?', '*', '\\'):
             s = s.replace(bad, "_")
-        # Strip trailing dots and spaces
         s = s.rstrip(". ")
         if not s or s in (".", ".."):
             s = "_"
@@ -155,7 +182,6 @@ def sanitize_track_path(raw_rel_path: str, base_dir: Path) -> Path:
     except (OSError, RuntimeError) as e:
         raise ValueError(f"Invalid path traversal: {e}")
 
-    # Enforce strict containment
     if not dest_resolved.is_relative_to(base_resolved):
         raise ValueError("Path traversal escape rejected")
 
@@ -169,13 +195,19 @@ class AntraWorker:
         self,
         store: Optional[AntraStore] = None,
         client: Optional[AntraClient] = None,
-        output_dir: Optional[Path] = None,
+        output_roots: Optional[Dict[str, Path]] = None,
         lock_file: Optional[Path] = None,
+        is_test_env: bool = False,
     ):
         self.store = store or AntraStore()
         self.client = client or AntraClient()
-        self.output_dir = Path(output_dir) if output_dir is not None else self.store.output_dir
+        self.output_roots = (
+            {k: Path(v) for k, v in output_roots.items()}
+            if output_roots is not None
+            else dict(DEFAULT_OUTPUT_ROOTS)
+        )
         self.lock_file = Path(lock_file) if lock_file is not None else DEFAULT_LOCK_FILE
+        self.is_test_env = is_test_env
         self._lock_fd: Optional[int] = None
 
     def acquire_lock(self) -> bool:
@@ -198,15 +230,22 @@ class AntraWorker:
                 pass
             self._lock_fd = None
 
-    def check_output_storage(self) -> Tuple[bool, str]:
-        """Check if output directory exists or parent is writable, with sufficient free space."""
-        try:
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            return False, f"Output directory not writable: {e}"
+    def check_output_storage(self, destination: str = "private") -> Tuple[bool, str]:
+        """Verify pre-provisioned root exists (fail closed in live layout) and has free space."""
+        root = self.output_roots.get(destination, self.output_roots["private"])
+
+        if not self.is_test_env:
+            # Live runtime: MUST fail closed if pre-provisioned root is missing
+            if not root.is_dir() or root.is_symlink():
+                return False, f"Pre-provisioned destination directory missing: {destination} ({root})"
+        else:
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                return False, f"Destination directory not writable: {e}"
 
         try:
-            usage = shutil.disk_usage(self.output_dir)
+            usage = shutil.disk_usage(root)
             if usage.free < MIN_FREE_SPACE_BYTES:
                 return False, f"Insufficient disk space: {usage.free // (1024 * 1024)} MiB free"
         except OSError as e:
@@ -218,6 +257,17 @@ class AntraWorker:
         """Execute one job through resolution, chunking, downloading, and verification."""
         job_id = job["id"]
         url = job["url"]
+        destination = job.get("destination", "private")
+
+        # Check for unconfirmed submission intent from interrupted previous run
+        if job.get("submission_intent") and not job.get("upstream_job_id"):
+            self.store.update_job(
+                job_id,
+                status="uncertain",
+                submission_intent=0,
+                message="Submission interrupted without confirmed upstream ID; manual decision required.",
+            )
+            return
 
         # Ensure credentials exist before starting network work
         if not self.client.has_credentials():
@@ -225,18 +275,18 @@ class AntraWorker:
             self.store.update_job(job_id, status="blocked", message="Missing Antra credentials")
             return
 
-        ok_storage, storage_msg = self.check_output_storage()
+        ok_storage, storage_msg = self.check_output_storage(destination)
         if not ok_storage:
             self.store.set_worker_status("blocked", storage_msg)
             self.store.update_job(job_id, status="blocked", message=storage_msg)
             return
 
         self.store.set_worker_status("running", f"Processing job {job_id[:8]}")
-        self.store.update_job(job_id, status="resolving")
 
         # 1. Resolve tracks if not already populated
         tracks = self.store.get_tracks(job_id)
         if not tracks:
+            self.store.update_job(job_id, status="resolving")
             try:
                 resolved = self.client.resolve(url)
                 self.store.set_tracks(job_id, resolved["tracks"])
@@ -251,7 +301,15 @@ class AntraWorker:
                 self.store.update_job(job_id, status="blocked", message=str(e))
                 return
             except ConcurrencyLimitError as e:
-                self.store.update_job(job_id, status="queued", message=str(e))
+                attempts = job.get("retry_attempts", 0) + 1
+                delay = min(60.0, 5.0 * (1.5 ** attempts))
+                self.store.update_job(
+                    job_id,
+                    status="queued",
+                    concurrency_retry_after=time.time() + delay,
+                    retry_attempts=attempts,
+                    message=str(e),
+                )
                 return
             except Exception as e:
                 self.store.update_job(job_id, status="failed", message=f"Resolve failed: {e}")
@@ -264,65 +322,92 @@ class AntraWorker:
 
         self.store.update_job(job_id, status="downloading")
 
-        # 2. Process in chunks of 100 tracks (preserving indexing past 100)
+        # 2. Process in chunks of 100 tracks (0-based start, exclusive end)
         chunk_size = 100
         for chunk_start in range(0, total_tracks, chunk_size):
             chunk_end = min(chunk_start + chunk_size, total_tracks)
-            # Check if all tracks in this chunk are already completed
             chunk_tracks = [t for t in tracks if chunk_start <= t["index"] < chunk_end]
             if all(t["status"] == "completed" for t in chunk_tracks):
                 continue
 
-            # Submit chunk (1-based indices to upstream)
-            start_idx = chunk_start + 1
-            end_idx = chunk_end
-            try:
-                upstream_job_id, ws_token = self.client.submit_job(
-                    music_url=url,
-                    start_index=start_idx,
-                    end_index=end_idx,
-                )
-                self.store.update_job(job_id, upstream_job_id=upstream_job_id)
-            except UncertainSubmissionError as e:
-                # Ambiguous submission with no confirmed job_id: DO NOT duplicate/auto-retry!
+            upstream_job_id = None
+            ws_token = None
+
+            # Check if this job already has a confirmed upstream job ID for this chunk
+            if job.get("upstream_job_id") and job.get("chunk_start") == chunk_start:
+                upstream_job_id = job["upstream_job_id"]
+                ws_token = self.client.fresh_ws_token(upstream_job_id)
+
+            if not upstream_job_id or not ws_token:
+                # Persist submission intent BEFORE POST
                 self.store.update_job(
                     job_id,
-                    status="uncertain",
-                    message="Submission timed out without confirmed upstream ID; manual decision required.",
+                    chunk_start=chunk_start,
+                    chunk_end=chunk_end,
+                    submission_intent=1,
                 )
-                return
-            except DailyLimitError as e:
-                self.store.set_worker_status("blocked", "Daily limit reached")
-                self.store.update_job(job_id, status="blocked", message=str(e))
-                return
-            except ConcurrencyLimitError as e:
-                # Keep queued for next run
-                self.store.update_job(job_id, status="queued", message=str(e))
-                return
-            except Exception as e:
-                self.store.update_job(job_id, status="failed", message=f"Submission failed: {e}")
-                return
+                try:
+                    upstream_job_id, ws_token = self.client.submit_job(
+                        music_url=url,
+                        start_index=chunk_start,
+                        end_index=chunk_end,
+                    )
+                    self.store.update_job(
+                        job_id,
+                        upstream_job_id=upstream_job_id,
+                        submission_intent=0,
+                        retry_attempts=0,
+                        concurrency_retry_after=0,
+                    )
+                except UncertainSubmissionError as e:
+                    self.store.update_job(
+                        job_id,
+                        status="uncertain",
+                        submission_intent=0,
+                        message="Submission timed out without confirmed upstream ID; manual decision required.",
+                    )
+                    return
+                except DailyLimitError as e:
+                    self.store.set_worker_status("blocked", "Daily limit reached")
+                    self.store.update_job(job_id, status="blocked", submission_intent=0, message=str(e))
+                    return
+                except ConcurrencyLimitError as e:
+                    attempts = job.get("retry_attempts", 0) + 1
+                    delay = min(60.0, 5.0 * (1.5 ** attempts))
+                    self.store.update_job(
+                        job_id,
+                        status="queued",
+                        submission_intent=0,
+                        concurrency_retry_after=time.time() + delay,
+                        retry_attempts=attempts,
+                        message=str(e),
+                    )
+                    return
+                except Exception as e:
+                    self.store.update_job(job_id, status="failed", submission_intent=0, message=f"Submission failed: {e}")
+                    return
+
+            dest_root = self.output_roots.get(destination, self.output_roots["private"])
 
             # Listen to events and process tracks
             try:
                 for evt in self.client.connect_job_ws(upstream_job_id, ws_token):
-                    # Check for cancellation
-                    curr = self.store.get_job(job_id)
-                    if curr and curr["status"] == "cancelled":
+                    if self.store.is_job_cancelled(job_id):
                         return
 
                     evt_type = evt.get("type")
                     if evt_type == "track_done":
                         raw_idx = evt.get("index", 0)
-                        # Normalize global track index
-                        if raw_idx >= chunk_start:
-                            global_idx = raw_idx
-                        else:
-                            global_idx = chunk_start + raw_idx
+                        if type(raw_idx) is not int or isinstance(raw_idx, bool):
+                            continue
+                        global_idx = raw_idx if raw_idx >= chunk_start else chunk_start + raw_idx
+                        if global_idx >= total_tracks:
+                            continue
 
                         rel_path = evt.get("path") or f"track_{global_idx + 1:02d}.flac"
                         self._download_and_publish_track(
                             job_id=job_id,
+                            destination_root=dest_root,
                             upstream_job_id=upstream_job_id,
                             upstream_index=raw_idx,
                             global_index=global_idx,
@@ -330,9 +415,10 @@ class AntraWorker:
                         )
                     elif evt_type == "track_failed":
                         raw_idx = evt.get("index", 0)
-                        global_idx = raw_idx if raw_idx >= chunk_start else chunk_start + raw_idx
-                        err_msg = str(evt.get("error", "Track download failed"))
-                        self.store.update_track(job_id, global_idx, status="failed", message=err_msg)
+                        if type(raw_idx) is int and not isinstance(raw_idx, bool):
+                            global_idx = raw_idx if raw_idx >= chunk_start else chunk_start + raw_idx
+                            err_msg = str(evt.get("error", "Track download failed"))
+                            self.store.update_track(job_id, global_idx, status="failed", message=err_msg)
             except MissingDependencyError as e:
                 self.store.set_worker_status("needs_setup", str(e))
                 self.store.update_job(job_id, status="blocked", message=str(e))
@@ -341,7 +427,6 @@ class AntraWorker:
                 self.store.update_job(job_id, message=f"Event stream interrupted: {e}")
                 return
 
-            # Re-read tracks for progress check
             tracks = self.store.get_tracks(job_id)
 
         # 3. Finalize job status
@@ -369,16 +454,17 @@ class AntraWorker:
     def _download_and_publish_track(
         self,
         job_id: str,
+        destination_root: Path,
         upstream_job_id: str,
         upstream_index: int,
         global_index: int,
         rel_path: str,
     ) -> None:
-        """Download track, verify 24-bit FLAC, atomically publish, and acknowledge."""
+        """Download track, verify 24-bit FLAC, atomically publish with no-clobber, and acknowledge."""
         self.store.update_track(job_id, global_index, status="downloading")
 
         try:
-            dest_file = sanitize_track_path(rel_path, self.output_dir)
+            dest_file = sanitize_track_path(rel_path, destination_root)
             dest_file.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
         except ValueError as e:
             self.store.update_track(
@@ -389,16 +475,48 @@ class AntraWorker:
             )
             return
 
+        # Collision-safe no-clobber: if dest_file already exists on disk
+        if dest_file.exists():
+            existing_tracks = self.store.get_tracks(job_id)
+            match_trk = next((t for t in existing_tracks if t["index"] == global_index), None)
+            if match_trk and match_trk["status"] == "completed" and match_trk.get("filename") == str(dest_file.relative_to(destination_root.resolve())):
+                # Already verified completed track for this job
+                self.client.ack_track(upstream_job_id, upstream_index)
+                return
+            # Collision with unowned file: do NOT overwrite! Use collision-safe name
+            stem = dest_file.stem
+            suffix = dest_file.suffix
+            dest_file = dest_file.parent / f"{stem}_c{uuid.uuid4().hex[:6]}{suffix}"
+
         tmp_file = dest_file.parent / f".tmp_{uuid.uuid4().hex}.flac"
 
         try:
             stream_resp = self.client.download_track_stream(upstream_job_id, upstream_index)
+            content_length = None
+            if hasattr(stream_resp, "headers") and stream_resp.headers:
+                cl_header = stream_resp.headers.get("Content-Length")
+                if cl_header and cl_header.isdigit():
+                    content_length = int(cl_header)
+
+            bytes_written = 0
             with open(tmp_file, "wb") as out_f:
                 while True:
+                    if self.store.is_job_cancelled(job_id):
+                        out_f.close()
+                        tmp_file.unlink(missing_ok=True)
+                        return
+
                     chunk = stream_resp.read(64 * 1024)
                     if not chunk:
                         break
                     out_f.write(chunk)
+                    bytes_written += len(chunk)
+
+                out_f.flush()
+                os.fsync(out_f.fileno())
+
+            if hasattr(stream_resp, "close"):
+                stream_resp.close()
         except Exception as e:
             if tmp_file.exists():
                 tmp_file.unlink(missing_ok=True)
@@ -411,28 +529,34 @@ class AntraWorker:
             return
 
         # FLAC 24-bit verification
-        valid, bit_depth, sample_rate, msg = verify_flac_24bit(tmp_file)
+        valid, bit_depth, sample_rate, msg = verify_flac_24bit(tmp_file, expected_length=content_length)
         if not valid:
             tmp_file.unlink(missing_ok=True)
+            new_status = "skipped" if bit_depth == 16 else "failed"
             self.store.update_track(
                 job_id,
                 global_index,
-                status="skipped",
+                status=new_status,
                 bit_depth=bit_depth,
                 sample_rate=sample_rate,
                 message=msg,
             )
-            # Acknowledge reclaimed space upstream even for skipped tracks
             self.client.ack_track(upstream_job_id, upstream_index)
             return
 
-        # Atomically publish to final destination
+        # Atomic no-clobber rename + directory fsync
         try:
             os.replace(tmp_file, dest_file)
             try:
                 os.chmod(dest_file, 0o644)
             except OSError:
                 pass
+
+            parent_fd = os.open(str(dest_file.parent), os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
         except OSError as e:
             tmp_file.unlink(missing_ok=True)
             self.store.update_track(
@@ -443,8 +567,7 @@ class AntraWorker:
             )
             return
 
-        # Track completed durably
-        calc_rel = str(dest_file.relative_to(self.output_dir.resolve()))
+        calc_rel = str(dest_file.relative_to(destination_root.resolve()))
         self.store.update_track(
             job_id,
             global_index,
@@ -455,12 +578,14 @@ class AntraWorker:
             message="",
         )
 
-        # Durable write completed: acknowledge to upstream (fire-and-forget)
-        self.client.ack_track(upstream_job_id, upstream_index)
+        # Acknowledge to upstream; mark ack_pending if failed
+        acked = self.client.ack_track(upstream_job_id, upstream_index)
+        if not acked:
+            self.store.update_track(job_id, global_index, ack_pending=1)
 
     def run_once(self) -> bool:
-        """Process one pending job if available."""
-        job = self.store.get_next_queued_job()
+        """Process one runnable job if available."""
+        job = self.store.get_next_runnable_job()
         if not job:
             return False
         self.process_job(job)
@@ -488,10 +613,7 @@ class AntraWorker:
 
 
 def main() -> None:
-    # 1. Termux DNS fix re-exec if running under Termux
     maybe_reexec_dns_fix()
-
-    # 2. Start worker loop
     worker = AntraWorker()
     worker.run_forever()
 
