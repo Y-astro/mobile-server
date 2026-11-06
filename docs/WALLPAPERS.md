@@ -69,12 +69,16 @@ The native integration was verified against FileBrowser `v2.63.23/e8a388f8` and 
 
 Before any FileBrowser upgrade, recheck the entry wrapper, named exports, and relative editor/preview chunks. A new upstream filename does not automatically fail closed; deployment must explicitly refuse unreviewed version/entry drift.
 
+## Admin-only settings correction
+
+Release `admin-appearance-0ca84271-20261106T032926Z` activated source `0ca842716bf9a45eb527ebd4a1cb0863fe92ae89` on 2026-11-06. It updated four existing static assets and restarted only dashboard in 1.594 seconds. Admin controls remain available on portal and cloud; family and login triggers are removed. Browser checks verified family refusal, direct-call refusal, and rejection of a real 302-to-200 login redirect. Live checks confirmed admin permission 200 and family permission 403 on both website listeners, preserved private wallpaper reads, all 49 owned hashes/modes, and unchanged unrelated processes and disabled-service flags. Reload existing pages to load the updated controller.
+
 ## Rollback
 
 The retained transaction contains independent recovery assets and preimages. Use its reviewed lifecycle controller to roll back both files and affected services:
 
 ```bash
-ssh -p 8022 u0_a505@100.75.159.53 'python3 /data/data/com.termux/files/home/.cache/mobile-server-cloud-glass-13111981-20261106T024144Z/transaction/recovery_lifecycle/release_activation.py rollback --transaction-dir /data/data/com.termux/files/home/.cache/mobile-server-cloud-glass-13111981-20261106T024144Z/transaction --namespace-root /data/data/com.termux/files'
+ssh -p 8022 u0_a505@100.75.159.53 'python3 /data/data/com.termux/files/home/.cache/mobile-server-admin-appearance-0ca84271-20261106T032926Z/transaction/recovery_lifecycle/release_activation.py rollback --transaction-dir /data/data/com.termux/files/home/.cache/mobile-server-admin-appearance-0ca84271-20261106T032926Z/transaction --namespace-root /data/data/com.termux/files'
 ```
 
 For an interrupted activation, use the same command with `recover` in place of `rollback`. Do not remove the transaction or edit its journals. The uploaded wallpaper library intentionally remains after UI rollback. Existing unowned FileBrowser branding files were preserved.
