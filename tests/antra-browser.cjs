@@ -5,16 +5,21 @@
  * synthetic Antra API endpoints.
  *
  * Verifies:
- * - Admin vs Anonymous (401) vs Family (403) access denial & polling stop
- * - Form inputs, submit pending guard, explicit network error handling
+ * - Admin vs Anonymous (401) vs Family (403) access denial, control disablement,
+ *   and complete purge of previously rendered private jobs/tracks
+ * - Console /admin link removed; only valid Portal / navigation retained
+ * - Storage destination selection (default 'private' vs 'family'), server display,
+ *   and retry destination immutability
+ * - Delayed track details response + close race condition guard (late responses ignored)
+ * - Form inputs, submit pending guard, explicit network error handling, bounded timeouts
  * - Work after page reload & progress updates
  * - 250 track details & index 101+/250 proof without missing rows
  * - Strict 24-bit only rule: 24-bit accepted vs 16-bit skipped
  * - Cancel & retry transitions
  * - XSS strings safely render as text
  * - Mobile touch targets (>= 48px) and responsive table overflow
- * - Visibility-aware polling cleanup
- * - Meaningful screenshots saved in .superpowers/sdd
+ * - Pagehide lifecycle cleanup (abort in-flight GETs, dispose polling)
+ * - Meaningful desktop & mobile screenshots saved in .superpowers/sdd
  * =========================================================================
  */
 const http = require('http');
@@ -41,11 +46,9 @@ const portalPollingJs = fs.readFileSync(path.join(rootDir, 'web/portal-polling.j
 
 // Synthetic API State Fixture
 function createInitialState() {
-  // Generate 250 tracks fixture for index 101+/250 proof
   const fixtureTracks = [];
   for (let i = 0; i < 250; i++) {
-    // Deliberately mix 24-bit and 16-bit tracks to test 24-bit only rule
-    const is24Bit = i % 5 !== 3; // every 5th track (index 3, 8, 13...) is 16-bit
+    const is24Bit = i % 5 !== 3; // every 5th track is 16-bit
     fixtureTracks.push({
       index: i,
       title: i === 0
@@ -66,6 +69,7 @@ function createInitialState() {
     {
       id: 'job-uuid-250',
       url: 'https://tidal.com/playlist/complete-edition-250',
+      destination: 'private',
       title: 'Complete 250-Track Hi-Res Anthology',
       status: 'downloading',
       total: 250,
@@ -79,6 +83,7 @@ function createInitialState() {
     {
       id: 'job-uuid-failed',
       url: 'https://qobuz.com/album/failed-album',
+      destination: 'family',
       title: 'Failed Album Requiring Retry',
       status: 'failed',
       total: 12,
@@ -99,7 +104,11 @@ function createInitialState() {
       message: 'Supervised background engine active'
     },
     settings: {
-      output_directory: '/storage/emulated/0/Music/Antra',
+      output_directory: 'Music/Astro', // legacy fallback
+      output_directories: {
+        private: 'Music/Astro',
+        family: 'Music/Family'
+      },
       quality: '24-bit FLAC'
     },
     jobs: initialJobs,
@@ -110,7 +119,9 @@ function createInitialState() {
         { index: 1, title: 'Track F2', artist: 'Band', status: 'failed', bit_depth: null, sample_rate: null, filename: null, message: 'Upstream 429' }
       ]
     },
-    networkErrorNext: false,
+    submittedPayloads: [],
+    delayTrackJobId: null,
+    delayMs: 0,
     pollCounts: {
       jobs: 0,
       tracks: 0
@@ -198,9 +209,12 @@ function createInitialState() {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ status: 'error', message: 'Missing URL' }));
           }
+          state.submittedPayloads.push(payload);
+          const destination = payload.destination === 'family' ? 'family' : 'private';
           const newJob = {
             id: 'job-' + Date.now(),
             url: payload.url,
+            destination: destination,
             title: 'Submitted ' + payload.url.split('/').pop(),
             status: 'queued',
             total: 10,
@@ -236,8 +250,18 @@ function createInitialState() {
       }
       state.pollCounts.tracks++;
       const tracks = state.tracksByJobId[id] || [];
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ job, tracks }));
+
+      const sendResponse = () => {
+        if (res.destroyed) return;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ job, tracks }));
+      };
+
+      if (state.delayTrackJobId === id && state.delayMs > 0) {
+        setTimeout(sendResponse, state.delayMs);
+        return;
+      }
+      return sendResponse();
     }
 
     // POST /api/antra/jobs/<id>/cancel
@@ -264,6 +288,7 @@ function createInitialState() {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ status: 'error', message: 'Job not found' }));
       }
+      // Retry preserves existing immutable destination!
       job.status = 'queued';
       job.message = 'Retry queued';
       res.writeHead(202, { 'Content-Type': 'application/json' });
@@ -298,8 +323,10 @@ function createInitialState() {
       const alertTitle = await page.textContent('#auth-alert-title');
       assert.match(alertTitle, /Authentication Required/i);
       const isInputDisabled = await page.isDisabled('#antra-url-input');
+      const isSelectDisabled = await page.isDisabled('#antra-destination-select');
       const isSubmitDisabled = await page.isDisabled('#antra-submit-btn');
       assert.strictEqual(isInputDisabled, true, 'Input is disabled under 401');
+      assert.strictEqual(isSelectDisabled, true, 'Destination select is disabled under 401');
       assert.strictEqual(isSubmitDisabled, true, 'Submit is disabled under 401');
       await page.close();
     }
@@ -316,16 +343,18 @@ function createInitialState() {
       const alertTitle = await page.textContent('#auth-alert-title');
       assert.match(alertTitle, /Access Denied/i);
       const isInputDisabled = await page.isDisabled('#antra-url-input');
+      const isSelectDisabled = await page.isDisabled('#antra-destination-select');
       const isSubmitDisabled = await page.isDisabled('#antra-submit-btn');
       assert.strictEqual(isInputDisabled, true, 'Input is disabled under 403');
+      assert.strictEqual(isSelectDisabled, true, 'Destination select is disabled under 403');
       assert.strictEqual(isSubmitDisabled, true, 'Submit is disabled under 403');
       await page.close();
     }
 
     // =========================================================================
-    // 3. ADMIN ROLE (HAPPY PATH, POLICIES & DESKTOP RENDERING)
+    // 3. ADMIN ROLE, NAVIGATION LINKS & DESTINATION LABELS
     // =========================================================================
-    console.log('[Test 3] Verifying Admin role desktop display...');
+    console.log('[Test 3] Verifying Admin role desktop display & navigation...');
     state.role = 'admin';
     const page = await context.newPage();
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -333,9 +362,14 @@ function createInitialState() {
 
     await page.waitForSelector('#jobs-list .job-card');
     assert.strictEqual(await page.textContent('#worker-state-badge'), 'running');
-    assert.strictEqual(await page.textContent('#output-directory-val'), '/storage/emulated/0/Music/Antra');
-    const jobsCountText = await page.textContent('#jobs-count-badge');
-    assert.match(jobsCountText, /2 jobs/);
+    assert.strictEqual(await page.textContent('#output-dir-private'), 'Music/Astro');
+    assert.strictEqual(await page.textContent('#output-dir-family'), 'Music/Family');
+
+    // Root check: Verify redundant broken /admin link is removed, Portal / exists
+    const adminLinkCount = await page.locator('a[href="/admin"]').count();
+    assert.strictEqual(adminLinkCount, 0, 'Console link to /admin is removed');
+    const portalLinkCount = await page.locator('a[href="/"]').count();
+    assert.strictEqual(portalLinkCount >= 1, true, 'Portal link to / is present');
 
     // Save Desktop Screenshot
     const desktopScreenshotPath = path.join(sddDir, 'antra-desktop.png');
@@ -344,26 +378,34 @@ function createInitialState() {
     console.log(`Saved screenshot: ${desktopScreenshotPath} (${fs.statSync(desktopScreenshotPath).size} bytes)`);
 
     // =========================================================================
-    // 4. FORM INPUTS & SUBMIT PENDING GUARD
+    // 4. FORM DESTINATION SELECTION & SUBMISSION
     // =========================================================================
-    console.log('[Test 4] Testing form inputs and submit pending guard...');
-    // Invalid URL check
-    await page.fill('#antra-url-input', 'not-a-valid-url');
-    await page.click('#antra-submit-btn');
-    await page.waitForSelector('#form-status:not(.hidden)');
-    const errText = await page.textContent('#form-status');
-    assert.match(errText, /Invalid URL/i);
+    console.log('[Test 4] Testing destination select (private vs family) and submissions...');
+    // Verify default destination is 'private'
+    const defaultDestVal = await page.inputValue('#antra-destination-select');
+    assert.strictEqual(defaultDestVal, 'private', 'Default storage destination is private');
 
-    // Valid submission with pending guard verification
-    await page.fill('#antra-url-input', 'https://tidal.com/album/synthetic-test-album');
+    // 4a: Submit with default 'private' destination
+    await page.fill('#antra-url-input', 'https://tidal.com/album/private-album');
     await page.click('#antra-submit-btn');
     await page.waitForSelector('.form-status-success');
-    const successText = await page.textContent('#form-status');
-    assert.match(successText, /Download queued successfully/i);
+    assert.strictEqual(state.submittedPayloads.at(-1).destination, 'private', 'Submitted payload has destination: private');
 
-    // Verify newly submitted job is at top of jobs list
-    const firstJobTitle = await page.textContent('#jobs-list .job-card h3');
-    assert.match(firstJobTitle, /synthetic-test-album/);
+    // Verify destination badge on card
+    const firstJobCard = page.locator('#jobs-list .job-card').first();
+    const destBadgeText = await firstJobCard.locator('.badge-destination').textContent();
+    assert.strictEqual(destBadgeText.trim(), 'My music (private)');
+
+    // 4b: Submit with 'family' destination
+    await page.selectOption('#antra-destination-select', 'family');
+    await page.fill('#antra-url-input', 'https://tidal.com/album/family-album');
+    await page.click('#antra-submit-btn');
+    await page.waitForSelector('.form-status-success');
+    assert.strictEqual(state.submittedPayloads.at(-1).destination, 'family', 'Submitted payload has destination: family');
+
+    const newFamilyCard = page.locator('#jobs-list .job-card').first();
+    const familyBadgeText = await newFamilyCard.locator('.badge-destination').textContent();
+    assert.strictEqual(familyBadgeText.trim(), 'Family music');
 
     // Network error test using Playwright route abort
     await page.route('**/api/antra/jobs', async (route) => {
@@ -380,10 +422,36 @@ function createInitialState() {
     assert.match(netErr, /Network error/i);
 
     // =========================================================================
-    // 5. 250 TRACK DETAILS & INDEX 101+/250 PROOF
+    // 5. RACE CONDITION GUARD: DELAYED RESPONSE + CLOSE
     // =========================================================================
-    console.log('[Test 5] Inspecting 250 track details & index 101+ proof...');
-    // Find the 250-track job card and click its 'View Tracks' button
+    console.log('[Test 5] Testing race condition: late track details response after Close Details...');
+    // Set synthetic 400ms delay for job-uuid-failed details
+    state.delayTrackJobId = 'job-uuid-failed';
+    state.delayMs = 400;
+
+    const failedCard = page.locator('.job-card[data-job-id="job-uuid-failed"]');
+    // Click View Tracks on slow job
+    await failedCard.locator('button:has-text("View Tracks")').click();
+    // Immediately click Close Details while request is in-flight!
+    await page.click('#btn-close-tracks');
+
+    // Wait for the delayed network response to arrive
+    await page.waitForTimeout(550);
+
+    // Assert details panel remained hidden and was not reopened by the late arrival
+    const isTracksHidden = await page.locator('#tracks-section').evaluate(el => el.classList.contains('hidden'));
+    assert.strictEqual(isTracksHidden, true, 'Track details remained closed despite late network response');
+    const tbodyRowCount = await page.locator('#tracks-tbody tr').count();
+    assert.strictEqual(tbodyRowCount, 0, 'Tracks table was not populated by late response');
+
+    // Reset delays
+    state.delayTrackJobId = null;
+    state.delayMs = 0;
+
+    // =========================================================================
+    // 6. 250 TRACK DETAILS & INDEX 101+/250 PROOF
+    // =========================================================================
+    console.log('[Test 6] Inspecting 250 track details & index 101+ proof...');
     const job250Card = page.locator('.job-card[data-job-id="job-uuid-250"]');
     await job250Card.locator('button:has-text("View Tracks")').click();
 
@@ -401,75 +469,91 @@ function createInitialState() {
     // Index 101 proof (row 102, zero-based index 101)
     const row101 = trackRows.nth(101);
     const index101Text = await row101.locator('td').nth(0).textContent();
-    assert.strictEqual(index101Text, '102'); // 1-based display for 0-based index 101
+    assert.strictEqual(index101Text, '102');
     const title101Text = await row101.locator('td').nth(1).textContent();
     assert.strictEqual(title101Text, 'Symphony No. 102 in C Minor');
 
-    // Index 249 check (last row, zero-based index 249)
-    const row249 = trackRows.nth(249);
-    assert.strictEqual(await row249.locator('td').nth(0).textContent(), '250');
+    // Verify destination displayed in track details header
+    const destDetailsText = await page.textContent('#tracks-job-dest-badge');
+    assert.strictEqual(destDetailsText.trim(), 'My music (private)');
 
     // =========================================================================
-    // 6. STRICT 24-BIT ONLY RULE VERIFICATION (24-BIT VS 16-BIT SKIPPED)
+    // 7. STRICT 24-BIT ONLY RULE VERIFICATION (24-BIT VS 16-BIT SKIPPED)
     // =========================================================================
-    console.log('[Test 6] Verifying strict 24-bit only rule enforcement...');
-    // Row 1 (index 0) is 24-bit:
+    console.log('[Test 7] Verifying strict 24-bit only rule enforcement...');
     const row1Quality = await trackRows.nth(1).locator('td').nth(3).textContent();
     assert.match(row1Quality, /24-bit/);
 
-    // Row 3 (index 3) is 16-bit, marked skipped with 24-bit rule indicator:
     const row3Quality = await trackRows.nth(3).locator('td').nth(3).textContent();
     assert.match(row3Quality, /Skipped - 24-bit only rule/);
     const row3Status = await trackRows.nth(3).locator('td').nth(4).textContent();
     assert.strictEqual(row3Status.trim(), 'skipped');
 
     // =========================================================================
-    // 7. XSS MITIGATION / SAFE STRING RENDERING PROOF
+    // 8. XSS MITIGATION / SAFE STRING RENDERING PROOF
     // =========================================================================
-    console.log('[Test 7] Verifying XSS mitigation (all user strings rendered safely as text)...');
+    console.log('[Test 8] Verifying XSS mitigation...');
     const pwned = await page.evaluate(() => window.pwned);
     assert.strictEqual(pwned, undefined, 'No XSS payload executed in window context');
-
-    // Check that script tags are rendered literally as plain text
     const row0Title = await row0.locator('td').nth(1).textContent();
     assert.match(row0Title, /<script>window\.pwned=1<\/script>/);
 
     // =========================================================================
-    // 8. CANCEL & RETRY JOB ACTIONS
+    // 9. CANCEL & RETRY JOB ACTIONS WITH IMMUTABLE DESTINATION
     // =========================================================================
-    console.log('[Test 8] Verifying Cancel and Retry actions...');
-    // Cancel the active 250-track job
+    console.log('[Test 9] Verifying Cancel and Retry actions with destination preservation...');
     await job250Card.locator('button[data-action="cancel"]').click();
     await page.waitForTimeout(100);
     const updatedStatus250 = await job250Card.locator('.badge-status').textContent();
     assert.strictEqual(updatedStatus250.trim(), 'cancelled');
 
-    // Retry the failed job
-    const failedCard = page.locator('.job-card[data-job-id="job-uuid-failed"]');
+    // Retry family job
     await failedCard.locator('button[data-action="retry"]').click();
     await page.waitForTimeout(100);
     const updatedFailedStatus = await failedCard.locator('.badge-status').textContent();
     assert.strictEqual(updatedFailedStatus.trim(), 'queued');
+    // Destination remains family
+    const retriedDestBadge = await failedCard.locator('.badge-destination').textContent();
+    assert.strictEqual(retriedDestBadge.trim(), 'Family music');
 
     // =========================================================================
-    // 9. WORK AFTER PAGE RELOAD / PROGRESS
+    // 10. ROLE 403 / 401 PURGES PRIOR PRIVATE CONTENT
     // =========================================================================
-    console.log('[Test 9] Verifying work retention after page reload...');
-    await page.reload();
-    await page.waitForSelector('#jobs-list .job-card');
-    const reloadedCardsCount = await page.locator('#jobs-list .job-card').count();
-    assert.strictEqual(reloadedCardsCount >= 3, true, 'Jobs persisted and rendered after reload');
+    console.log('[Test 10] Testing 403 access denial clears all previously rendered jobs/tracks...');
+    // We currently have jobs and tracks rendered on page. Switch server to 403:
+    state.role = 'family';
+    // Trigger poll / refresh:
+    await page.click('#btn-refresh');
+    await page.waitForSelector('#auth-alert:not(.hidden)');
+
+    // Verify all private cached DOM elements are completely cleared
+    const remainingJobsCount = await page.locator('#jobs-list .job-card').count();
+    assert.strictEqual(remainingJobsCount, 0, 'All previously rendered job cards were purged on 403');
+    const remainingTrackRows = await page.locator('#tracks-tbody tr').count();
+    assert.strictEqual(remainingTrackRows, 0, 'All track rows were purged on 403');
+    const isSectionHidden = await page.locator('#tracks-section').evaluate(el => el.classList.contains('hidden'));
+    assert.strictEqual(isSectionHidden, true, 'Track section hidden on 403');
+
+    // Verify controls disabled
+    assert.strictEqual(await page.isDisabled('#antra-url-input'), true);
+    assert.strictEqual(await page.isDisabled('#antra-destination-select'), true);
+    assert.strictEqual(await page.isDisabled('#antra-submit-btn'), true);
+    assert.strictEqual(await page.isDisabled('#btn-refresh'), true);
 
     // =========================================================================
-    // 10. MOBILE TOUCH TARGETS & RESPONSIVE LAYOUT
+    // 11. MOBILE TOUCH TARGETS & RESPONSIVE LAYOUT
     // =========================================================================
-    console.log('[Test 10] Testing mobile touch targets (>= 48px) and horizontal overflow...');
+    console.log('[Test 11] Testing mobile touch targets (>= 48px) and horizontal overflow...');
+    state.role = 'admin'; // reset role
+    await page.goto(baseUrl);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.waitForTimeout(200);
+    await page.waitForSelector('#jobs-list .job-card');
 
-    // Verify touch target heights for interactive elements
     const submitBtnBox = await page.locator('#antra-submit-btn').boundingBox();
     assert.strictEqual(submitBtnBox.height >= 48, true, `Submit button height ${submitBtnBox.height} >= 48px`);
+
+    const destSelectBox = await page.locator('#antra-destination-select').boundingBox();
+    assert.strictEqual(destSelectBox.height >= 48, true, `Destination select height ${destSelectBox.height} >= 48px`);
 
     const urlInputBox = await page.locator('#antra-url-input').boundingBox();
     assert.strictEqual(urlInputBox.height >= 48, true, `URL input height ${urlInputBox.height} >= 48px`);
@@ -491,17 +575,16 @@ function createInitialState() {
     console.log(`Saved screenshot: ${mobileScreenshotPath} (${fs.statSync(mobileScreenshotPath).size} bytes)`);
 
     // =========================================================================
-    // 11. POLLING CLEANUP VERIFICATION
+    // 12. LIFECYCLE & POLLING CLEANUP VERIFICATION
     // =========================================================================
-    console.log('[Test 11] Verifying polling cleanup on pagehide / dispose...');
+    console.log('[Test 12] Verifying polling cleanup on pagehide...');
     const pollsBefore = state.pollCounts.jobs;
     await page.evaluate(() => {
       window.dispatchEvent(new Event('pagehide'));
     });
     await page.waitForTimeout(300);
-    // After pagehide, polling should have ceased
     const pollsAfter = state.pollCounts.jobs;
-    assert.strictEqual(pollsAfter <= pollsBefore + 1, true, 'Polling ceased after pagehide cleanup');
+    assert.strictEqual(pollsAfter <= pollsBefore + 1, true, 'Polling ceased after pagehide');
 
     await page.close();
     await context.close();

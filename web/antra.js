@@ -2,7 +2,8 @@
  * =========================================================================
  * ANTRA HI-RES MUSIC DOWNLOADER
  * Client Controller & Lifecycle Management
- * Strict 24-bit FLAC enforcement, visibility-aware polling, zero XSS
+ * Strict 24-bit FLAC enforcement, visibility-aware polling, zero XSS,
+ * multi-destination routing (private vs family).
  * =========================================================================
  */
 (() => {
@@ -12,15 +13,18 @@
   const authAlert = document.getElementById('auth-alert');
   const authAlertTitle = document.getElementById('auth-alert-title');
   const authAlertMessage = document.getElementById('auth-alert-message');
+  const helperAlert = document.getElementById('helper-alert');
   const antraMain = document.getElementById('antra-main');
   const antraForm = document.getElementById('antra-form');
   const urlInput = document.getElementById('antra-url-input');
+  const destinationSelect = document.getElementById('antra-destination-select');
   const submitBtn = document.getElementById('antra-submit-btn');
   const submitBtnText = document.getElementById('submit-btn-text');
   const formStatus = document.getElementById('form-status');
   const workerStateBadge = document.getElementById('worker-state-badge');
   const workerMessageVal = document.getElementById('worker-message-val');
-  const outputDirVal = document.getElementById('output-directory-val');
+  const outputDirPrivate = document.getElementById('output-dir-private');
+  const outputDirFamily = document.getElementById('output-dir-family');
   const jobsList = document.getElementById('jobs-list');
   const jobsCountBadge = document.getElementById('jobs-count-badge');
   const jobsEmpty = document.getElementById('jobs-empty');
@@ -28,6 +32,7 @@
   const tracksSection = document.getElementById('tracks-section');
   const tracksJobTitle = document.getElementById('tracks-job-title');
   const tracksJobStatusBadge = document.getElementById('tracks-job-status-badge');
+  const tracksJobDestBadge = document.getElementById('tracks-job-dest-badge');
   const tracksSummary = document.getElementById('tracks-summary');
   const tracksTbody = document.getElementById('tracks-tbody');
   const btnCloseTracks = document.getElementById('btn-close-tracks');
@@ -36,8 +41,12 @@
   let activeJobId = null;
   let isSubmitting = false;
   let isAccessDenied = false;
+  let isPageHidden = false;
+  let manualFetchInFlight = false;
   let pollingLoop = null;
   let cachedJobs = [];
+  let activeTrackController = null;
+  let activeMainFetchController = null;
 
   // Helper: Format status badge class
   function getStatusClass(status) {
@@ -79,13 +88,45 @@
     return span;
   }
 
+  // Helper: Format destination badge
+  function createDestinationBadge(destination) {
+    const span = document.createElement('span');
+    const isFamily = destination === 'family';
+    span.className = `badge-destination ${isFamily ? 'badge-destination-family' : ''}`;
+    span.textContent = isFamily ? 'Family music' : 'My music (private)';
+    return span;
+  }
+
   // Handle 401 / 403 access refusal
   function handleAccessRefusal(status, message) {
     isAccessDenied = true;
+
+    // Dispose background loop
     if (pollingLoop && typeof pollingLoop.dispose === 'function') {
       pollingLoop.dispose();
       pollingLoop = null;
     }
+
+    // Abort active detail or manual requests
+    if (activeTrackController) {
+      activeTrackController.abort();
+      activeTrackController = null;
+    }
+    if (activeMainFetchController) {
+      activeMainFetchController.abort();
+      activeMainFetchController = null;
+    }
+
+    // Purge all previous cached content and DOM elements
+    cachedJobs = [];
+    activeJobId = null;
+    if (jobsList) jobsList.innerHTML = '';
+    if (tracksTbody) tracksTbody.innerHTML = '';
+    if (tracksSection) tracksSection.classList.add('hidden');
+    if (tracksJobTitle) tracksJobTitle.textContent = '';
+    if (tracksSummary) tracksSummary.textContent = '';
+    if (jobsCountBadge) jobsCountBadge.textContent = '0 jobs';
+    if (jobsEmpty) jobsEmpty.classList.add('hidden');
 
     if (authAlert) {
       authAlert.classList.remove('hidden');
@@ -98,19 +139,26 @@
       }
     }
 
+    // Disable all user controls and inputs
     if (urlInput) urlInput.disabled = true;
+    if (destinationSelect) destinationSelect.disabled = true;
     if (submitBtn) submitBtn.disabled = true;
     if (btnRefresh) btnRefresh.disabled = true;
   }
 
   // Fetch Jobs and Worker Status (Main Polling Action)
   async function fetchJobs(signal) {
-    if (isAccessDenied) return;
+    if (isAccessDenied || isPageHidden || manualFetchInFlight) return;
+    manualFetchInFlight = true;
+
+    const controller = new AbortController();
+    activeMainFetchController = controller;
+    const fetchSignal = signal || controller.signal;
 
     try {
       const res = await fetch('/api/antra/jobs', {
         headers: { 'Accept': 'application/json' },
-        signal: signal || (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined)
+        signal: fetchSignal
       });
 
       if (res.status === 401 || res.status === 403) {
@@ -125,6 +173,10 @@
       }
 
       const data = await res.json();
+
+      // Guard late or disposed state
+      if (isAccessDenied || isPageHidden || (signal && signal.aborted)) return;
+
       renderWorker(data.worker, data.settings);
       renderJobs(data.jobs || []);
 
@@ -133,13 +185,18 @@
         await fetchTrackDetails(activeJobId, signal, false);
       }
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      if (err.name === 'AbortError' || isPageHidden || isAccessDenied) return;
       if (workerStateBadge && !isAccessDenied) {
         workerStateBadge.textContent = 'Offline';
         workerStateBadge.className = 'm3-badge badge-neutral';
       }
       if (workerMessageVal && !isAccessDenied) {
         workerMessageVal.textContent = 'Unable to reach Antra service. Retrying…';
+      }
+    } finally {
+      manualFetchInFlight = false;
+      if (activeMainFetchController === controller) {
+        activeMainFetchController = null;
       }
     }
   }
@@ -158,14 +215,21 @@
     if (workerMessageVal) {
       workerMessageVal.textContent = worker.message || 'Worker active';
     }
-    if (settings && settings.output_directory && outputDirVal) {
-      outputDirVal.textContent = settings.output_directory;
+    if (settings && settings.output_directories) {
+      if (outputDirPrivate && settings.output_directories.private) {
+        outputDirPrivate.textContent = settings.output_directories.private;
+      }
+      if (outputDirFamily && settings.output_directories.family) {
+        outputDirFamily.textContent = settings.output_directories.family;
+      }
     }
   }
 
   // Render Jobs List
   function renderJobs(jobs) {
+    if (isAccessDenied) return;
     cachedJobs = jobs;
+
     if (jobsCountBadge) {
       jobsCountBadge.textContent = `${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'}`;
     }
@@ -187,7 +251,7 @@
       card.className = 'm3-card golden-glass-card p-4 rounded-xl space-y-3 job-card';
       card.setAttribute('data-job-id', job.id);
 
-      // Top Header: Title, URL, Status Badge
+      // Top Header: Title, URL, Badges
       const topRow = document.createElement('div');
       topRow.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-2';
 
@@ -205,12 +269,20 @@
       titleCol.appendChild(titleEl);
       titleCol.appendChild(urlEl);
 
+      const badgesCol = document.createElement('div');
+      badgesCol.className = 'flex items-center gap-2 flex-wrap';
+
+      // Render immutable destination badge from server
+      const destBadge = createDestinationBadge(job.destination);
+      badgesCol.appendChild(destBadge);
+
       const statusBadge = document.createElement('span');
       statusBadge.className = `badge-status ${getStatusClass(job.status)}`;
       statusBadge.textContent = job.status || 'queued';
+      badgesCol.appendChild(statusBadge);
 
       topRow.appendChild(titleCol);
-      topRow.appendChild(statusBadge);
+      topRow.appendChild(badgesCol);
       card.appendChild(topRow);
 
       // Progress Bar
@@ -328,19 +400,34 @@
 
   function closeTrackDetails() {
     activeJobId = null;
+    if (activeTrackController) {
+      activeTrackController.abort();
+      activeTrackController = null;
+    }
     if (tracksSection) tracksSection.classList.add('hidden');
     if (tracksTbody) tracksTbody.innerHTML = '';
+    if (tracksJobTitle) tracksJobTitle.textContent = '';
     if (cachedJobs.length) renderJobs(cachedJobs);
   }
 
-  // Fetch and Render Track Details (Index 101+/250 proof)
+  // Fetch and Render Track Details (Guarded against stale / late responses)
   async function fetchTrackDetails(jobId, signal, shouldScroll) {
-    if (!tracksSection || isAccessDenied) return;
+    if (!tracksSection || isAccessDenied || isPageHidden) return;
+
+    // Abort any prior in-flight track details request
+    if (activeTrackController) {
+      activeTrackController.abort();
+      activeTrackController = null;
+    }
+
+    const controller = new AbortController();
+    activeTrackController = controller;
+    const fetchSignal = signal || controller.signal;
 
     try {
       const res = await fetch(`/api/antra/jobs/${encodeURIComponent(jobId)}`, {
         headers: { 'Accept': 'application/json' },
-        signal: signal || (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined)
+        signal: fetchSignal
       });
 
       if (res.status === 401 || res.status === 403) {
@@ -355,6 +442,12 @@
       }
 
       const data = await res.json();
+
+      // Critical race condition guard: If user closed or switched while pending, ignore!
+      if (activeJobId !== jobId || isAccessDenied || isPageHidden || controller.signal.aborted || (signal && signal.aborted)) {
+        return;
+      }
+
       const job = data.job || {};
       const tracks = data.tracks || [];
 
@@ -362,6 +455,12 @@
       tracksJobTitle.textContent = job.title || job.url || 'Job Tracks';
       tracksJobStatusBadge.textContent = job.status || 'processing';
       tracksJobStatusBadge.className = `m3-badge ${getStatusClass(job.status)}`;
+
+      if (tracksJobDestBadge) {
+        const isFamily = job.destination === 'family';
+        tracksJobDestBadge.className = `badge-destination ${isFamily ? 'badge-destination-family' : ''}`;
+        tracksJobDestBadge.textContent = isFamily ? 'Family music' : 'My music (private)';
+      }
 
       const completedCount = tracks.filter(t => t.status === 'completed').length;
       const skippedCount = tracks.filter(t => t.status === 'skipped').length;
@@ -428,8 +527,12 @@
 
       if (cachedJobs.length) renderJobs(cachedJobs);
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      if (err.name === 'AbortError' || activeJobId !== jobId || isAccessDenied || isPageHidden) return;
       tracksSummary.textContent = 'Error loading track list: ' + err.message;
+    } finally {
+      if (activeTrackController === controller) {
+        activeTrackController = null;
+      }
     }
   }
 
@@ -451,12 +554,17 @@
       return;
     }
 
+    const destination = (destinationSelect && destinationSelect.value === 'family') ? 'family' : 'private';
+
     // Immediate pending guard
     isSubmitting = true;
     submitBtn.disabled = true;
     submitBtn.setAttribute('aria-busy', 'true');
     submitBtnText.textContent = 'Queueing…';
     hideFormStatus();
+
+    const postController = new AbortController();
+    const timeoutId = setTimeout(() => postController.abort(), 10000);
 
     try {
       const res = await fetch('/api/antra/jobs', {
@@ -465,7 +573,8 @@
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
-        body: JSON.stringify({ url })
+        body: JSON.stringify({ url, destination }),
+        signal: postController.signal
       });
 
       if (res.status === 401 || res.status === 403) {
@@ -490,8 +599,13 @@
         showFormStatus(errMsg, 'error');
       }
     } catch (err) {
-      showFormStatus('Network error: Failed to reach server. Please check your connection.', 'error');
+      if (err.name === 'AbortError') {
+        showFormStatus('Request timed out. Server state uncertain; please refresh before retrying.', 'error');
+      } else {
+        showFormStatus('Network error: Failed to reach server. Please check your connection.', 'error');
+      }
     } finally {
+      clearTimeout(timeoutId);
       isSubmitting = false;
       if (!isAccessDenied) {
         submitBtn.disabled = false;
@@ -521,10 +635,14 @@
     btn.disabled = true;
     btn.textContent = 'Cancelling…';
 
+    const cancelController = new AbortController();
+    const timeoutId = setTimeout(() => cancelController.abort(), 10000);
+
     try {
       const res = await fetch(`/api/antra/jobs/${encodeURIComponent(jobId)}/cancel`, {
         method: 'POST',
-        headers: { 'Accept': 'application/json' }
+        headers: { 'Accept': 'application/json' },
+        signal: cancelController.signal
       });
 
       if (res.status === 401 || res.status === 403) {
@@ -546,8 +664,13 @@
         alert(errData.message || 'Unable to cancel job');
       }
     } catch (err) {
-      alert('Network error while cancelling job.');
+      if (err.name === 'AbortError') {
+        alert('Cancel request timed out. Please refresh to confirm status.');
+      } else {
+        alert('Network error while cancelling job.');
+      }
     } finally {
+      clearTimeout(timeoutId);
       btn.disabled = false;
       btn.textContent = 'Cancel';
     }
@@ -559,10 +682,14 @@
     btn.disabled = true;
     btn.textContent = 'Retrying…';
 
+    const retryController = new AbortController();
+    const timeoutId = setTimeout(() => retryController.abort(), 10000);
+
     try {
       const res = await fetch(`/api/antra/jobs/${encodeURIComponent(jobId)}/retry`, {
         method: 'POST',
-        headers: { 'Accept': 'application/json' }
+        headers: { 'Accept': 'application/json' },
+        signal: retryController.signal
       });
 
       if (res.status === 401 || res.status === 403) {
@@ -584,8 +711,13 @@
         alert(errData.message || 'Unable to retry job');
       }
     } catch (err) {
-      alert('Network error while retrying job.');
+      if (err.name === 'AbortError') {
+        alert('Retry request timed out. Please refresh to confirm status.');
+      } else {
+        alert('Network error while retrying job.');
+      }
     } finally {
+      clearTimeout(timeoutId);
       btn.disabled = false;
       btn.textContent = 'Retry';
     }
@@ -604,48 +736,38 @@
     });
   }
 
-  // Lifecycle & Visibility Polling Setup
+  // Lifecycle & Polling Setup
   if (typeof window !== 'undefined' && window.PortalPolling && typeof window.PortalPolling.createPolling === 'function') {
     pollingLoop = window.PortalPolling.createPolling((signal) => fetchJobs(signal), 4000, { name: 'antra' });
   } else {
-    // Fallback polling loop if PortalPolling script blocked
-    let fallbackTimer = null;
-    let isHidden = false;
-
-    const pollStep = async () => {
-      if (!isAccessDenied && !isHidden) {
-        await fetchJobs();
-      }
-      if (!isAccessDenied) {
-        fallbackTimer = setTimeout(pollStep, 4000);
-      }
-    };
-
-    const handleVisibility = () => {
-      isHidden = document.hidden;
-      if (!isHidden && !isAccessDenied) {
-        fetchJobs();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibility);
-    fallbackTimer = setTimeout(pollStep, 100);
-
-    pollingLoop = {
-      refreshAfterMutation: () => fetchJobs(),
-      dispose: () => {
-        if (fallbackTimer) clearTimeout(fallbackTimer);
-        document.removeEventListener('visibilitychange', handleVisibility);
-      }
-    };
+    // If house portal helper missing, do NOT duplicate timer loop.
+    // Display load failure notice and run safe single initial read.
+    if (helperAlert) {
+      helperAlert.textContent = 'Portal polling helper not available. Automatic background polling disabled; use Refresh button.';
+      helperAlert.classList.remove('hidden');
+    }
+    fetchJobs();
   }
 
-  // Page Unload Cleanup
+  // Page Lifecycle & Unload Cleanup
   window.addEventListener('pagehide', () => {
+    isPageHidden = true;
     if (pollingLoop && typeof pollingLoop.dispose === 'function') {
       pollingLoop.dispose();
       pollingLoop = null;
     }
+    if (activeTrackController) {
+      activeTrackController.abort();
+      activeTrackController = null;
+    }
+    if (activeMainFetchController) {
+      activeMainFetchController.abort();
+      activeMainFetchController = null;
+    }
+  });
+
+  window.addEventListener('pageshow', () => {
+    isPageHidden = false;
   });
 
 })();

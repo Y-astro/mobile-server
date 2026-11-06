@@ -39,13 +39,6 @@
           </svg>
           <span>Portal</span>
         </a>
-        <a href="/admin" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5" aria-label="Open Master Console">
-          <svg class="w-4 h-4 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-          </svg>
-          <span>Console</span>
-        </a>
         <button id="btn-appearance" type="button" aria-label="Open appearance settings" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5" style="display: none;">
           <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21a4 4 0 01-4-4 4 4 0 014-4c.7 0 1.37.18 1.96.5L18.4 4.07a2.5 2.5 0 013.53 3.53L12.5 17.04A4 4 0 017 21z"></path>
@@ -54,6 +47,9 @@
         </button>
       </nav>
     </header>
+
+    <!-- Helper Missing Notice -->
+    <div id="helper-alert" class="m3-card p-3.5 rounded-xl border border-yellow-500/40 bg-yellow-950/30 text-xs text-yellow-200 hidden" role="status"></div>
 
     <!-- Authentication / Access Denial Alert Banner (401/403) -->
     <div id="auth-alert" class="m3-card p-4 rounded-xl border border-red-500/40 bg-red-950/30 text-white space-y-2 hidden" role="alert" aria-live="assertive">
@@ -79,31 +75,53 @@
         <div class="m3-card golden-glass-card p-5 rounded-2xl lg:col-span-2 space-y-4">
           <div class="flex items-center justify-between">
             <h2 id="section-queue-heading" class="text-lg font-semibold text-white tracking-tight">Queue Music Download</h2>
-            <span class="text-xs text-muted">Fixed Service Origin</span>
+            <span class="text-xs text-secondary">Audio Pipeline</span>
           </div>
 
           <form id="antra-form" class="space-y-4" novalidate>
-            <div>
-              <label for="antra-url-input" class="block text-sm font-medium text-white mb-1.5">
-                Song or Playlist URL
-              </label>
-              <div class="flex flex-col sm:flex-row gap-3">
-                <input
-                  type="url"
-                  id="antra-url-input"
-                  name="url"
-                  placeholder="https://..."
-                  required
-                  autocomplete="off"
-                  autocapitalize="none"
-                  spellcheck="false"
-                  class="antra-input flex-1 touch-target"
-                  aria-describedby="url-hint"
-                >
+            <div class="space-y-3">
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div class="sm:col-span-2">
+                  <label for="antra-url-input" class="block text-sm font-medium text-white mb-1.5">
+                    Song or Playlist URL
+                  </label>
+                  <input
+                    type="url"
+                    id="antra-url-input"
+                    name="url"
+                    placeholder="https://..."
+                    required
+                    autocomplete="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                    class="antra-input touch-target"
+                    aria-describedby="url-hint"
+                  >
+                </div>
+                <div>
+                  <label for="antra-destination-select" class="block text-sm font-medium text-white mb-1.5">
+                    Destination
+                  </label>
+                  <select
+                    id="antra-destination-select"
+                    name="destination"
+                    class="antra-input touch-target"
+                    aria-label="Storage Destination"
+                  >
+                    <option value="private" selected>My music (private)</option>
+                    <option value="family">Family music</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-1">
+                <p id="url-hint" class="text-xs text-muted flex-1">
+                  Paste track or playlist link. Continuous batch processing automatically continues complete playlists.
+                </p>
                 <button
                   type="submit"
                   id="antra-submit-btn"
-                  class="m3-btn m3-btn-filled touch-target font-medium px-6 flex items-center justify-center gap-2 whitespace-nowrap"
+                  class="m3-btn m3-btn-filled touch-target font-medium px-6 flex items-center justify-center gap-2 whitespace-nowrap self-stretch sm:self-auto"
                 >
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
@@ -111,9 +129,6 @@
                   <span id="submit-btn-text">Queue Download</span>
                 </button>
               </div>
-              <p id="url-hint" class="text-xs text-muted mt-1.5">
-                Paste track or playlist link. Continuous batch processing automatically processes complete playlists.
-              </p>
             </div>
 
             <!-- Form Status / Error Message -->
@@ -130,17 +145,25 @@
             </div>
             <div class="space-y-2.5 text-sm">
               <div>
-                <span class="text-xs text-muted block">Output Location</span>
-                <span id="output-directory-val" class="mono text-xs text-accent break-all font-medium">/storage/emulated/0/Music/Antra</span>
-                <span class="text-[11px] text-muted block">Fixed server destination (read-only)</span>
+                <span class="text-xs text-muted block mb-1">Target Storage</span>
+                <div class="space-y-1 text-xs">
+                  <div class="flex items-center justify-between">
+                    <span class="text-soft">Private (Astro):</span>
+                    <span id="output-dir-private" class="mono text-accent font-medium">Music/Astro</span>
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <span class="text-soft">Family:</span>
+                    <span id="output-dir-family" class="mono text-accent font-medium">Music/Family</span>
+                  </div>
+                </div>
               </div>
-              <div>
+              <div class="pt-1">
                 <span class="text-xs text-muted block">Quality Filter</span>
                 <div class="flex items-center gap-2 mt-0.5">
                   <span class="m3-badge badge-gold text-xs">24-bit FLAC Only</span>
                 </div>
                 <span class="text-[11px] text-soft block mt-0.5">
-                  16-bit or lower quality tracks are skipped. No upsampling or lossy conversions.
+                  Tracks below 24-bit are skipped. No upsampling or lossy conversions.
                 </span>
               </div>
             </div>
@@ -188,6 +211,7 @@
             <div class="flex items-center gap-2">
               <span class="text-xs font-medium text-secondary">Playlist Inspection</span>
               <span id="tracks-job-status-badge" class="m3-badge badge-neutral">...</span>
+              <span id="tracks-job-dest-badge" class="badge-destination">...</span>
             </div>
             <h2 id="tracks-heading" class="text-lg font-semibold text-white tracking-tight mt-0.5">
               <span id="tracks-job-title">Track Details</span>
@@ -208,7 +232,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
           </svg>
           <span>
-            <strong>24-bit Only Rule:</strong> Only genuine 24-bit FLAC streams are saved. Tracks identified as 16-bit or below are skipped to preserve hi-res audio storage integrity.
+            <strong>24-bit Only Rule:</strong> Only genuine 24-bit FLAC streams are accepted. Tracks identified as 16-bit or below are skipped.
           </span>
         </div>
 
