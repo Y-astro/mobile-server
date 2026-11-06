@@ -40,7 +40,7 @@
       const deadline = setTimeout(() => controller.abort(), 5000);
       try {
         const res = await fetch('/api/auth-check-admin', {
-          headers: { 'X-Forwarded-Uri': '/api/auth-check-admin' },
+          redirect: 'error',
           cache: 'no-store',
           signal: controller.signal
         });

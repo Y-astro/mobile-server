@@ -51,11 +51,11 @@ python3 tools/prepare_wallpapers.py publish <STAGING_DIR> [TARGET_DIR]
 
 ## Using Appearance
 
-Open **Appearance** from the main website or the cloud-storage header. Select a wallpaper, then adjust **Blur** and **Translucency**. Changes preview immediately and are saved in this browser for both pages on the same origin. HTTP and HTTPS, different ports, and other browsers have separate preferences.
+As an administrator, open **Appearance** from the main website or the cloud-storage header. Family accounts and signed-out visitors have no Appearance controls. Select a wallpaper, then adjust **Blur** and **Translucency**. Changes preview immediately and are saved in this browser for both pages on the same origin. HTTP and HTTPS, different ports, and other browsers have separate preferences.
 
 Blur ranges from 0 to 30 pixels; its default is 50% (15 pixels). Translucency ranges from 0% opaque to 100% clear; its default is 35%. Text remains opaque. Reset restores these values and the default wallpaper, `06. Frosted Glass.png`. A separate dark tint maintains readability. Browsers with reduced transparency enabled, or without backdrop-filter support, use solid surfaces.
 
-Sign in to see the private wallpaper gallery. The API serves generated WebP previews and display images; it does not serve originals. All 26 original images remain byte-for-byte in `~/wallpapers/originals/`. Three MP4 files in the source folder were excluded.
+Sign in as an administrator to choose from the private wallpaper gallery. Family pages retain the shared styling and wallpaper rendering without exposing the picker, sliders, or reset controls. The API serves generated WebP previews and display images; it does not serve originals. All 26 original images remain byte-for-byte in `~/wallpapers/originals/`. Three MP4 files in the source folder were excluded.
 
 ## Verified phone release
 
@@ -65,7 +65,9 @@ The private library contains 80 files: 26 originals (296,214,309 bytes), 52 WebP
 
 Validation: 415 Python tests passed with two skips; the complete existing browser suite and seven cloud-appearance groups passed. Cloud checks use the actual native FileBrowser application with synthetic API data, including folder dialogs, editor opening, lazy module imports, wallpaper selection, both sliders, reset, reload, cross-page persistence, mobile layout, reduced transparency, failed images, and catalog timeout/retry. They require the pinned public assets in `.work/filebrowser-static`; run `npm run test:cloud` after capturing those assets. The normal `npm test` suite does not require this cache. Live checks did not modify or delete user files.
 
-The native integration was verified against FileBrowser `v2.63.23/e8a388f8` and entry `index-BqkXVoMb.js`. Before any FileBrowser upgrade, recheck the entry wrapper, named exports, and relative editor/preview chunks. A new upstream filename does not automatically fail closed; deployment must explicitly refuse unreviewed version/entry drift.
+The native integration was verified against FileBrowser `v2.63.23/e8a388f8` and entry `index-BqkXVoMb.js`. The shared settings controller checks the existing authenticated admin endpoint and rejects denied, failed, timed-out, and redirected responses before mounting controls or opening the dialog. Wallpaper read access stays authenticated for both roles.
+
+Before any FileBrowser upgrade, recheck the entry wrapper, named exports, and relative editor/preview chunks. A new upstream filename does not automatically fail closed; deployment must explicitly refuse unreviewed version/entry drift.
 
 ## Rollback
 

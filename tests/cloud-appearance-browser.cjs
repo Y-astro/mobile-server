@@ -172,6 +172,10 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
 
     if (pathname === '/api/auth-check-admin') {
       if (authCheckAdminHang) return;
+      if (authCheckAdminStatus === 302) {
+        res.writeHead(302, {Location: '/login'});
+        return res.end();
+      }
       if (authCheckAdminStatus === 500) {
         res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
         return res.end('Internal Server Error');
@@ -701,6 +705,14 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     await cloudPage.evaluate(() => window.MobileAppearance.openDialog());
     await cloudPage.waitForTimeout(100);
     assert.equal(await cloudPage.locator('#appearance-dialog').count(), 0, 'openDialog must fail closed on 500 auth failure');
+
+    // A login page returning 200 after an auth redirect must never grant admin.
+    authCheckAdminStatus = 302;
+    await cloudPage.goto(`${baseUrl}/drive/files/`);
+    await cloudPage.locator('.item:not(.header)').first().waitFor({state:'visible'});
+    await cloudPage.evaluate(() => window.MobileAppearance.openDialog());
+    assert.equal(await cloudPage.locator('#cloud-appearance-btn').count(), 0, 'Auth redirect must not mount admin controls');
+    assert.equal(await cloudPage.locator('#appearance-dialog').count(), 0, 'Auth redirect must not create settings dialog');
 
     // F. Network hang/timeout on auth-check-admin fails closed
     authCheckAdminStatus = null;
