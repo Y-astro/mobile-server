@@ -46,6 +46,7 @@ from service_catalog import dashboard_services, suwayomi_probe_ports
 from role_templates import read_role_template, RoleTemplateUnavailable
 from agy_sessions import AgySessions
 from wallpapers import dispatch_wallpapers
+from antra_http import dispatch_antra
 from service_panel import (
     ServicePanel,
     probe_process_rss,
@@ -407,6 +408,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.json_error(404, 'Unknown resource')
 
     def do_POST(self):
+        clean_path = self.path.split("?", 1)[0]
+        if clean_path == "/api/antra" or clean_path.startswith("/api/antra/"):
+            dispatch_antra(self)
+            return
         slot = None
         acquired = False
         post_path = canonical_post_path(self.path)
@@ -914,6 +919,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         clean_path = self.path.split("?", 1)[0]
         if clean_path == "/api/wallpapers" or clean_path.startswith("/api/wallpapers/"):
             dispatch_wallpapers(self, user=user)
+            return
+
+        if clean_path == "/api/antra" or clean_path.startswith("/api/antra/") or clean_path in ("/antra", "/antra/"):
+            dispatch_antra(self, user=user)
             return
 
         # Protected Endpoints

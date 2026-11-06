@@ -1,0 +1,4 @@
+# Justified pinned WebSocket client dependency for Antra worker.
+# Upstream Antra pushes per-track completion events over RFC 6455 WebSocket.
+# Pure-Python capable; provisioned by root/host.
+websockets==17.2
