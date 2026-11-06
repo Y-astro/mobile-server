@@ -2320,8 +2320,9 @@ class TestReleaseActivation(unittest.TestCase):
         self.assertEqual(res["profile"], "suwayomi-jar")
         self.assertEqual(res["affected_services"], ["suwayomi"])
         self.assertFalse(res["supervisor_affected"])
-        self.assertEqual(res["total_count"], 44)
-        self.assertEqual(res["unchanged_count"], 43)
+        # The historical 44-file release grows when new owned assets are admitted.
+        self.assertEqual(res["total_count"], len(preconds["files"]))
+        self.assertEqual(res["unchanged_count"], res["total_count"] - 1)
 
         # Symlink precondition rejected
         bad_preconds = copy.deepcopy(preconds)

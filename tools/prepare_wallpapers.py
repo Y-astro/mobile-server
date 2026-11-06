@@ -77,12 +77,15 @@ def verify_library(library_dir: Path) -> Tuple[bool, str]:
         st = manifest_path.stat()
         if st.st_size > MAX_MANIFEST_BYTES or st.st_size == 0:
             return False, f"manifest.json size out of bounds: {st.st_size} bytes"
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
+        with open(manifest_path, "rb") as f:
+            content = f.read(MAX_MANIFEST_BYTES + 1)
+        if len(content) > MAX_MANIFEST_BYTES:
+            return False, "manifest.json exceeds size limit"
+        manifest = json.loads(content)
     except Exception as e:
         return False, f"Failed to parse manifest: {e}"
 
-    if not isinstance(manifest, dict) or manifest.get("version") != 1:
+    if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] != 1:
         return False, "Invalid manifest version or structure"
 
     wallpapers = manifest.get("wallpapers")
@@ -224,15 +227,20 @@ def verify_library(library_dir: Path) -> Tuple[bool, str]:
 
     # 4. Transport manifest check if present
     tm_file = library_dir / "transport-manifest.json"
-    if tm_file.exists():
+    if not tm_file.exists() and not tm_file.is_symlink():
+        return False, "Missing transport-manifest.json"
+    if tm_file.exists() or tm_file.is_symlink():
         if tm_file.is_symlink():
             return False, f"transport-manifest.json is a symlink"
         if not tm_file.is_file():
             return False, f"transport-manifest.json is not a regular file"
         try:
-            with open(tm_file, "r", encoding="utf-8") as f:
-                tm = json.load(f)
-            if not isinstance(tm, dict) or tm.get("version") != 1:
+            with open(tm_file, "rb") as f:
+                content = f.read(MAX_MANIFEST_BYTES + 1)
+            if len(content) > MAX_MANIFEST_BYTES:
+                return False, "transport-manifest.json exceeds size limit"
+            tm = json.loads(content)
+            if not isinstance(tm, dict) or type(tm.get("version")) is not int or tm["version"] != 1:
                 return False, "Invalid transport-manifest structure"
             tm_files = tm.get("files")
             if not isinstance(tm_files, list):
@@ -241,6 +249,8 @@ def verify_library(library_dir: Path) -> Tuple[bool, str]:
             for t_item in tm_files:
                 if not isinstance(t_item, dict) or "path" not in t_item or "sha256" not in t_item or "bytes" not in t_item:
                     return False, f"Invalid transport item: {t_item}"
+                if not isinstance(t_item["path"], str) or not isinstance(t_item["sha256"], str) or not ID_PATTERN.fullmatch(t_item["sha256"]) or not _is_valid_pos_int(t_item["bytes"]):
+                    return False, "Invalid transport item values"
                 if t_item["path"] in tm_map:
                     return False, f"Duplicate entry in transport manifest: {t_item['path']}"
                 tm_map[t_item["path"]] = t_item

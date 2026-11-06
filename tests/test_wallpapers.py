@@ -1,4 +1,5 @@
 """Tests for wallpaper data models, offline preparation tools, and HTTP API integration."""
+import hashlib
 import importlib.util
 import io
 import json
@@ -48,6 +49,14 @@ class WallpaperLibraryUnitTests(unittest.TestCase):
         lib = WallpaperLibrary(self.lib_path / "non_existent")
         res = lib.get_public_list()
         self.assertEqual(res, {"version": 1, "default_id": None, "wallpapers": []})
+
+    def test_existing_incomplete_or_symlink_library_is_corrupt(self):
+        with self.assertRaises(CorruptLibraryError):
+            WallpaperLibrary(self.lib_path).get_public_list()
+        link = self.lib_path / "alias"
+        link.symlink_to(self.lib_path, target_is_directory=True)
+        with self.assertRaises(CorruptLibraryError):
+            WallpaperLibrary(link).get_public_list()
 
     def test_corrupt_manifest_raises_error(self):
         manifest_file = self.lib_path / "manifest.json"
@@ -551,6 +560,7 @@ class WallpaperHTTPIntegrationTests(unittest.TestCase):
         st, body, hdrs = self.request("GET", "/api/wallpapers")
         self.assertEqual(st, 401)
         self.assertEqual(json.loads(body)["status"], "error")
+        self.assertEqual(hdrs.get("cache-control"), "private, no-store")
 
         st, body, hdrs = self.request("GET", f"/api/wallpapers/{'a' * 64}/thumbnail.webp")
         self.assertEqual(st, 401)
@@ -599,7 +609,7 @@ class WallpaperHTTPIntegrationTests(unittest.TestCase):
         (thumb_dir / f"{w_id}.webp").write_bytes(fake_webp)
         (orig_dir / "sample.png").write_bytes(b"origpng")
 
-        fake_sha = "0" * 64
+        fake_sha = hashlib.sha256(fake_webp).hexdigest()
         manifest = {
             "version": 1,
             "default_id": w_id,
@@ -667,6 +677,15 @@ class WallpaperHTTPIntegrationTests(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(body, b"")
         self.assertEqual(hdrs.get("content-type"), "image/webp")
+
+        # Same-size corruption must fail even after the catalog has been cached.
+        (disp_dir / f"{w_id}.webp").write_bytes(b"X" * len(fake_webp))
+        st, _, headers = self.request("GET", f"/api/wallpapers/{w_id}/display.webp", user="testfamily")
+        self.assertEqual(st, 503)
+        self.assertEqual(headers.get("cache-control"), "private, no-store")
+        st, body, headers = self.request("HEAD", f"/api/wallpapers/{w_id}/display.webp", user="testfamily")
+        self.assertEqual(st, 503)
+        self.assertEqual(body, b"")
 
     def test_public_shared_appearance_assets(self):
         for path, expected_type in [

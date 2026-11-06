@@ -54,15 +54,16 @@ class WallpaperLibrary:
         return Path(os.path.expanduser("~/wallpapers"))
 
     def _read_and_validate_manifest(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        if self.root_dir.is_symlink() or not self.root_dir.is_dir():
+        if not self.root_dir.exists() and not self.root_dir.is_symlink():
             empty_payload = {"version": 1, "default_id": None, "wallpapers": []}
             return {}, empty_payload
+        if self.root_dir.is_symlink() or not self.root_dir.is_dir():
+            raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
 
         resolved_root = self.root_dir.resolve()
         manifest_file = self.root_dir / "manifest.json"
         if manifest_file.is_symlink() or not manifest_file.is_file():
-            empty_payload = {"version": 1, "default_id": None, "wallpapers": []}
-            return {}, empty_payload
+            raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
 
         try:
             st = manifest_file.stat()
@@ -81,14 +82,17 @@ class WallpaperLibrary:
                 raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
 
         try:
-            with open(manifest_file, "r", encoding="utf-8") as f:
-                raw_manifest = json.load(f)
+            with open(manifest_file, "rb") as f:
+                content = f.read(MAX_MANIFEST_BYTES + 1)
+            if len(content) > MAX_MANIFEST_BYTES:
+                raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
+            raw_manifest = json.loads(content)
         except Exception:
             raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
 
         if not isinstance(raw_manifest, dict):
             raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
-        if raw_manifest.get("version") != 1:
+        if type(raw_manifest.get("version")) is not int or raw_manifest["version"] != 1:
             raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
 
         wallpapers_data = raw_manifest.get("wallpapers")
@@ -219,6 +223,8 @@ class WallpaperLibrary:
                 content = f.read(expected_bytes + 1)
             if len(content) != expected_bytes:
                 raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
+            if hashlib.sha256(content).hexdigest() != deriv_meta["sha256"]:
+                raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
         except OSError:
             raise WallpaperNotFoundError("Wallpaper file read failure")
 
@@ -229,10 +235,20 @@ DEFAULT_LIBRARY = WallpaperLibrary()
 
 
 def dispatch_wallpapers(handler, user: Optional[str] = None, library: Optional[WallpaperLibrary] = None) -> None:
+    def error(status, message):
+        body = json.dumps({"status": "error", "message": message}).encode("utf-8")
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("Cache-Control", "private, no-store")
+        handler.end_headers()
+        if getattr(handler, "command", "GET") != "HEAD":
+            handler.wfile.write(body)
+
     if user is None:
         user = handler.get_session_user()
     if not user:
-        handler.json_error(401, "Authentication required")
+        error(401, "Authentication required")
         return
 
     lib = library if library is not None else DEFAULT_LIBRARY
@@ -242,7 +258,7 @@ def dispatch_wallpapers(handler, user: Optional[str] = None, library: Optional[W
         try:
             data = lib.get_public_list()
         except CorruptLibraryError:
-            handler.json_error(503, "Wallpaper library is corrupt or incomplete")
+            error(503, "Wallpaper library is corrupt or incomplete")
             return
 
         body = json.dumps(data).encode("utf-8")
@@ -259,17 +275,17 @@ def dispatch_wallpapers(handler, user: Optional[str] = None, library: Optional[W
         remainder = raw_path[len("/api/wallpapers/"):]
         parts = remainder.split("/")
         if len(parts) != 2:
-            handler.json_error(404, "Unknown resource")
+            error(404, "Unknown resource")
             return
 
         wallpaper_id, derivative_name = parts[0], parts[1]
         try:
             content, mime_type = lib.get_derivative(wallpaper_id, derivative_name)
         except WallpaperNotFoundError:
-            handler.json_error(404, "Wallpaper not found")
+            error(404, "Wallpaper not found")
             return
         except CorruptLibraryError:
-            handler.json_error(503, "Wallpaper library is corrupt or incomplete")
+            error(503, "Wallpaper library is corrupt or incomplete")
             return
 
         handler.send_response(200)
@@ -281,4 +297,4 @@ def dispatch_wallpapers(handler, user: Optional[str] = None, library: Optional[W
             handler.wfile.write(content)
         return
 
-    handler.json_error(404, "Unknown resource")
+    error(404, "Unknown resource")

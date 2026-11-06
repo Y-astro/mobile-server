@@ -452,6 +452,14 @@ class TestReleaseTransaction(unittest.TestCase):
             or "expected regular file" in str(ctx.exception)
         )
 
+    def test_public_theme_tokens_exact_exception(self):
+        for value in ("web/theme-tokens.css", "/data/data/com.termux/files/home/.config/dashboard/static/theme-tokens.css"):
+            self.assertFalse(rt.is_forbidden_secret_or_runtime_path(value))
+            self.assertTrue(rt.is_forbidden_secret_or_runtime_path(value + ".key"))
+            self.assertTrue(rt.is_forbidden_secret_or_runtime_path(value.upper()))
+            self.assertTrue(rt.is_forbidden_secret_or_runtime_path(value.replace("/", "\\")))
+        self.assertTrue(rt.is_forbidden_secret_or_runtime_path("/tmp/theme-tokens.css"))
+
     def test_forbidden_secrets_rejected(self):
         """Proof 7b: Manifest with forbidden secret paths is rejected."""
         self.assertTrue(rt.is_forbidden_secret_or_runtime_path("/data/data/com.termux/files/home/users.json"))

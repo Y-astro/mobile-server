@@ -909,6 +909,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
+        clean_path = self.path.split("?", 1)[0]
+        if clean_path == "/api/wallpapers" or clean_path.startswith("/api/wallpapers/"):
+            dispatch_wallpapers(self, user=user)
+            return
+
         # Protected Endpoints
         if not user:
             if self.path.startswith("/api/"):
@@ -917,11 +922,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", "/login")
             self.end_headers()
-            return
-
-        clean_path = self.path.split("?", 1)[0]
-        if clean_path == "/api/wallpapers" or clean_path.startswith("/api/wallpapers/"):
-            dispatch_wallpapers(self, user=user)
             return
 
         if self.path == "/api/notes":

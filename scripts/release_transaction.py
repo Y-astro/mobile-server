@@ -129,6 +129,12 @@ def path_lexists(path: Union[str, Path]) -> bool:
 
 def is_forbidden_secret_or_runtime_path(path_str: str) -> bool:
     """Check whether a path matches forbidden secret, runtime, DB, key, or credential patterns."""
+    # Public design tokens are the sole reviewed exception to the credential-name guard.
+    if path_str in (
+        "web/theme-tokens.css",
+        "/data/data/com.termux/files/home/.config/dashboard/static/theme-tokens.css",
+    ):
+        return False
     normalized = path_str.replace("\\", "/").lower()
     basename = os.path.basename(normalized)
     parts = normalized.split("/")
