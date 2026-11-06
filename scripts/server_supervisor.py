@@ -176,23 +176,51 @@ def matching_processes(sid):
                                 except OSError:
                                     pass
             elif sid == 'antra':
-                target = str(HOME / '.local/lib/mobile-server/antra_worker.py')
-                targets = {target}
-                with contextlib.suppress(OSError):
-                    targets.add(str(Path(target).resolve()))
                 match = False
-                if base.startswith('python'):
-                    for a in args[1:]:
-                        if a.startswith('-'):
+                if base.startswith('python') and len(args) >= 2:
+                    idx = 1
+                    safe_cli = True
+                    safe_flags = {'-u', '-B', '-E', '-s', '-S', '-O', '-OO', '-v', '-q', '-I', '-P'}
+                    while idx < len(args):
+                        arg = args[idx]
+                        if arg == '--':
+                            idx += 1
+                            break
+                        if arg == '-' or arg.startswith('-c') or arg.startswith('-m'):
+                            safe_cli = False
+                            break
+                        if not arg.startswith('-'):
+                            break
+                        if arg in safe_flags or (not arg.startswith('--') and len(arg) > 1 and all(c in 'uBEsSOvqIP' for c in arg[1:])):
+                            idx += 1
                             continue
-                        if a in targets or a.endswith('/antra_worker.py'):
-                            try:
-                                cand = a if os.path.isabs(a) else os.path.normpath(os.path.join(str((proc / 'cwd').resolve()), a))
-                                if cand in targets or str(Path(cand).resolve()) in targets:
-                                    match = True
-                                    break
-                            except OSError:
-                                pass
+                        safe_cli = False
+                        break
+                    if safe_cli and idx < len(args):
+                        script_arg = args[idx]
+                        script_args = args[idx + 1:]
+                        if len(script_args) == 0:
+                            target = HOME / '.local/lib/mobile-server/antra_worker.py'
+                            targets = {str(target)}
+                            with contextlib.suppress(OSError):
+                                targets.add(str(target.resolve()))
+                            if script_arg in targets:
+                                match = True
+                            elif not os.path.isabs(script_arg) and (script_arg == 'antra_worker.py' or script_arg.endswith('/antra_worker.py')):
+                                try:
+                                    if (proc / 'cwd').is_symlink():
+                                        proc_cwd = os.readlink(proc / 'cwd')
+                                    elif (proc / 'cwd').is_file():
+                                        proc_cwd = (proc / 'cwd').read_text().strip()
+                                    else:
+                                        proc_cwd = str((proc / 'cwd').resolve())
+                                    proc_cwd_path = Path(proc_cwd).resolve()
+                                    proc_cwd_path.relative_to(HOME.resolve())
+                                    candidate = (proc_cwd_path / script_arg).resolve()
+                                    if candidate == target.resolve() or str(candidate) in targets:
+                                        match = True
+                                except (OSError, ValueError):
+                                    pass
             else:
                 owned_argument = {
                     'adguard': str(HOME / 'adguard/data/AdGuardHome.yaml'),

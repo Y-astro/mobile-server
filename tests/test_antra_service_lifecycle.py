@@ -50,6 +50,7 @@ sys.path.insert(0, str(REPO_ROOT / "app"))
 import app.service_catalog as sc
 import scripts.release_activation as ra
 import scripts.release_transaction as rt
+import scripts.server_supervisor as sup
 import scripts.termux_activation as ta
 import tests.test_release_activation as tra
 
@@ -100,16 +101,28 @@ class AntraServiceLifecycleTests(unittest.TestCase):
         self.live_cat = self.mobile_lib / "service_catalog.py"
         install_16_catalog(self.live, self.preconds)
 
-        # Install live supervisor
+        # Install actual PRIOR supervisor bytes from base 5f8e420 on live
+        self.prior_sup_bytes = subprocess.check_output(
+            ["git", "show", "5f8e420:scripts/server_supervisor.py"],
+            cwd=str(REPO_ROOT),
+        )
         self.live_sup = self.home / "bin/server_supervisor.py"
-        shutil.copyfile(REPO_ROOT / "scripts/server_supervisor.py", self.live_sup)
+        self.live_sup.write_bytes(self.prior_sup_bytes)
         os.chmod(self.live_sup, 0o700)
+        sup_sha, sup_size = ra.rt.compute_file_sha256(self.live_sup)
+        sup_entry = next(f for f in self.preconds["files"] if f["path"] == ra.SUPERVISOR_REMOTE)
+        sup_entry.update(kind="file", sha256=sup_sha, bytes=sup_size, mode="0o700")
 
-        # Candidate bundle setup: 17 catalog
+        # Candidate bundle setup: 17 catalog and candidate supervisor
         self.bundle_cat = self.bundle / "app/service_catalog.py"
         self.bundle_cat.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(REPO_ROOT / "app/service_catalog.py", self.bundle_cat)
         os.chmod(self.bundle_cat, 0o600)
+
+        self.bundle_sup = self.bundle / "scripts/server_supervisor.py"
+        self.bundle_sup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO_ROOT / "scripts/server_supervisor.py", self.bundle_sup)
+        os.chmod(self.bundle_sup, 0o700)
 
         # Ensure notes, document_conversion, and gateway are unchanged between bundle and live
         for name in ("notes.py", "document_conversion.py"):
@@ -175,10 +188,22 @@ class AntraServiceLifecycleTests(unittest.TestCase):
         self.assertTrue(sup)
 
         # 6. Static dashboard files -> dashboard
-        st_entry = [{"remote": "/data/data/com.termux/files/home/.config/dashboard/static/antra.html", "action": rt.ACTION_CREATE}]
-        aff, sup, _ = ra.map_changed_destinations(st_entry, profile=ra.PROFILE_ANTRA_SERVICE)
-        self.assertEqual(aff, {"dashboard"})
-        self.assertFalse(sup)
+        for s in ("antra.html", "antra.css", "antra.js"):
+            st_entry = [{"remote": f"/data/data/com.termux/files/home/.config/dashboard/static/{s}", "action": rt.ACTION_CREATE}]
+            aff, sup, _ = ra.map_changed_destinations(st_entry, profile=ra.PROFILE_ANTRA_SERVICE)
+            self.assertEqual(aff, {"dashboard"})
+            self.assertFalse(sup)
+
+        # 7. server_supervisor.py -> supervisor_affected
+        sup_entry = [{"remote": ra.SUPERVISOR_REMOTE, "action": rt.ACTION_REPLACE}]
+        aff, sup, _ = ra.map_changed_destinations(sup_entry, profile=ra.PROFILE_ANTRA_SERVICE)
+        self.assertEqual(aff, set())
+        self.assertTrue(sup)
+
+        # 8. server_supervisor.py CREATE forbidden
+        sup_create = [{"remote": ra.SUPERVISOR_REMOTE, "action": rt.ACTION_CREATE}]
+        with self.assertRaisesRegex(ra.ActivationError, "permits only modifying existing.*with action REPLACE"):
+            ra.map_changed_destinations(sup_create, profile=ra.PROFILE_ANTRA_SERVICE)
 
     def test_unrelated_profiles_reject_16_to_17_addition(self):
         """General and suwayomi profiles strictly reject 16->17 catalog addition."""
@@ -209,53 +234,113 @@ class AntraServiceLifecycleTests(unittest.TestCase):
         ta.validate_catalog_transition(p_svcs, c_svcs, home_str, prefix_str, profile="antra-service")
 
     def test_antra_service_profile_rejects_unrelated_destination_changes(self):
-        """Profile 'antra-service' prohibits changes to caddy, gateway, or suwayomi."""
+        """Profile 'antra-service' prohibits changes to caddy, gateway, suwayomi, unrelated static, or auth."""
         forbidden_entries = [
             [{"remote": "/data/data/com.termux/files/home/.config/caddy/Caddyfile", "action": rt.ACTION_REPLACE}],
             [{"remote": "/data/data/com.termux/files/home/bin/mobile-gateway", "action": rt.ACTION_REPLACE}],
             [{"remote": ra.SUWAYOMI_LAUNCHER_REMOTE, "action": rt.ACTION_REPLACE}],
             [{"remote": ra.SUWAYOMI_FILTER_REMOTE, "action": rt.ACTION_REPLACE}],
+            [{"remote": "/data/data/com.termux/files/home/.config/dashboard/static/appearance.js", "action": rt.ACTION_REPLACE}],
+            [{"remote": "/data/data/com.termux/files/home/.config/dashboard/static/appearance.css", "action": rt.ACTION_REPLACE}],
+            [{"remote": "/data/data/com.termux/files/home/.config/dashboard/static/theme-tokens.css", "action": rt.ACTION_REPLACE}],
+            [{"remote": "/data/data/com.termux/files/home/.config/dashboard/static/admin.html", "action": rt.ACTION_REPLACE}],
+            [{"remote": "/data/data/com.termux/files/home/.config/dashboard/static/family.html", "action": rt.ACTION_REPLACE}],
+            [{"remote": "/data/data/com.termux/files/home/.config/dashboard/static/login.html", "action": rt.ACTION_REPLACE}],
+            [{"remote": "/data/data/com.termux/files/home/.local/lib/mobile-server/auth.py", "action": rt.ACTION_REPLACE}],
+            [{"remote": "/data/data/com.termux/files/home/.local/lib/mobile-server/cloud.py", "action": rt.ACTION_REPLACE}],
         ]
         for f_entry in forbidden_entries:
             with self.assertRaisesRegex(ra.ActivationError, "prohibits changes"):
                 ra.map_changed_destinations(f_entry, profile=ra.PROFILE_ANTRA_SERVICE)
 
-    def test_native_driver_antra_worker_matching_and_decoy_rejection(self):
-        """TermuxLifecycleDriver matches authentic antra worker process and excludes decoys."""
+    def test_native_driver_and_supervisor_agree_on_matching_and_decoy_rejection(self):
+        """Both TermuxLifecycleDriver and server_supervisor agree on authentic antra worker and reject decoys."""
         proc_dir = self.root / "mock_proc"
         proc_dir.mkdir(parents=True, exist_ok=True)
         driver = ta.TermuxLifecycleDriver(namespace_root=self.live, proc_root=proc_dir)
 
-        # 1. Authentic process (PID 1001)
+        # Configure standalone supervisor state
+        sup.HOME = self.home
+        sup.PREFIX = self.usr
+        sup.PROC = proc_dir
+
+        worker_target = str((self.home / ".local/lib/mobile-server/antra_worker.py").resolve())
+
+        # 1. Authentic process with -u (PID 1001)
         p1 = proc_dir / "1001"
         p1.mkdir()
         (p1 / "stat").write_text("1001 (python3) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 100000 0 0\n")
-        worker_target = str((self.home / ".local/lib/mobile-server/antra_worker.py").resolve())
         (p1 / "cmdline").write_bytes(f"/usr/bin/python3\0-u\0{worker_target}\0".encode())
 
-        # 2. Decoy -c code execution (PID 1002)
+        # 2. Authentic process with safe flags -B and -- (PID 1002)
         p2 = proc_dir / "1002"
         p2.mkdir()
         (p2 / "stat").write_text("1002 (python3) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 100001 0 0\n")
-        (p2 / "cmdline").write_bytes(b"/usr/bin/python3\0-c\0import antra_worker\0")
+        (p2 / "cmdline").write_bytes(f"/usr/bin/python3\0-B\0--\0{worker_target}\0".encode())
 
-        # 3. Decoy different script (PID 1003)
+        # 3. Authentic process with cwd-relative script inside HOME (PID 1003)
         p3 = proc_dir / "1003"
         p3.mkdir()
         (p3 / "stat").write_text("1003 (python3) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 100002 0 0\n")
-        (p3 / "cmdline").write_bytes(b"/usr/bin/python3\0/other/script.py\0")
+        (p3 / "cwd").symlink_to(self.mobile_lib)
+        (p3 / "cmdline").write_bytes(b"/usr/bin/python3\0-u\0antra_worker.py\0")
 
-        # 4. Zombie authentic path (PID 1004)
-        p4 = proc_dir / "1004"
-        p4.mkdir()
-        (p4 / "stat").write_text("1004 (python3) Z 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 100003 0 0\n")
-        (p4 / "cmdline").write_bytes(f"/usr/bin/python3\0-u\0{worker_target}\0".encode())
+        # 4. Decoy -c code execution (PID 2001)
+        d1 = proc_dir / "2001"
+        d1.mkdir()
+        (d1 / "stat").write_text("2001 (python3) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 200001 0 0\n")
+        (d1 / "cmdline").write_bytes(f"/usr/bin/python3\0-c\0pass\0{worker_target}\0".encode())
 
-        matches = driver.matching_processes("antra")
-        self.assertEqual(len(matches), 1)
-        self.assertEqual(matches[0][0], 1001)
-        self.assertEqual(matches[0][1], "100000")
+        # 5. Decoy combined -cpass (PID 2002)
+        d2 = proc_dir / "2002"
+        d2.mkdir()
+        (d2 / "stat").write_text("2002 (python3) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 200002 0 0\n")
+        (d2 / "cmdline").write_bytes(f"/usr/bin/python3\0-cpass\0{worker_target}\0".encode())
+
+        # 6. Decoy -m code execution (PID 2003)
+        d3 = proc_dir / "2003"
+        d3.mkdir()
+        (d3 / "stat").write_text("2003 (python3) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 200003 0 0\n")
+        (d3 / "cmdline").write_bytes(f"/usr/bin/python3\0-m\0pass\0{worker_target}\0".encode())
+
+        # 7. Decoy unknown option with value -W ignore (PID 2004)
+        d4 = proc_dir / "2004"
+        d4.mkdir()
+        (d4 / "stat").write_text("2004 (python3) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 200004 0 0\n")
+        (d4 / "cmdline").write_bytes(f"/usr/bin/python3\0-W\0ignore\0{worker_target}\0".encode())
+
+        # 8. Decoy extraneous trailing argument (PID 2005)
+        d5 = proc_dir / "2005"
+        d5.mkdir()
+        (d5 / "stat").write_text("2005 (python3) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 200005 0 0\n")
+        (d5 / "cmdline").write_bytes(f"/usr/bin/python3\0-u\0{worker_target}\0extraneous_arg\0".encode())
+
+        # 9. Decoy relative script with cwd in unrelated directory (PID 2006)
+        d6 = proc_dir / "2006"
+        d6.mkdir()
+        (d6 / "stat").write_text("2006 (python3) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 200006 0 0\n")
+        (d6 / "cwd").symlink_to(self.root)
+        (d6 / "cmdline").write_bytes(b"/usr/bin/python3\0-u\0antra_worker.py\0")
+
+        # 10. Decoy different script (PID 2007)
+        d7 = proc_dir / "2007"
+        d7.mkdir()
+        (d7 / "stat").write_text("2007 (python3) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 200007 0 0\n")
+        (d7 / "cmdline").write_bytes(b"/usr/bin/python3\0/other/script.py\0")
+
+        # 11. Zombie authentic path (PID 2008)
+        d8 = proc_dir / "2008"
+        d8.mkdir()
+        (d8 / "stat").write_text("2008 (python3) Z 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 200008 0 0\n")
+        (d8 / "cmdline").write_bytes(f"/usr/bin/python3\0-u\0{worker_target}\0".encode())
+
+        matches_driver = driver.matching_processes("antra")
+        matches_sup = sup.matching_processes("antra")
+
+        self.assertEqual(sorted(matches_driver), sorted(matches_sup))
+        self.assertEqual(sorted([p for p, _ in matches_driver]), [1001, 1002, 1003])
         self.assertTrue(driver.healthy("antra", {}))
+        self.assertTrue(sup.healthy("antra", {}))
 
     def test_pre_existing_worker_refused_before_initial_transition(self):
         """Pre-existing antra worker process before initial 16->17 transition is refused fail-closed."""
@@ -292,6 +377,9 @@ class AntraServiceLifecycleTests(unittest.TestCase):
         # Verified live catalog updated to 17 services
         self.assertEqual(ra.compute_file_sha256(self.live_cat), ra.ANTRA_SERVICE_CATALOG_SHA256)
 
+        # Verified live supervisor updated from base 5f8e420 to candidate
+        self.assertEqual(ra.compute_file_sha256(self.live_sup), ra.compute_file_sha256(self.bundle_sup))
+
     def test_standalone_recovery_after_bundle_deletion_stops_worker_restores_16(self):
         """Interrupted activation recovers cleanly after candidate bundle is deleted and live helpers damaged."""
         prior_svcs = sc.runtime_services(str(self.home), str(self.usr))
@@ -308,6 +396,8 @@ class AntraServiceLifecycleTests(unittest.TestCase):
         rec_hashes = ra.preserve_recovery_lifecycle_code(self.tx_dir, self.live)
         self.assertIn("service_catalog.py", rec_hashes)
         self.assertEqual(rec_hashes["service_catalog.py"], ra.SUWAYOMI_FORK_FREE_CATALOG_SHA256)
+        self.assertIn("server_supervisor.py", rec_hashes)
+        self.assertEqual(rec_hashes["server_supervisor.py"], hashlib.sha256(self.prior_sup_bytes).hexdigest())
 
         act_journal = {
             "version": ra.JOURNAL_VERSION,
@@ -360,6 +450,9 @@ class AntraServiceLifecycleTests(unittest.TestCase):
 
         # 2. Live catalog restored to exact 16-service preimage
         self.assertEqual(ra.compute_file_sha256(self.live_cat), ra.SUWAYOMI_FORK_FREE_CATALOG_SHA256)
+
+        # 2b. Live supervisor restored to exact prior base 5f8e420 preimage
+        self.assertEqual(ra.compute_file_sha256(self.live_sup), hashlib.sha256(self.prior_sup_bytes).hexdigest())
 
         # 3. antra was NEVER relaunched in rollback
         self.assertEqual(driver.launch_counts.get("antra", 0), 0)

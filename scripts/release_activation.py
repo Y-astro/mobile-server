@@ -545,6 +545,12 @@ def map_changed_destinations(
                 affected_services.add("dashboard")
                 affected_services.add("antra")
                 supervisor_affected = True
+            elif norm == SUPERVISOR_REMOTE:
+                if action != rt.ACTION_REPLACE:
+                    raise ActivationError(
+                        f"Profile '{PROFILE_ANTRA_SERVICE}' permits only modifying existing {SUPERVISOR_REMOTE} with action REPLACE, found: {action}"
+                    )
+                supervisor_affected = True
             elif norm.endswith("home/.local/lib/mobile-server/antra_worker.py"):
                 affected_services.add("antra")
             elif norm.endswith("home/.local/lib/mobile-server/antra_client.py"):
@@ -554,7 +560,10 @@ def map_changed_destinations(
             elif norm.endswith("home/.local/lib/mobile-server/antra_store.py"):
                 affected_services.add("antra")
                 affected_services.add("dashboard")
-            elif norm.endswith("usr/bin/dashboard") or "/home/.config/dashboard/static/" in norm:
+            elif norm.endswith("usr/bin/dashboard") or any(
+                norm.endswith(f"home/.config/dashboard/static/{s}")
+                for s in ("antra.html", "antra.css", "antra.js")
+            ):
                 affected_services.add("dashboard")
             else:
                 raise ActivationError(

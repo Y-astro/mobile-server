@@ -136,12 +136,14 @@ def extract_python_script_and_args(cmdline: List[str]) -> Tuple[Optional[Path], 
         if arg == "--":
             idx += 1
             break
-        if not arg.startswith("-") or arg == "-":
+        if arg == "-" or arg.startswith("-c") or arg.startswith("-m"):
+            return None, []
+        if not arg.startswith("-"):
             break
-        if arg in SAFE_PYTHON_STANDALONE_FLAGS:
+        if arg in SAFE_PYTHON_STANDALONE_FLAGS or (not arg.startswith("--") and len(arg) > 1 and all(c in "uBEsSOvqIP" for c in arg[1:])):
             idx += 1
             continue
-        # Reject option-value flags (-X, -W), code execution (-c, -m), or combined flags
+        # Reject option-value flags (-X, -W), code execution (-c, -m), or unknown flags
         return None, []
     if idx < n:
         script = Path(cmdline[idx])
@@ -575,12 +577,17 @@ class TermuxLifecycleDriver(LifecycleDriver):
                 cmdline_bytes = (proc / "cmdline").read_bytes()
                 cmdline = cmdline_bytes.decode(errors="replace").rstrip("\0").split("\0")
                 script_path, remaining = extract_python_script_and_args(cmdline)
-                if script_path is None:
+                if script_path is None or remaining:
                     continue
 
                 if not script_path.is_absolute():
                     try:
-                        target_cwd = Path(os.readlink(str(proc / "cwd"))).resolve()
+                        if (proc / "cwd").is_symlink():
+                            target_cwd = Path(os.readlink(str(proc / "cwd"))).resolve()
+                        elif (proc / "cwd").is_file():
+                            target_cwd = Path((proc / "cwd").read_text().strip()).resolve()
+                        else:
+                            target_cwd = (proc / "cwd").resolve()
                         target_cwd.relative_to(self.home_dir.resolve())
                         resolved_script = (target_cwd / script_path).resolve()
                     except (OSError, ValueError):
@@ -626,6 +633,8 @@ class TermuxLifecycleDriver(LifecycleDriver):
                 cmdline = cmdline_bytes.decode(errors="replace").rstrip("\0").split("\0")
                 script_path, remaining = extract_python_script_and_args(cmdline)
                 if script_path is None:
+                    continue
+                if len(remaining) != 1 or remaining[0] not in ("--foreground", "--daemon"):
                     continue
 
                 if not script_path.is_absolute():
