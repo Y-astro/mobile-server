@@ -31,6 +31,7 @@ Covers:
 import contextlib
 import copy
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -48,9 +49,41 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
-def prior_catalog_source():
-    """Construct the reviewed prior catalog by removing only the appended service."""
+def reviewed_16_catalog_source():
+    """Construct the reviewed 16-service catalog by removing only the antra service."""
     source = (REPO_ROOT / "app/service_catalog.py").read_text()
+    source = source.replace("    'antra': {},\n", "", 1)
+    source = source.replace("        'antra': dict(cmd=[f'{p}/bin/python3', '-u', f'{h}/.local/lib/mobile-server/antra_worker.py']),\n", "", 1)
+    old_end = '''            "open_url": "javascript:alert('Battery Guard monitors readings and sends alerts; it cannot control charging hardware.');",
+            "open_label": "Battery Monitor",
+            "can_toggle": True
+        }
+    }'''
+    new_part = '''            "open_url": "javascript:alert('Battery Guard monitors readings and sends alerts; it cannot control charging hardware.');",
+            "open_label": "Battery Monitor",
+            "can_toggle": True
+        },
+        "antra": {
+            "id": "antra",
+            "name": "Antra Music",
+            "category": "Media",
+            "port": None,
+            "pattern": "antra_worker",
+            "icon": "music",
+            "desc": "High-Resolution Music Downloader (FLAC 24-bit)",
+            "open_url": "/antra/",
+            "open_label": "Open Antra",
+            "can_toggle": True
+        }
+    }'''
+    source = source.replace(new_part, old_end, 1)
+    assert hashlib.sha256(source.encode()).hexdigest() == ra.SUWAYOMI_FORK_FREE_CATALOG_SHA256
+    return source
+
+
+def prior_catalog_source():
+    """Construct the reviewed prior 15 catalog by removing suwayomi_scheduler from the 16 catalog."""
+    source = reviewed_16_catalog_source()
     line = "        'suwayomi_scheduler': dict(cmd=[f'{p}/bin/python3', f'{h}/bin/suwayomi_daily_update.py', '--foreground']),\n"
     assert source.count(line) == 1
     return source.replace(line, "", 1)
@@ -269,7 +302,7 @@ class TestReleaseActivation(unittest.TestCase):
         result = self._build_activation_fixture(unchanged_all=True)
         bundle, _, preconds, live, _ = result
         install_prior_catalog(live, preconds)
-        shutil.copyfile(REPO_ROOT / "app/service_catalog.py", bundle / "app/service_catalog.py")
+        (bundle / "app/service_catalog.py").write_text(reviewed_16_catalog_source(), encoding="utf-8")
         (bundle / "scripts/start_suwayomi.sh").write_text("# candidate launcher\n")
 
         # Controller tests simulate processes. Native capture and direct launch are
@@ -331,7 +364,7 @@ class TestReleaseActivation(unittest.TestCase):
                 f["mode"] = "0o755"
 
         # Ensure catalog on live disk matches reviewed 16-service catalog
-        catalog_src = (REPO_ROOT / "app/service_catalog.py").read_bytes()
+        catalog_src = reviewed_16_catalog_source().encode()
         live_catalog = live / "home/.local/lib/mobile-server/service_catalog.py"
         live_catalog.parent.mkdir(parents=True, exist_ok=True)
         live_catalog.write_bytes(catalog_src)
@@ -1615,7 +1648,7 @@ class TestReleaseActivation(unittest.TestCase):
         (bundle / "scripts/start_suwayomi.sh").write_text("# CANDIDATE_LAUNCHER\n", encoding="utf-8")
         install_prior_catalog(live, preconds)
         preconds_file.write_text(json.dumps(preconds), encoding="utf-8")
-        shutil.copyfile(REPO_ROOT / "app/service_catalog.py", bundle / "app/service_catalog.py")
+        (bundle / "app/service_catalog.py").write_text(reviewed_16_catalog_source(), encoding="utf-8")
         proc_lc = subprocess.run(
             [
                 sys.executable,
@@ -2127,7 +2160,7 @@ class TestReleaseActivation(unittest.TestCase):
         self.assertIn("Live catalog hash mismatch", str(ctx.exception))
 
         # Restore catalog
-        clean_c_bytes = (REPO_ROOT / "app/service_catalog.py").read_bytes()
+        clean_c_bytes = reviewed_16_catalog_source().encode()
         (live / "home/.local/lib/mobile-server/service_catalog.py").write_bytes(clean_c_bytes)
         (bundle / "app/service_catalog.py").write_bytes(clean_c_bytes)
         clean_c_sha, clean_c_size = ra.rt.compute_file_sha256(live / "home/.local/lib/mobile-server/service_catalog.py")

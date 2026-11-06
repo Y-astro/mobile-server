@@ -187,6 +187,7 @@ DEPENDENCY_ORDER = [
     "dashboard",
     "caddy",
     "suwayomi_scheduler",
+    "antra",
 ]
 
 # Release Profiles
@@ -194,7 +195,14 @@ PROFILE_GENERAL = "general"
 PROFILE_SUWAYOMI_FILTER = "suwayomi-filter"
 PROFILE_SUWAYOMI_LIFECYCLE = "suwayomi-lifecycle"
 PROFILE_SUWAYOMI_JAR = "suwayomi-jar"
-VALID_PROFILES = (PROFILE_GENERAL, PROFILE_SUWAYOMI_FILTER, PROFILE_SUWAYOMI_LIFECYCLE, PROFILE_SUWAYOMI_JAR)
+PROFILE_ANTRA_SERVICE = "antra-service"
+VALID_PROFILES = (
+    PROFILE_GENERAL,
+    PROFILE_SUWAYOMI_FILTER,
+    PROFILE_SUWAYOMI_LIFECYCLE,
+    PROFILE_SUWAYOMI_JAR,
+    PROFILE_ANTRA_SERVICE,
+)
 SUWAYOMI_FILTER_REMOTE = "/data/data/com.termux/files/home/bin/suwayomi_graphql_filter.py"
 SUWAYOMI_LAUNCHER_REMOTE = "/data/data/com.termux/files/home/bin/start_suwayomi.sh"
 SUPERVISOR_REMOTE = "/data/data/com.termux/files/home/bin/server_supervisor.py"
@@ -204,6 +212,7 @@ DEFAULT_SUWAYOMI_JAR_LOCAL = ".work/suwayomi-parallel.jar"
 
 SUWAYOMI_FORK_FREE_LAUNCHER_SHA256 = "510d7d887255832fedf2d81e681ddcdc3082bf1ae5a09c5237e3c9ae5e12df99"
 SUWAYOMI_FORK_FREE_CATALOG_SHA256 = "9c9163f9c2e1fceaf0d9dd2989d869ce76d1566b1aa66e5f78e0cb90a7d77159"
+ANTRA_SERVICE_CATALOG_SHA256 = "05b7591955d71c7b6ab7c4b3d9f5ce9026d6e09109287f52be6f56534c031ab9"
 SUWAYOMI_ACCEPTED_JAR_SHA256 = "9b7bf58329eccb3dcfb7246360f6818f7391b8804330a9e0491006049678bedc"
 SUWAYOMI_JAR_MODE = 0o644
 
@@ -366,6 +375,15 @@ def map_destination_to_component(remote_path: str) -> Optional[Tuple[str, bool, 
         return ("dashboard", False, False)
     if "/home/.config/dashboard/static/" in norm:
         return ("dashboard", False, False)
+    # Antra / mobile-server helpers:
+    if norm.endswith("home/.local/lib/mobile-server/antra_worker.py"):
+        return ("antra", False, False)
+    if norm.endswith("home/.local/lib/mobile-server/antra_client.py"):
+        return ("antra", False, False)
+    if norm.endswith("home/.local/lib/mobile-server/antra_http.py"):
+        return ("dashboard", False, False)
+    if norm.endswith("home/.local/lib/mobile-server/antra_store.py"):
+        return ("antra_store", False, False)
     if norm.endswith("home/.local/lib/mobile-server/service_catalog.py"):
         return ("service_catalog", False, False)
     if "/home/.local/lib/mobile-server/" in norm:
@@ -458,6 +476,9 @@ def map_changed_destinations(
                 supervisor_affected = True
             elif comp == "supervisor":
                 supervisor_affected = True
+            elif comp == "antra_store":
+                affected_services.add("antra")
+                affected_services.add("dashboard")
             else:
                 affected_services.add(comp)
 
@@ -513,6 +534,32 @@ def map_changed_destinations(
                 )
             affected_services.add("suwayomi")
             supervisor_affected = False
+
+        elif profile == PROFILE_ANTRA_SERVICE:
+            norm = remote.replace("\\", "/").rstrip("/")
+            if norm == SERVICE_CATALOG_REMOTE:
+                if action != rt.ACTION_REPLACE:
+                    raise ActivationError(
+                        f"Profile '{PROFILE_ANTRA_SERVICE}' permits only modifying existing {SERVICE_CATALOG_REMOTE} with action REPLACE, found: {action}"
+                    )
+                affected_services.add("dashboard")
+                affected_services.add("antra")
+                supervisor_affected = True
+            elif norm.endswith("home/.local/lib/mobile-server/antra_worker.py"):
+                affected_services.add("antra")
+            elif norm.endswith("home/.local/lib/mobile-server/antra_client.py"):
+                affected_services.add("antra")
+            elif norm.endswith("home/.local/lib/mobile-server/antra_http.py"):
+                affected_services.add("dashboard")
+            elif norm.endswith("home/.local/lib/mobile-server/antra_store.py"):
+                affected_services.add("antra")
+                affected_services.add("dashboard")
+            elif norm.endswith("usr/bin/dashboard") or "/home/.config/dashboard/static/" in norm:
+                affected_services.add("dashboard")
+            else:
+                raise ActivationError(
+                    f"Profile '{PROFILE_ANTRA_SERVICE}' prohibits changes to {remote}"
+                )
 
     if "ssh" in affected_services:
         raise ActivationError("SSH service restart is strictly prohibited")
@@ -799,10 +846,11 @@ def validate_activation_journal(
     elif validated_profile == PROFILE_SUWAYOMI_JAR:
         tx_entries = tx_journal.get("entries", [])
         assets = act_journal.get("recovery_assets", {})
-        if assets.get("service_catalog.py") != SUWAYOMI_FORK_FREE_CATALOG_SHA256:
-            raise ActivationError("JAR recovery requires the reviewed preserved 16-service catalog")
+        cat_sha = assets.get("service_catalog.py")
+        if cat_sha not in (SUWAYOMI_FORK_FREE_CATALOG_SHA256, ANTRA_SERVICE_CATALOG_SHA256):
+            raise ActivationError("JAR recovery requires the reviewed preserved 16- or 17-service catalog")
         for remote, digest in ((SUWAYOMI_LAUNCHER_REMOTE, SUWAYOMI_FORK_FREE_LAUNCHER_SHA256),
-                               (SERVICE_CATALOG_REMOTE, SUWAYOMI_FORK_FREE_CATALOG_SHA256)):
+                               (SERVICE_CATALOG_REMOTE, cat_sha)):
             entry = next((e for e in tx_entries if e.get("remote") == remote), None)
             if (entry is None or entry.get("action") != rt.ACTION_UNTOUCHED
                     or entry.get("original_sha256") != digest or entry.get("candidate_sha256") != digest):
@@ -829,6 +877,95 @@ def validate_activation_journal(
         if rt.normalize_mode(jar_entry.get("original_mode")) != SUWAYOMI_JAR_MODE:
             raise ActivationError(
                 f"Profile '{PROFILE_SUWAYOMI_JAR}' original mode mismatch: expected {oct(SUWAYOMI_JAR_MODE)}, got {jar_entry.get('original_mode')}"
+            )
+
+    elif validated_profile == PROFILE_ANTRA_SERVICE:
+        transition = act_journal.get("transition")
+        if not isinstance(transition, dict):
+            raise ActivationError("Missing or invalid transition metadata in antra-service activation journal")
+        if transition.get("type") != "antra_16_to_17":
+            raise ActivationError(f"Invalid transition type: {transition.get('type')!r}")
+        prior_cnt = transition.get("prior_service_count")
+        if type(prior_cnt) is not int or isinstance(prior_cnt, bool) or prior_cnt != 16:
+            raise ActivationError(f"Invalid prior service count: {prior_cnt!r}")
+        cand_cnt = transition.get("candidate_service_count")
+        if type(cand_cnt) is not int or isinstance(cand_cnt, bool) or cand_cnt != 17:
+            raise ActivationError(f"Invalid candidate service count: {cand_cnt!r}")
+        if transition.get("new_services") != ["antra"]:
+            raise ActivationError(f"Invalid new services in transition: {transition.get('new_services')!r}")
+        rec_hashes = transition.get("recovery_hashes")
+        if not isinstance(rec_hashes, dict) or rec_hashes != act_journal.get("recovery_assets"):
+            raise ActivationError("Transition recovery_hashes missing or mismatch with journal recovery_assets")
+        for req_asset in ("service_catalog.py", "server_supervisor.py"):
+            if not isinstance(rec_hashes.get(req_asset), str) or len(rec_hashes[req_asset]) != 64:
+                raise ActivationError(f"Transition recovery_hashes missing valid 64-char hash for {req_asset}")
+
+        tx_entries = tx_journal.get("entries", [])
+        cat_entry = next((e for e in tx_entries if (e.get("dest_path") or e.get("remote")) == SERVICE_CATALOG_REMOTE), None)
+        if cat_entry is None or cat_entry.get("action") != rt.ACTION_REPLACE:
+            raise ActivationError(f"File transaction missing required replace entry for {SERVICE_CATALOG_REMOTE}")
+
+        orig_sha = cat_entry.get("original_sha256")
+        cand_sha = cat_entry.get("candidate_sha256")
+        if not isinstance(orig_sha, str) or len(orig_sha) != 64:
+            raise ActivationError("File transaction catalog original_sha256 invalid or missing")
+        if not isinstance(cand_sha, str) or len(cand_sha) != 64:
+            raise ActivationError("File transaction catalog candidate_sha256 invalid or missing")
+
+        if rec_hashes["service_catalog.py"].lower() != orig_sha.lower():
+            raise ActivationError("Preserved recovery catalog hash does not match file transaction original preimage")
+        if transition.get("prior_catalog_sha256", "").lower() != orig_sha.lower():
+            raise ActivationError("Transition prior_catalog_sha256 does not match file transaction original preimage")
+        if transition.get("candidate_catalog_sha256", "").lower() != cand_sha.lower():
+            raise ActivationError("Transition candidate_catalog_sha256 does not match file transaction candidate preimage")
+
+        staged_rel = cat_entry.get("staged_file")
+        backup_rel = cat_entry.get("backup_file")
+        if not staged_rel or not backup_rel:
+            raise ActivationError("File transaction catalog entry missing staged_file or backup_file")
+
+        staged_file = tx_dir / staged_rel
+        backup_file = tx_dir / backup_rel
+        pres_file = tx_dir / "recovery_lifecycle/service_catalog.py"
+
+        for p, expected_sha, desc in (
+            (backup_file, orig_sha, "backup catalog"),
+            (staged_file, cand_sha, "staged catalog"),
+            (pres_file, orig_sha, "preserved catalog"),
+        ):
+            if not p.exists():
+                raise ActivationError(f"Missing {desc} in transaction dir: {p}")
+            try:
+                p.resolve().relative_to(tx_dir.resolve())
+            except (ValueError, OSError) as exc:
+                raise ActivationError(f"Path escape in {desc}: {exc}") from exc
+            st = p.lstat()
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                raise ActivationError(f"{desc} is not a regular file: {p}")
+            if st.st_uid != expected_uid:
+                raise ActivationError(f"{desc} UID mismatch: expected {expected_uid}, got {st.st_uid}")
+            actual_sha = compute_file_sha256(p)
+            if actual_sha.lower() != expected_sha.lower():
+                raise ActivationError(f"{desc} hash mismatch: expected {expected_sha}, got {actual_sha}")
+
+        home_str = str(ns_root / "home")
+        prefix_str = str(ns_root / "usr")
+        recomp_prior = load_catalog_services_from_bytes(backup_file.read_bytes(), home_str, prefix_str, "prior_cat")
+        recomp_cand = load_catalog_services_from_bytes(staged_file.read_bytes(), home_str, prefix_str, "cand_cat")
+        try:
+            ta.validate_catalog_transition(
+                recomp_prior,
+                recomp_cand,
+                home_str=home_str,
+                prefix_str=prefix_str,
+                profile=PROFILE_ANTRA_SERVICE,
+            )
+        except RuntimeError as exc:
+            raise ActivationError(f"Catalog transition validation failed during journal check: {exc}") from exc
+
+        if len(recomp_prior) != 16 or len(recomp_cand) != 17:
+            raise ActivationError(
+                f"Recomputed catalog service counts invalid: prior={len(recomp_prior)}, candidate={len(recomp_cand)}"
             )
 
     tx_id = act_journal.get("tx_id")
@@ -1333,21 +1470,29 @@ def validate_recovery_assets(
 
 def require_reviewed_jar_lifecycle(ns_root: Path, uid: int, driver=None) -> None:
     """Refuse JAR activation against an absent or unreviewed lifecycle owner."""
-    for relative, digest, label in (
-        ("home/bin/start_suwayomi.sh", SUWAYOMI_FORK_FREE_LAUNCHER_SHA256, "launcher"),
-        ("home/.local/lib/mobile-server/service_catalog.py", SUWAYOMI_FORK_FREE_CATALOG_SHA256, "catalog"),
-    ):
-        path = ns_root / relative
+    launcher_path = ns_root / "home/bin/start_suwayomi.sh"
+    catalog_path = ns_root / "home/.local/lib/mobile-server/service_catalog.py"
+    for path, label in ((launcher_path, "launcher"), (catalog_path, "catalog")):
         if not path.exists() or path.is_symlink() or not path.is_file():
             raise ActivationError(f"Live {label} is missing or not a regular file: {path}")
         if path.stat().st_uid != uid:
             raise ActivationError(f"Live {label} UID mismatch")
-        if compute_file_sha256(path).lower() != digest.lower():
-            raise ActivationError(f"Live {label} hash mismatch; refusing suwayomi-jar on unreviewed/legacy {label}")
+
+    if compute_file_sha256(launcher_path).lower() != SUWAYOMI_FORK_FREE_LAUNCHER_SHA256.lower():
+        raise ActivationError("Live launcher hash mismatch; refusing suwayomi-jar on unreviewed/legacy launcher")
+
+    cat_sha = compute_file_sha256(catalog_path).lower()
+    if cat_sha not in (SUWAYOMI_FORK_FREE_CATALOG_SHA256.lower(), ANTRA_SERVICE_CATALOG_SHA256.lower()):
+        raise ActivationError("Live catalog hash mismatch; refusing suwayomi-jar on unreviewed/legacy catalog")
+
     if driver is not None:
         services = driver.services()
-        if len(services) != 16:
+        if cat_sha == SUWAYOMI_FORK_FREE_CATALOG_SHA256.lower() and len(services) != 16:
             raise ActivationError(f"suwayomi-jar requires exact 16 managed services, found {len(services)}")
+        if cat_sha == ANTRA_SERVICE_CATALOG_SHA256.lower() and len(services) != 17:
+            raise ActivationError(f"suwayomi-jar requires exact 17 managed services, found {len(services)}")
+        if len(services) not in (16, 17):
+            raise ActivationError(f"suwayomi-jar requires exact 16 or 17 managed services, found {len(services)}")
         disabled = ns_root / "home/.config/services_disabled/suwayomi"
         if (disabled.exists() or disabled.is_symlink()) and driver.matching_processes("suwayomi"):
             raise ActivationError("Disabled backend is still running; refusing JAR replacement")
@@ -1355,6 +1500,11 @@ def require_reviewed_jar_lifecycle(ns_root: Path, uid: int, driver=None) -> None
         expected = [str(ns_root / "usr/bin/python3"), str(ns_root / "home/bin/suwayomi_daily_update.py"), "--foreground"]
         if not isinstance(scheduler, dict) or scheduler.get("cmd") != expected:
             raise ActivationError("Live suwayomi_scheduler command drift")
+        if len(services) == 17:
+            antra_svc = services.get("antra", {})
+            expected_antra = [str(ns_root / "usr/bin/python3"), "-u", str(ns_root / "home/.local/lib/mobile-server/antra_worker.py")]
+            if not isinstance(antra_svc, dict) or antra_svc.get("cmd") != expected_antra:
+                raise ActivationError("Live antra command drift")
 
 
 def plan(
@@ -1579,6 +1729,41 @@ def apply(
                 "candidate_catalog_sha256": str(cat_entry["candidate_sha256"]),
                 "recovery_hashes": dict(recovery_hashes),
             }
+        elif profile == PROFILE_ANTRA_SERVICE:
+            cat_entry = next((e for e in entries if (e.get("dest_path") or e.get("remote")) == SERVICE_CATALOG_REMOTE), None)
+            if cat_entry is None or cat_entry.get("action") != rt.ACTION_REPLACE:
+                raise ActivationError(f"antra-service requires replace entry for {SERVICE_CATALOG_REMOTE}")
+            staged_file = tx_dir / cat_entry["staged_file"]
+            backup_file = tx_dir / cat_entry["backup_file"]
+            pres_file = tx_dir / "recovery_lifecycle/service_catalog.py"
+            for p, expected_sha, desc in (
+                (backup_file, cat_entry["original_sha256"], "backup catalog"),
+                (staged_file, cat_entry["candidate_sha256"], "staged catalog"),
+                (pres_file, cat_entry["original_sha256"], "preserved catalog"),
+            ):
+                if not p.exists() or not p.is_file() or p.stat().st_uid != current_uid:
+                    raise ActivationError(f"Missing or invalid {desc} during antra prepare")
+                if compute_file_sha256(p).lower() != expected_sha.lower():
+                    raise ActivationError(f"{desc} hash mismatch during antra prepare")
+
+            home_str = str(ns_root / "home")
+            prefix_str = str(ns_root / "usr")
+            p_svcs = load_catalog_services_from_bytes(backup_file.read_bytes(), home_str, prefix_str, "prior")
+            c_svcs = load_catalog_services_from_bytes(staged_file.read_bytes(), home_str, prefix_str, "cand")
+            ta.validate_catalog_transition(p_svcs, c_svcs, home_str, prefix_str, profile=profile)
+            new_svcs = [k for k in c_svcs.keys() if k not in p_svcs]
+            if new_svcs != ["antra"]:
+                raise ActivationError(f"Unexpected new services in antra candidate: {new_svcs}")
+
+            act_journal["transition"] = {
+                "type": "antra_16_to_17",
+                "prior_service_count": int(len(p_svcs)),
+                "candidate_service_count": int(len(c_svcs)),
+                "new_services": new_svcs,
+                "prior_catalog_sha256": str(cat_entry["original_sha256"]),
+                "candidate_catalog_sha256": str(cat_entry["candidate_sha256"]),
+                "recovery_hashes": dict(recovery_hashes),
+            }
         validate_activation_journal(act_journal, tx_journal, ns_root, tx_dir, current_uid)
         save_activation_journal(tx_dir, act_journal)
 
@@ -1623,6 +1808,12 @@ def apply(
                         raise QuiescenceError(
                             f"Pre-existing suwayomi_scheduler process found during initial 15-to-16 lifecycle transition: {existing_sched}; refusing unmanaged instance"
                         )
+                if profile == PROFILE_ANTRA_SERVICE:
+                    existing_worker = driver.matching_processes("antra")
+                    if existing_worker:
+                        raise QuiescenceError(
+                            f"Pre-existing antra worker process found during initial 16-to-17 service transition: {existing_worker}; refusing unmanaged instance"
+                        )
                 if profile == PROFILE_SUWAYOMI_LIFECYCLE:
                     backend_flag = disabled_dir / "suwayomi"
                     if not backend_flag.exists() and not backend_flag.is_symlink():
@@ -1644,6 +1835,9 @@ def apply(
 
                 if profile == PROFILE_SUWAYOMI_LIFECYCLE and driver.matching_processes("suwayomi_scheduler"):
                     raise QuiescenceError("suwayomi_scheduler process appeared concurrently before quiescence")
+
+                if profile == PROFILE_ANTRA_SERVICE and driver.matching_processes("antra"):
+                    raise QuiescenceError("antra worker process appeared concurrently before quiescence")
 
                 # Quiesce active services
                 quiescence_records: Dict[str, List[Tuple[int, str]]] = {}
@@ -1701,6 +1895,13 @@ def apply(
                     if concurrent_sched:
                         raise QuiescenceError(
                             f"suwayomi_scheduler process appeared concurrently before file mutation: {concurrent_sched}"
+                        )
+
+                if profile == PROFILE_ANTRA_SERVICE:
+                    concurrent_worker = driver.matching_processes("antra")
+                    if concurrent_worker:
+                        raise QuiescenceError(
+                            f"antra worker process appeared concurrently before file mutation: {concurrent_worker}"
                         )
 
                 if profile == PROFILE_SUWAYOMI_JAR and driver.matching_processes("suwayomi"):
@@ -1973,7 +2174,7 @@ def _rollback_internal(
 
         # 3. Rollback files
         tx_journal = tx.load_journal()
-        if act_journal.get("profile") == PROFILE_SUWAYOMI_LIFECYCLE:
+        if act_journal.get("profile") in (PROFILE_SUWAYOMI_LIFECYCLE, PROFILE_ANTRA_SERVICE):
             # If live catalog was corrupted/broken while staged file is intact,
             # heal live file from verified staged file so release transaction engine can perform preimage rollback
             for entry in tx_journal.get("entries", []):

@@ -175,6 +175,24 @@ def matching_processes(sid):
                                                 match = True
                                 except OSError:
                                     pass
+            elif sid == 'antra':
+                target = str(HOME / '.local/lib/mobile-server/antra_worker.py')
+                targets = {target}
+                with contextlib.suppress(OSError):
+                    targets.add(str(Path(target).resolve()))
+                match = False
+                if base.startswith('python'):
+                    for a in args[1:]:
+                        if a.startswith('-'):
+                            continue
+                        if a in targets or a.endswith('/antra_worker.py'):
+                            try:
+                                cand = a if os.path.isabs(a) else os.path.normpath(os.path.join(str((proc / 'cwd').resolve()), a))
+                                if cand in targets or str(Path(cand).resolve()) in targets:
+                                    match = True
+                                    break
+                            except OSError:
+                                pass
             else:
                 owned_argument = {
                     'adguard': str(HOME / 'adguard/data/AdGuardHome.yaml'),
@@ -269,11 +287,13 @@ def healthy(sid, cfg):
             os.close(fd)
 
     if not cfg.get('port'):
-        status = HOME / '.config/battery_guard/status.json'
-        try:
-            return bool(matching_processes(sid)) and time.time() - status.stat().st_mtime < 360
-        except OSError:
-            return False
+        if sid == 'battery_guard':
+            status = HOME / '.config/battery_guard/status.json'
+            try:
+                return bool(matching_processes(sid)) and time.time() - status.stat().st_mtime < 360
+            except OSError:
+                return False
+        return bool(matching_processes(sid))
     try:
         if 'path' in cfg:
             conn = http.client.HTTPConnection('127.0.0.1', cfg['port'], timeout=2)

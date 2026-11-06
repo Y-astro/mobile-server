@@ -82,7 +82,7 @@ class ServiceCatalogTests(unittest.TestCase):
         self.assertEqual(len(baseline_keys), 15)
 
         rt_default = service_catalog.runtime_services('/data/data/com.termux/files/home', '/data/data/com.termux/files/usr')
-        self.assertEqual(len(rt_default), 16)
+        self.assertEqual(len(rt_default), 17)
         rt_default_prefix = {k: rt_default[k] for k in baseline_keys}
         self.assertEqual(rt_default_prefix, char['supervisor_default'])
         self.assertEqual(list(rt_default.keys())[:15], baseline_keys)
@@ -94,9 +94,17 @@ class ServiceCatalogTests(unittest.TestCase):
                 '--foreground'
             ]
         })
+        self.assertEqual(list(rt_default.keys())[16], 'antra')
+        self.assertEqual(rt_default['antra'], {
+            'cmd': [
+                '/data/data/com.termux/files/usr/bin/python3',
+                '-u',
+                '/data/data/com.termux/files/home/.local/lib/mobile-server/antra_worker.py'
+            ]
+        })
 
         rt_alt = service_catalog.runtime_services('/custom/home', '/custom/usr')
-        self.assertEqual(len(rt_alt), 16)
+        self.assertEqual(len(rt_alt), 17)
         rt_alt_prefix = {k: rt_alt[k] for k in baseline_keys}
         self.assertEqual(rt_alt_prefix, char['supervisor_alt'])
         self.assertEqual(list(rt_alt.keys())[:15], list(char['supervisor_alt'].keys()))
@@ -108,6 +116,14 @@ class ServiceCatalogTests(unittest.TestCase):
                 '--foreground'
             ]
         })
+        self.assertEqual(list(rt_alt.keys())[16], 'antra')
+        self.assertEqual(rt_alt['antra'], {
+            'cmd': [
+                '/custom/usr/bin/python3',
+                '-u',
+                '/custom/home/.local/lib/mobile-server/antra_worker.py'
+            ]
+        })
 
         # Explicit order & count check
         services = service_catalog.runtime_services('/h', '/p')
@@ -115,13 +131,16 @@ class ServiceCatalogTests(unittest.TestCase):
             'ssh', 'dashboard', 'caddy', 'filebrowser', 'transfer_gateway',
             'adguard', 'syncthing', 'vaultwarden', 'terminal', 'agy',
             'laptop_terminal', 'tor', 'suwayomi', 'suwayomi_filter', 'battery_guard',
-            'suwayomi_scheduler'
+            'suwayomi_scheduler', 'antra'
         ]
         self.assertEqual(list(services.keys()), expected_keys)
-        self.assertEqual(len(services), 16)
+        self.assertEqual(len(services), 17)
         self.assertNotIn('port', services['suwayomi_scheduler'])
         self.assertNotIn('path', services['suwayomi_scheduler'])
         self.assertNotIn('protocol', services['suwayomi_scheduler'])
+        self.assertNotIn('port', services['antra'])
+        self.assertNotIn('path', services['antra'])
+        self.assertNotIn('protocol', services['antra'])
 
     def test_dashboard_services_characterization_and_order(self):
         """Preserve all 9 dashboard cards, order, IDs, URLs, and verify absence of start_cmd/env."""
@@ -133,18 +152,23 @@ class ServiceCatalogTests(unittest.TestCase):
         cards = service_catalog.dashboard_services()
         expected_keys = [
             'filebrowser', 'suwayomi', 'vaultwarden', 'adguard', 'terminal',
-            'agy', 'converter', 'syncthing', 'battery_guard'
+            'agy', 'converter', 'syncthing', 'battery_guard', 'antra'
         ]
         self.assertEqual(list(cards.keys()), expected_keys)
-        self.assertEqual(list(cards.keys()), list(char['dashboard_services_config'].keys()))
-        self.assertEqual(len(cards), 9)
+        self.assertEqual(list(cards.keys())[:9], list(char['dashboard_services_config'].keys()))
+        self.assertEqual(len(cards), 10)
 
-        for k, card in cards.items():
+        for k in expected_keys[:9]:
             orig = dict(char['dashboard_services_config'][k])
             orig.pop('start_cmd', None)
             orig.pop('stop_cmd', None)
             orig.pop('env', None)
-            self.assertEqual(card, orig)
+            self.assertEqual(cards[k], orig)
+
+        self.assertEqual(cards['antra']['name'], 'Antra Music')
+        self.assertEqual(cards['antra']['category'], 'Media')
+        self.assertEqual(cards['antra']['open_url'], '/antra/')
+        self.assertTrue(cards['antra']['can_toggle'])
 
         # Verify no stale keys remain in cards
         for sid, card in cards.items():
@@ -200,12 +224,17 @@ class ServiceCatalogTests(unittest.TestCase):
         spec.loader.exec_module(sup)
         self.assertTrue(callable(sup.services))
         s = sup.services()
-        self.assertEqual(len(s), 16)
+        self.assertEqual(len(s), 17)
         self.assertEqual(s['caddy']['port'], 8000)
         self.assertEqual(s['suwayomi_scheduler']['cmd'], [
             '/data/data/com.termux/files/usr/bin/python3',
             '/data/data/com.termux/files/home/bin/suwayomi_daily_update.py',
             '--foreground'
+        ])
+        self.assertEqual(s['antra']['cmd'], [
+            '/data/data/com.termux/files/usr/bin/python3',
+            '-u',
+            '/data/data/com.termux/files/home/.local/lib/mobile-server/antra_worker.py'
         ])
         # Verify supervisor HOME and PREFIX globals remain unmodified
         self.assertEqual(sup.HOME, Path('/data/data/com.termux/files/home'))
@@ -280,8 +309,9 @@ assert Path(sc.__file__).resolve() == (lib_dir / 'service_catalog.py').resolve()
 
 # Run dashboard via runpy
 dash_globals = runpy.run_path(str(prefix_bin / 'dashboard'), run_name='dashboard')
-assert len(dash_globals['SERVICES_CONFIG']) == 9
+assert len(dash_globals['SERVICES_CONFIG']) == 10
 assert dash_globals['SERVICES_CONFIG']['filebrowser']['port'] == 8085
+assert dash_globals['SERVICES_CONFIG']['antra']['open_url'] == '/antra/'
 print('INSTALLED_BOOTSTRAP_OK')
 '''
             child_runner = tmp / 'runner.py'

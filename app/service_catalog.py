@@ -26,6 +26,7 @@ SERVICE_ENDPOINTS: Dict[str, Dict[str, Any]] = {
     'suwayomi_filter': {'port': 4566, 'path': '/healthz'},
     'battery_guard': {},
     'converter': {'is_ondemand': True},
+    'antra': {},
 }
 
 
@@ -70,6 +71,7 @@ def runtime_services(home: str, prefix: str) -> Dict[str, Dict[str, Any]]:
         'suwayomi_filter': dict(port=SERVICE_ENDPOINTS['suwayomi_filter']['port'], path=SERVICE_ENDPOINTS['suwayomi_filter']['path'], cmd=[f'{p}/bin/python3', f'{h}/bin/suwayomi_graphql_filter.py']),
         'battery_guard': dict(cmd=[f'{p}/bin/bash', f'{h}/bin/battery_guard.sh', '--daemon']),
         'suwayomi_scheduler': dict(cmd=[f'{p}/bin/python3', f'{h}/bin/suwayomi_daily_update.py', '--foreground']),
+        'antra': dict(cmd=[f'{p}/bin/python3', '-u', f'{h}/.local/lib/mobile-server/antra_worker.py']),
     }
 
 
@@ -188,6 +190,18 @@ def dashboard_services() -> Dict[str, Dict[str, Any]]:
             "desc": "Battery and temperature monitoring with alerts",
             "open_url": "javascript:alert('Battery Guard monitors readings and sends alerts; it cannot control charging hardware.');",
             "open_label": "Battery Monitor",
+            "can_toggle": True
+        },
+        "antra": {
+            "id": "antra",
+            "name": "Antra Music",
+            "category": "Media",
+            "port": None,
+            "pattern": "antra_worker",
+            "icon": "music",
+            "desc": "High-Resolution Music Downloader (FLAC 24-bit)",
+            "open_url": "/antra/",
+            "open_label": "Open Antra",
             "can_toggle": True
         }
     }

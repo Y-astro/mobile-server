@@ -147,7 +147,7 @@ def healthy(sid, cfg):
             live_cat_path.write_text(orig_cat_code, encoding="utf-8")
             os.chmod(live_cat_path, 0o600)
 
-            candidate_cat_code = (REPO_ROOT / "app/service_catalog.py").read_text()
+            candidate_cat_code = tra.reviewed_16_catalog_source()
             bundle_cat_path = bundle_dir / "app/service_catalog.py"
             bundle_cat_path.write_text(candidate_cat_code, encoding="utf-8")
             os.chmod(bundle_cat_path, 0o600)

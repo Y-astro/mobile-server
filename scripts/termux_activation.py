@@ -223,13 +223,13 @@ def validate_catalog_transition(
                 f"Candidate suwayomi_scheduler cmd drift: expected {expected_cmd!r}, got {sched_cfg.get('cmd')!r}"
             )
     elif profile == "suwayomi-jar":
-        if len(prior_keys) != 16:
+        if len(prior_keys) not in (16, 17):
             raise RuntimeError(
-                f"suwayomi-jar profile requires exact 16 prior services, found {len(prior_keys)}"
+                f"suwayomi-jar profile requires exact 16 or 17 prior services, found {len(prior_keys)}"
             )
-        if len(cand_keys) != 16:
+        if len(cand_keys) != len(prior_keys):
             raise RuntimeError(
-                f"suwayomi-jar profile requires exact 16 candidate services, found {len(cand_keys)}"
+                f"suwayomi-jar profile requires exact {len(prior_keys)} candidate services, found {len(cand_keys)}"
             )
         if prior_keys != cand_keys:
             raise RuntimeError(
@@ -247,6 +247,19 @@ def validate_catalog_transition(
             raise RuntimeError(
                 f"Candidate suwayomi_scheduler cmd drift: expected {expected_cmd!r}, got {sched_cfg.get('cmd')!r}"
             )
+        if len(cand_keys) == 17:
+            if cand_keys[16] != "antra":
+                raise RuntimeError(
+                    f"Candidate service catalog 17th service must be 'antra', got {cand_keys[16]!r}"
+                )
+            expected_antra = [f"{prefix_str}/bin/python3", "-u", f"{home_str}/.local/lib/mobile-server/antra_worker.py"]
+            antra_cfg = cand_services.get("antra")
+            if not isinstance(antra_cfg, dict):
+                raise RuntimeError("Candidate antra configuration must be a dictionary")
+            if antra_cfg.get("cmd") != expected_antra:
+                raise RuntimeError(
+                    f"Candidate antra cmd drift: expected {expected_antra!r}, got {antra_cfg.get('cmd')!r}"
+                )
         for sid, p_cfg in prior_services.items():
             c_cfg = cand_services.get(sid)
             if c_cfg is None:
@@ -257,6 +270,45 @@ def validate_catalog_transition(
                 raise RuntimeError(
                     f"Candidate service {sid} configuration runtime drift: expected {p_cfg!r}, got {c_cfg!r}"
                 )
+    elif profile == "antra-service":
+        if len(prior_keys) != 16:
+            raise RuntimeError(
+                f"antra-service profile requires exact 16 prior services, found {len(prior_keys)}"
+            )
+        if len(cand_keys) != 17:
+            raise RuntimeError(
+                f"antra-service profile requires exact 17 candidate services, found {len(cand_keys)}"
+            )
+        if cand_keys[:16] != prior_keys:
+            raise RuntimeError(
+                f"Candidate service catalog first 16 keys mismatch: expected {prior_keys}, got {cand_keys[:16]}"
+            )
+        for sid, p_cfg in prior_services.items():
+            c_cfg = cand_services.get(sid)
+            if c_cfg is None:
+                raise RuntimeError(f"Candidate catalog missing prior service: {sid}")
+            if not isinstance(c_cfg, dict) or not isinstance(p_cfg, dict):
+                raise RuntimeError(f"Service {sid} configuration must be a dictionary")
+            if c_cfg != p_cfg:
+                raise RuntimeError(
+                    f"Candidate service {sid} configuration runtime drift: expected {p_cfg!r}, got {c_cfg!r}"
+                )
+        if cand_keys[16] != "antra":
+            raise RuntimeError(
+                f"Candidate service catalog 17th service must be 'antra', got {cand_keys[16]!r}"
+            )
+        antra_cfg = cand_services.get("antra")
+        if not isinstance(antra_cfg, dict):
+            raise RuntimeError("Candidate antra configuration must be a dictionary")
+        if set(antra_cfg.keys()) != {"cmd"}:
+            raise RuntimeError(
+                f"Candidate antra introduces unexpected attributes: {sorted(list(set(antra_cfg.keys()) - {'cmd'}))}"
+            )
+        expected_cmd = [f"{prefix_str}/bin/python3", "-u", f"{home_str}/.local/lib/mobile-server/antra_worker.py"]
+        if antra_cfg.get("cmd") != expected_cmd:
+            raise RuntimeError(
+                f"Candidate antra cmd drift: expected {expected_cmd!r}, got {antra_cfg.get('cmd')!r}"
+            )
     else:
         raise RuntimeError(f"Unsupported profile for catalog validation: {profile!r}")
 
@@ -473,6 +525,8 @@ class TermuxLifecycleDriver(LifecycleDriver):
     def matching_processes(self, sid: str) -> List[Tuple[int, str]]:
         if sid == "suwayomi_scheduler":
             return self._match_suwayomi_scheduler()
+        if sid == "antra":
+            return self._match_antra_worker()
         if sid == "suwayomi":
             # The legacy matcher also sees unrelated builds containing the word
             # suwayomi. Activation may signal only this namespace's backend.
@@ -493,7 +547,59 @@ class TermuxLifecycleDriver(LifecycleDriver):
         except (KeyError, AttributeError):
             if sid == "suwayomi_scheduler":
                 return self._match_suwayomi_scheduler()
+            if sid == "antra":
+                return self._match_antra_worker()
             raise
+
+    def _match_antra_worker(self) -> List[Tuple[int, str]]:
+        """
+        Trusted native matching for owned antra worker processes.
+        Matches owned antra_worker.py (absolute or cwd-resolved relative strictly in home),
+        UID/starttime. Excludes -c/-m decoys and zombies.
+        Independent of supervisor implementation or catalog presence.
+        """
+        uid = os.getuid()
+        expected_script = (self.home_dir / ".local/lib/mobile-server/antra_worker.py").resolve()
+
+        matches: List[Tuple[int, str]] = []
+        if not self.proc_root.exists():
+            return matches
+
+        for proc in self.proc_root.iterdir():
+            if not proc.name.isdigit() or int(proc.name) == os.getpid():
+                continue
+            try:
+                if proc.stat().st_uid != uid:
+                    continue
+
+                cmdline_bytes = (proc / "cmdline").read_bytes()
+                cmdline = cmdline_bytes.decode(errors="replace").rstrip("\0").split("\0")
+                script_path, remaining = extract_python_script_and_args(cmdline)
+                if script_path is None:
+                    continue
+
+                if not script_path.is_absolute():
+                    try:
+                        target_cwd = Path(os.readlink(str(proc / "cwd"))).resolve()
+                        target_cwd.relative_to(self.home_dir.resolve())
+                        resolved_script = (target_cwd / script_path).resolve()
+                    except (OSError, ValueError):
+                        continue
+                else:
+                    resolved_script = script_path.resolve()
+
+                if resolved_script != expected_script:
+                    continue
+
+                ident = self.process_identity(int(proc.name))
+                if ident is None:
+                    continue
+
+                matches.append((int(proc.name), ident))
+            except (OSError, IndexError, ValueError):
+                continue
+
+        return sorted(matches, key=lambda m: m[0])
 
     def _match_suwayomi_scheduler(self) -> List[Tuple[int, str]]:
         """
@@ -576,6 +682,11 @@ class TermuxLifecycleDriver(LifecycleDriver):
 
     def healthy(self, sid: str, cfg: Dict[str, Any]) -> bool:
         if sid == "suwayomi_scheduler":
+            try:
+                return self._sup.healthy(sid, cfg)
+            except (KeyError, AttributeError):
+                return bool(self.matching_processes(sid))
+        if sid == "antra":
             try:
                 return self._sup.healthy(sid, cfg)
             except (KeyError, AttributeError):
