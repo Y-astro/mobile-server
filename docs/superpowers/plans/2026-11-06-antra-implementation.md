@@ -31,3 +31,11 @@ No player, alternate sources, account rotation, scheduled sync, or held YouTube/
 ## User storage correction, approved directly 2026-11-06
 
 Provide Family and Astro/private music areas. Add immutable Job.destination=private|family; POST jobs accepts that enum and defaults to private. Retry preserves it. Settings may expose output_directories with logical labels Music/Astro and Music/Family while retaining output_directory as the legacy default. Admin page offers only those two destinations. Actual physical roots depend on verified FileBrowser scope/rule isolation; do not hardcode a publicly exposed private path before verification. No private writes or worker activation until family listing and direct-path denial are proven. Family still cannot control the Antra admin page/API. Root privacy research and safe native configuration are part of this explicitly requested correction.
+
+## Verified storage deployment, 2026-11-06
+
+The final output roots are `/storage/emulated/0/Music/Astro` for private jobs and `/storage/emulated/0/Music/Family` for shared jobs. Both now exist. The family FileBrowser scope retains its existing `family_share` root, but its Music link now targets only Music/Family. Native API checks verified that family listing, search, downloads, previews, archives, traversal attempts, and share creation cannot reach private files. Android directory mode alone does not enforce account separation.
+
+The user explicitly selected Family for the existing library. All 115 files, totaling 5,870,101,107 bytes, were moved with original file identities preserved. Cloud storage was restarted successfully; other service processes and the four disabled-service flags were preserved. No source rollback may broaden the family Music link or move this data back.
+
+Migration source is `tools/split_music_storage.py`. Private recovery state lives under `~/.local/state/mobile-server/music-storage/`, with mode 0700 directories and 0600 journal files. Recovery validates exact roots and original file identities before continuing. The phone passed a synthetic filesystem rename check before any user data moved. The live service catalog still has 16 entries; Antra activation remains a separate reviewed release.
