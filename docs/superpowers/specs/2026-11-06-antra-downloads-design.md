@@ -1,6 +1,6 @@
 # Antra music downloads: proposed design
 
-Status: draft for user review. Research is complete; implementation and deployment have not started.
+Status: approved by the user with "continue" on 2026-11-06. Research is complete; implementation and deployment are authorized within this design.
 
 ## Goal
 
