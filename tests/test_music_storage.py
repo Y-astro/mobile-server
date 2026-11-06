@@ -226,7 +226,7 @@ class TestMusicStorageMigration(unittest.TestCase):
         )
         with self.assertRaises(ConflictError) as ctx:
             migrator.apply(legacy_destination="family", assert_quiesced=True)
-        self.assertIn("already exists", str(ctx.exception))
+        self.assertRegex(str(ctx.exception), "already exists|Unsafe migration destination")
 
         # Verify link was NOT retargeted and no files were moved
         self.assertEqual(
@@ -248,13 +248,15 @@ class TestMusicStorageMigration(unittest.TestCase):
         self.assertIn("Nested symlink detected", str(ctx.exception))
 
     def test_foreign_journal_refusal(self) -> None:
-        journal_path = self.music_root / ".split_music_journal.json"
+        journal_path = self.family_share_dir.parent / ".local/state/mobile-server/music-storage/journal.json"
+        journal_path.parent.mkdir(parents=True)
         foreign_data = {
             "version": 999,
             "tool": "alien_tool",
             "music_root": "/other/path",
         }
         journal_path.write_text(json.dumps(foreign_data))
+        journal_path.chmod(0o600)
 
         migrator = MusicStorageMigrator(
             music_root=self.music_root,
@@ -262,7 +264,7 @@ class TestMusicStorageMigration(unittest.TestCase):
         )
         with self.assertRaises(ConflictError) as ctx:
             migrator.apply(legacy_destination="family", assert_quiesced=True)
-        self.assertIn("Foreign or incompatible journal", str(ctx.exception))
+        self.assertIn("Foreign or incompatible migration journal", str(ctx.exception))
 
     def test_exclusive_lock_prevents_concurrency(self) -> None:
         migrator1 = MusicStorageMigrator(
@@ -418,6 +420,115 @@ class TestMusicStorageMigration(unittest.TestCase):
             migrated_file = target_family / rel_path
             self.assertTrue(migrated_file.exists(), f"Missing file: {rel_path}")
             self.assertEqual(migrated_file.read_bytes(), expected_bytes)
+
+    def interrupted_migration(self, destination="family"):
+        from unittest.mock import patch
+        migrator = MusicStorageMigrator(self.music_root, self.family_music_link)
+        with patch.object(migrator, "_move_entries", side_effect=RuntimeError("power loss")):
+            with self.assertRaises(RuntimeError):
+                migrator.apply(destination, assert_quiesced=True)
+        return migrator
+
+    def test_resume_rejects_replaced_private_directory_symlink(self):
+        migrator = self.interrupted_migration("private")
+        outside = self.base_dir / "outside"
+        outside.mkdir()
+        (self.music_root / "Astro").rmdir()
+        (self.music_root / "Astro").symlink_to(outside)
+        with self.assertRaises(ConflictError):
+            migrator.resume(assert_quiesced=True)
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertEqual(self.family_music_link.resolve(), self.music_root / "Family")
+        self.assertTrue((self.music_root / self.legacy_items[0][0]).exists())
+
+    def test_resume_rejects_same_size_replacement_after_rename(self):
+        from unittest.mock import patch
+        migrator = MusicStorageMigrator(self.music_root, self.family_music_link)
+        rename = os.rename
+        def power_loss(source, target):
+            rename(source, target)
+            if Path(source).parent == self.music_root:
+                raise OSError("power loss after rename")
+        with patch("tools.split_music_storage.os.rename", side_effect=power_loss):
+            with self.assertRaises(OSError):
+                migrator.apply("family", assert_quiesced=True)
+        moved = next((self.music_root / "Family").rglob("*"))
+        if moved.is_dir():
+            moved = next(path for path in moved.rglob("*") if path.is_file())
+        original = moved.read_bytes()
+        moved.unlink()
+        moved.write_bytes(b"x" * len(original))
+        with self.assertRaises(ConflictError):
+            migrator.resume(assert_quiesced=True)
+        self.assertTrue((self.music_root / "Abhang panch goulani.mp3").exists())
+
+    def test_private_journal_and_lock_ignore_umask(self):
+        migrator = MusicStorageMigrator(self.music_root, self.family_music_link)
+        old_mask = os.umask(0o022)
+        try:
+            with migrator:
+                migrator.apply("family", assert_quiesced=True)
+        finally:
+            os.umask(old_mask)
+        self.assertFalse(migrator.journal_path.is_relative_to(self.music_root))
+        self.assertEqual(migrator.journal_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(migrator.lock_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(migrator.journal_path.parent.stat().st_mode & 0o777, 0o700)
+
+    def test_resume_rejects_journal_paths_and_traversal(self):
+        migrator = self.interrupted_migration()
+        original = json.loads(migrator.journal_path.read_text())
+        outside = self.base_dir / "outside"
+        outside.mkdir()
+        for field, value in (("target_family_dir", str(outside)), ("family_music_link", str(outside / "Music"))):
+            changed = dict(original, **{field: value})
+            migrator._write_journal(changed)
+            with self.assertRaises(ConflictError):
+                migrator.resume(assert_quiesced=True)
+        changed = json.loads(json.dumps(original))
+        changed["planned_entries"][0]["name"] = "../sentinel"
+        migrator._write_journal(changed)
+        with self.assertRaises(ConflictError):
+            migrator.resume(assert_quiesced=True)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_journal_symlink_refused_without_touching_sentinel(self):
+        migrator = MusicStorageMigrator(self.music_root, self.family_music_link)
+        migrator._prepare_state_directory()
+        sentinel = self.base_dir / "sentinel"
+        sentinel.write_bytes(b"KEEP")
+        migrator.journal_path.symlink_to(sentinel)
+        with self.assertRaises(ConflictError):
+            migrator.apply("family", assert_quiesced=True)
+        self.assertEqual(sentinel.read_bytes(), b"KEEP")
+        self.assertFalse((self.music_root / "Family").exists())
+
+    def test_resume_destination_is_immutable(self):
+        migrator = self.interrupted_migration("family")
+        with self.assertRaises(ConflictError):
+            migrator.apply("private", assert_quiesced=True)
+        self.assertEqual(list((self.music_root / "Astro").iterdir()), [])
+
+    def test_final_music_root_symlink_refused(self):
+        alias = self.storage_dir / "alias"
+        alias.symlink_to(self.music_root, target_is_directory=True)
+        migrator = MusicStorageMigrator(alias, self.family_music_link)
+        with self.assertRaises(PreconditionError):
+            migrator.apply("family", assert_quiesced=True)
+
+    def test_legacy_hidden_journal_named_file_is_preserved_as_user_data(self):
+        existing = self.music_root / ".split_music_journal.json"
+        existing.write_bytes(b"existing user data")
+        migrator = MusicStorageMigrator(self.music_root, self.family_music_link)
+        migrator.apply("family", assert_quiesced=True)
+        self.assertEqual((self.music_root / "Family" / existing.name).read_bytes(), b"existing user data")
+
+    def test_completed_relative_family_link_is_valid(self):
+        migrator = MusicStorageMigrator(self.music_root, self.family_music_link)
+        migrator.apply("family", assert_quiesced=True)
+        self.family_music_link.unlink()
+        self.family_music_link.symlink_to(os.path.relpath(self.music_root / "Family", self.family_share_dir))
+        migrator.resume(assert_quiesced=True)
 
     def test_cli_execution_plan_and_apply(self) -> None:
         """Test invoking the script via CLI argument parsing."""
