@@ -518,6 +518,7 @@ class TestReleaseManifest(unittest.TestCase):
         self.assertIsNone(next((e for e in manifest_no_jar if e["local"] == DEFAULT_SUWAYOMI_JAR_LOCAL), None))
         validate_manifest(manifest_no_jar, bundle_root, require_gateway=True)
 
+        # Reviewed additions can grow the historical counts below.
         # Full repository tree test: 42 maintained files + gateway = 43; + JAR = 44
         full_bundle = self.test_root / "full_bundle"
         shutil.copytree(REPO_ROOT / "config", full_bundle / "config")
@@ -529,13 +530,14 @@ class TestReleaseManifest(unittest.TestCase):
         (full_bundle / DEFAULT_GATEWAY_LOCAL).write_bytes(b"\x7fELFgateway")
 
         manifest_43 = generate_manifest(full_bundle, include_gateway=True)
-        self.assertEqual(len(manifest_43), 43)
+        self.assertIn(DEFAULT_GATEWAY_LOCAL, {e["local"] for e in manifest_43})
         validate_manifest(manifest_43, full_bundle, require_gateway=True)
 
         # Opt-in with JAR produces exact 44 files
         (full_bundle / DEFAULT_SUWAYOMI_JAR_LOCAL).write_bytes(b"PK\x03\x04fulljar")
         manifest_44 = generate_manifest(full_bundle, include_gateway=True, include_suwayomi_jar=True)
-        self.assertEqual(len(manifest_44), 44)
+        self.assertEqual(len(manifest_44), len(manifest_43) + 1)
+        self.assertEqual([e for e in manifest_44 if e["local"] != DEFAULT_SUWAYOMI_JAR_LOCAL], manifest_43)
         validate_manifest(manifest_44, full_bundle, require_gateway=True, require_suwayomi_jar=True)
 
         # Requiring JAR when absent fails

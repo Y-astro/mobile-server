@@ -14,8 +14,7 @@ const { chromium } = require('@playwright/test');
 
 const rootDir = path.resolve(__dirname, '..');
 const sddDir = path.resolve(rootDir, '.superpowers/sdd');
-const altSddDir = path.resolve(rootDir, '.sdd');
-[sddDir, altSddDir].forEach(d => {
+[sddDir].forEach(d => {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 });
 
@@ -36,6 +35,8 @@ const staticDir = path.join(rootDir, '.work/filebrowser-static');
 const nativeIndexHtml = fs.existsSync(path.join(staticDir, 'index.html'))
   ? fs.readFileSync(path.join(staticDir, 'index.html'), 'utf8')
   : '';
+// shortcut: target acceptance uses captured public assets; automate capture when enabling this suite in CI.
+assert(nativeIndexHtml.includes('index-BqkXVoMb.js'), 'Capture the pinned public FileBrowser fixture into .work/filebrowser-static before running test:cloud');
 
 function makeSyntheticJwt(user = {}) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -97,6 +98,7 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
 
 (async () => {
   let wallpaperApiAuthRequired = false;
+  let wallpaperApiHang = false;
 
   const server = http.createServer((req, res) => {
     const parsed = new URL(req.url, 'http://127.0.0.1');
@@ -148,6 +150,7 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
       return res.end(appearanceJs);
     }
     if (pathname === '/api/wallpapers') {
+      if (wallpaperApiHang) return;
       if (wallpaperApiAuthRequired) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'unauthorized' }));
@@ -160,7 +163,7 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
         res.writeHead(404, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'not found' }));
       }
-      res.writeHead(200, { 'Content-Type': 'image/webp' });
+      res.writeHead(200, { 'Content-Type': 'image/webp', 'Cache-Control': 'private, no-store' });
       return res.end(defaultWallpaperBytes);
     }
 
@@ -235,6 +238,10 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
       if (req.method === 'DELETE' || req.method === 'PUT' || req.method === 'POST') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ status: 'ok' }));
+      }
+      if (pathname.endsWith('/notes.txt')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({path:'/notes.txt',name:'notes.txt',size:24,extension:'.txt',modified:'2026-11-05T12:00:00Z',mode:420,isDir:false,type:'text',content:'Sample downloaded content'}));
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({
@@ -333,6 +340,8 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     // =========================================================================
     console.log('--- TEST 1: Native FileBrowser Mount & Module Exports ---');
     const cloudPage = await context.newPage();
+    const imageRequests = [];
+    cloudPage.on('request', r => { if (/\/api\/wallpapers\/.+\/display\.webp/.test(r.url())) imageRequests.push(r.url()); });
     cloudPage.on('console', msg => console.log('BROWSER CONSOLE:', msg.type(), msg.text()));
     await cloudPage.setViewportSize({ width: 1280, height: 900 });
 
@@ -344,6 +353,16 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     await cloudPage.goto(`${baseUrl}/drive/files/`);
     await cloudPage.waitForSelector('#app', { state: 'attached', timeout: 5000 });
     await cloudPage.locator('.item:not(.header)').first().waitFor({ state: 'visible', timeout: 5000 });
+
+    await cloudPage.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue('--app-wallpaper-image').includes('url('));
+    const nativeStyles = await cloudPage.evaluate(() => {
+      const crumbs = document.querySelector('#breadcrumbs, .breadcrumbs');
+      const item = document.querySelector('.item:not(.header)');
+      return { breadcrumbs: crumbs && getComputedStyle(crumbs).backgroundColor, rowBlur: item && getComputedStyle(item).backdropFilter, isolated: getComputedStyle(document.body).isolation };
+    });
+    assert(nativeStyles.breadcrumbs && !nativeStyles.breadcrumbs.includes('255, 255, 255'), 'Native breadcrumbs must use the dark theme');
+    assert.equal(nativeStyles.rowBlur, 'none', 'File rows must not create repeated backdrop filters');
+    assert.equal(nativeStyles.isolated, 'isolate', 'Wallpaper layers must remain above the body background');
 
     // Verify no module errors occurred
     assert.equal(pageErrors.length, 0, `Page errors detected during mount: ${pageErrors.join('; ')}`);
@@ -401,6 +420,7 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     const dialog = cloudPage.locator('#appearance-dialog');
     await dialog.waitFor({ state: 'visible', timeout: 3000 });
 
+    const requestsBeforeSliders = imageRequests.length;
     // Test Blur slider (set to 80%)
     const blurInput = cloudPage.locator('#appearance-blur-input');
     await blurInput.fill('80');
@@ -415,6 +435,16 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     const computedAlpha = await cloudPage.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--app-panel-alpha').trim());
     assert.equal(computedAlpha, '0.400', 'Translucency 60% must evaluate to panel alpha 0.400');
 
+    await cloudPage.waitForTimeout(100);
+    assert.equal(imageRequests.length, requestsBeforeSliders, 'Slider changes must not reload wallpaper images');
+
+    await transInput.fill('100');
+    await transInput.dispatchEvent('input');
+    assert.equal(await cloudPage.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--app-panel-alpha').trim()), '0.000');
+    await transInput.fill('0');
+    await transInput.dispatchEvent('input');
+    assert.equal(await cloudPage.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--app-panel-alpha').trim()), '1.000');
+
     // Test Wallpaper selection in gallery
     const thumbs = cloudPage.locator('.appearance-thumb-btn');
     await thumbs.first().waitFor({ state: 'visible', timeout: 3000 });
@@ -422,8 +452,8 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     assert.equal(thumbCount >= 2, true, 'Gallery must display available wallpapers');
 
     await thumbs.nth(1).click();
-    const isSelected = await thumbs.nth(1).getAttribute('aria-selected');
-    assert.equal(isSelected, 'true', 'Clicked wallpaper must be marked aria-selected=true');
+    const isSelected = await thumbs.nth(1).getAttribute('aria-pressed');
+    assert.equal(isSelected, 'true', 'Clicked wallpaper must be marked aria-pressed=true');
 
     // Test Reset Button
     const resetBtn = cloudPage.locator('#appearance-reset-btn');
@@ -475,6 +505,8 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     assert.equal(reloadedBlur, '21.0px', 'Blur 70% must persist across reloads (21.0px)');
     assert.equal(reloadedAlpha, '0.600', 'Translucency 40% must persist across reloads (0.600 alpha)');
 
+    await cloudPage.locator('.spinner').waitFor({state:'hidden'});
+    await cloudPage.locator('.item:not(.header)').first().waitFor({state:'visible'});
     // Capture screenshot 1: Desktop Cloud
     const desktopScreenshotPath = path.join(sddDir, 'desktopcloud.png');
     await cloudPage.screenshot({ path: desktopScreenshotPath, fullPage: false });
@@ -490,6 +522,7 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     const mobileBtnVisible = await cloudPage.locator('#cloud-appearance-btn').isVisible();
     assert.equal(mobileBtnVisible, true, 'Appearance button must remain visible and accessible on mobile');
 
+    await cloudPage.locator('.spinner').waitFor({state:'hidden'});
     // Capture screenshot 2: Mobile Cloud
     const mobileScreenshotPath = path.join(sddDir, 'mobilecloud.png');
     await cloudPage.screenshot({ path: mobileScreenshotPath, fullPage: false });
@@ -553,28 +586,52 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     assert.equal(corruptBlur, 50, 'Corrupt storage must gracefully revert to default blur 50%');
 
     // B. Missing image fallback
-    await cloudPage.evaluate(() => {
-      window.MobileAppearance.setState({ wallpaperId: 'missing' });
-    });
-    await cloudPage.waitForTimeout(300);
-    const missingImgFallback = await cloudPage.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--app-wallpaper-image').trim());
-    assert.equal(missingImgFallback, 'none', 'Missing image load error must fall back to none without crash');
+    await cloudPage.goto(`${baseUrl}/drive/files/`);
+    await cloudPage.route('**/api/wallpapers/**/display.webp', route => route.fulfill({status:404, body:'Missing image'}));
+    await cloudPage.reload();
+    await cloudPage.locator('#cloud-appearance-btn').click();
+    await cloudPage.locator('.appearance-thumb-btn').last().click();
+    await cloudPage.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue('--app-wallpaper-image').trim() === 'none');
+    await cloudPage.unroute('**/api/wallpapers/**/display.webp');
 
     // C. prefers-reduced-transparency CSS evaluation
-    const reducedTransSolid = await cloudPage.evaluate(() => {
-      const match = window.matchMedia('(prefers-reduced-transparency: reduce)');
-      return match !== null;
-    });
-    assert.equal(reducedTransSolid, true, 'prefers-reduced-transparency media query supported');
+    const session = await context.newCDPSession(cloudPage);
+    await session.send('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-transparency',value:'reduce'}]});
+    const reducedTransSolid = await cloudPage.evaluate(() => ({matches:matchMedia('(prefers-reduced-transparency: reduce)').matches, alpha:getComputedStyle(document.documentElement).getPropertyValue('--app-panel-alpha').trim(), backdrop:getComputedStyle(document.querySelector('#app-wallpaper-backdrop')).display}));
+    assert.equal(reducedTransSolid.matches, true);
+    assert.equal(reducedTransSolid.alpha, '1');
+    assert.equal(reducedTransSolid.backdrop, 'none');
+    await session.send('Emulation.setEmulatedMedia', {features:[]});
+    await session.detach();
+
+    wallpaperApiHang = true;
+    await cloudPage.reload();
+    await cloudPage.locator('#cloud-appearance-btn').click();
+    await cloudPage.locator('.appearance-error').waitFor({state:'visible',timeout:12000});
+    wallpaperApiHang = false;
+    await cloudPage.locator('#appearance-retry-btn').click();
+    await cloudPage.locator('.appearance-thumb-btn').first().waitFor({state:'visible'});
 
     // =========================================================================
     // TEST 7: FILEBROWSER NATIVE ACTIONS & DIALOGS
     // =========================================================================
     console.log('--- TEST 7: FileBrowser Native File Actions & Search ---');
+    await cloudPage.setViewportSize({width:1280,height:900});
     await cloudPage.goto(`${baseUrl}/drive/files/`);
     await cloudPage.locator('.item:not(.header)').first().waitFor({ state: 'visible', timeout: 5000 });
+    await cloudPage.locator('.spinner').waitFor({state:'hidden'});
+    await cloudPage.locator('nav .action[aria-label="New folder"]').click();
+    await cloudPage.getByRole('button', {name:'Cancel',exact:true}).waitFor({state:'visible'});
+    await cloudPage.getByRole('button', {name:'Cancel',exact:true}).click();
+    await cloudPage.locator('.item').filter({hasText:'notes.txt'}).dblclick();
+    await cloudPage.locator('.ace_editor').waitFor({state:'visible',timeout:5000});
+    assert((await cloudPage.locator('.ace_editor').textContent()).includes('Sample downloaded content'));
+    await cloudPage.goto(`${baseUrl}/drive/files/`);
 
     // Item selection
+    await cloudPage.locator('.spinner').waitFor({state:'hidden'});
+    const nativeActions = await cloudPage.locator('nav .action, header .action').evaluateAll(nodes => nodes.map(n => ({id:n.id,label:n.getAttribute('aria-label'),text:n.textContent.trim().slice(0,50)})));
+    console.log('Native action hooks:', JSON.stringify(nativeActions));
     const firstItem = cloudPage.locator('.item:not(.header)').first();
     await firstItem.click();
     await cloudPage.waitForTimeout(200);

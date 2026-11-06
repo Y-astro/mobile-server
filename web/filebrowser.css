@@ -39,9 +39,16 @@ header h1, header h2, .breadcrumbs, .breadcrumbs a, .breadcrumbs span {
   color: var(--md-sys-color-primary, #70d6c5) !important;
 }
 
+#breadcrumbs, .breadcrumbs, #search {
+  background: rgba(29, 34, 35, var(--app-panel-alpha, 0.65)) !important;
+  color: var(--md-sys-color-on-surface) !important;
+  box-shadow: none !important;
+}
+
+
 /* Sidebar */
 nav, #sidebar, .sidebar {
-  background: rgba(23, 28, 29, 0.96) !important;
+  background: rgba(23, 28, 29, var(--app-panel-alpha, 0.65)) !important;
   backdrop-filter: blur(var(--app-blur, 15px)) !important;
   -webkit-backdrop-filter: blur(var(--app-blur, 15px)) !important;
   border-right: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
@@ -100,8 +107,8 @@ nav .action:hover, #sidebar .action:hover {
 /* File Listing: List & Mosaic (Grid) */
 .item, .list .item, .mosaic .item {
   background: rgba(29, 34, 35, var(--app-panel-alpha, 0.65)) !important;
-  backdrop-filter: blur(var(--app-blur, 15px)) !important;
-  -webkit-backdrop-filter: blur(var(--app-blur, 15px)) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   border: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
   border-radius: var(--md-shape-corner-medium, 12px) !important;
   transition: border-color 0.15s ease, background-color 0.15s ease !important;
@@ -178,7 +185,7 @@ input[type="text"]:focus, input[type="search"]:focus, .input:focus, select:focus
 }
 
 /* Native Prompts & Dialogs (Rename, Delete, Info, Share) */
-.card, .card-title, .card-content, .card-action, .prompt {
+.card, .prompt {
   background: rgba(29, 34, 35, 0.96) !important;
   backdrop-filter: blur(20px) !important;
   -webkit-backdrop-filter: blur(20px) !important;
@@ -233,4 +240,22 @@ input[type="text"]:focus, input[type="search"]:focus, .input:focus, select:focus
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--md-sys-color-outline, #899392);
+}
+
+.item i.material-icons {
+  color: var(--md-sys-color-primary) !important;
+}
+
+.card-title, .card-content, .card-action {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+.button--blue .material-icons, .action[aria-label="Upload"] .material-icons {
+  color: inherit !important;
+}
+
+#search > div {
+  background: transparent !important;
+  color: inherit !important;
 }

@@ -25,7 +25,12 @@
   let manifest = null;
   let manifestStatus = 'idle'; // 'idle' | 'loading' | 'success' | 'unauthenticated' | 'error'
   let currentLoadSeq = 0;
+  let requestedWallpaperUrl = null;
   let activeTriggerEl = null;
+
+  function validId(id) {
+    return typeof id === 'string' && id.length === 64 && /^[0-9a-f]+$/.test(id);
+  }
 
   // Safe localStorage accessor
   function loadStoredState() {
@@ -33,14 +38,14 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
+      if (parsed && typeof parsed === 'object' && parsed.version === 1) {
         if (Number.isFinite(parsed.blur) && parsed.blur >= 0 && parsed.blur <= 100) {
           state.blur = Math.round(parsed.blur);
         }
         if (Number.isFinite(parsed.translucency) && parsed.translucency >= 0 && parsed.translucency <= 100) {
           state.translucency = Math.round(parsed.translucency);
         }
-        if (typeof parsed.wallpaperId === 'string' && /^[0-9a-f]{64}$/.test(parsed.wallpaperId)) {
+        if (validId(parsed.wallpaperId)) {
           state.wallpaperId = parsed.wallpaperId;
         } else if (parsed.wallpaperId === null) {
           state.wallpaperId = null;
@@ -94,24 +99,23 @@
     root.style.setProperty('--app-translucency', `${state.translucency}%`);
     root.style.setProperty('--app-panel-alpha', panelAlpha);
 
-    if (state.wallpaperId && manifest && manifest.wallpapers) {
-      const match = manifest.wallpapers.find(w => w.id === state.wallpaperId);
-      if (match && match.image_url) {
-        preloadAndSetWallpaper(match.image_url);
-        return;
-      }
-    } else if (state.wallpaperId) {
-      // Manifest not loaded yet; preload derivative URL directly
-      const displayUrl = `/api/wallpapers/${state.wallpaperId}/display.webp`;
-      preloadAndSetWallpaper(displayUrl);
+    const match = manifest && manifest.wallpapers.find(w => w.id === state.wallpaperId);
+    if (match) {
+      preloadAndSetWallpaper(match.image_url);
       return;
     }
 
+    // Manifest not loaded yet; preload derivative URL directly
+    // Wait for the authenticated catalog before admitting a saved image ID.
     // No wallpaper selected or cleared
+    if (requestedWallpaperUrl !== null) currentLoadSeq++;
+    requestedWallpaperUrl = null;
     root.style.setProperty('--app-wallpaper-image', 'none');
   }
 
   function preloadAndSetWallpaper(url) {
+    if (url === requestedWallpaperUrl) return;
+    requestedWallpaperUrl = url;
     const root = document.documentElement;
     const seq = ++currentLoadSeq;
     const img = new Image();
@@ -133,14 +137,19 @@
     manifestStatus = 'loading';
     updateGalleryUI();
 
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), 10000);
     try {
       const res = await fetch('/api/wallpapers', {
         headers: { 'Accept': 'application/json' },
-        cache: 'no-store'
+        cache: 'no-store',
+        signal: controller.signal
       });
 
       if (res.status === 401) {
         manifestStatus = 'unauthenticated';
+        manifest = null;
+        applyStyles();
         updateGalleryUI();
         return;
       }
@@ -152,7 +161,17 @@
       }
 
       const data = await res.json();
-      if (data && Array.isArray(data.wallpapers)) {
+      const ids = new Set();
+      const validManifest = data && data.version === 1 && Array.isArray(data.wallpapers) &&
+        data.wallpapers.every(w => {
+          if (!w || !validId(w.id) || ids.has(w.id) || typeof w.name !== 'string' ||
+              !Number.isInteger(w.width) || w.width <= 0 || !Number.isInteger(w.height) || w.height <= 0 ||
+              w.image_url !== `/api/wallpapers/${w.id}/display.webp` ||
+              w.thumbnail_url !== `/api/wallpapers/${w.id}/thumbnail.webp`) return false;
+          ids.add(w.id);
+          return true;
+        }) && (data.default_id === null || ids.has(data.default_id));
+      if (validManifest) {
         manifest = data;
         manifestStatus = 'success';
 
@@ -177,6 +196,8 @@
     } catch (e) {
       manifestStatus = 'error';
       updateGalleryUI();
+    } finally {
+      clearTimeout(deadline);
     }
   }
 
@@ -207,7 +228,7 @@
         <div>
           <div class="appearance-section-title">Wallpaper</div>
           <div class="appearance-gallery-wrap">
-            <div class="appearance-gallery" id="appearance-gallery" role="listbox" aria-label="Wallpapers">
+            <div class="appearance-gallery" id="appearance-gallery" role="group" aria-label="Wallpapers">
               <div class="appearance-empty-state">Loading wallpapers…</div>
             </div>
           </div>
@@ -278,6 +299,7 @@
       if (manifest && manifest.default_id) {
         state.wallpaperId = manifest.default_id;
       }
+      requestedWallpaperUrl = null;
       blurInput.value = state.blur;
       translucencyInput.value = state.translucency;
       document.getElementById('appearance-blur-val').textContent = `${state.blur}%`;
@@ -327,11 +349,10 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'appearance-thumb-btn';
-      btn.setAttribute('role', 'option');
       btn.setAttribute('data-id', wp.id);
       btn.setAttribute('aria-label', wp.name || 'Wallpaper');
       const isSelected = (state.wallpaperId === wp.id);
-      btn.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      btn.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
 
       const img = document.createElement('img');
       img.className = 'appearance-thumb-img';
@@ -348,6 +369,7 @@
 
       btn.addEventListener('click', () => {
         state.wallpaperId = wp.id;
+        requestedWallpaperUrl = null;
         saveStoredState();
         applyStyles();
         updateGalleryUI();
@@ -446,11 +468,12 @@
     }
 
     // Check if on FileBrowser page
-    mountCloudAppearanceButton();
+    const isCloud = window.location.pathname.startsWith('/drive/');
+    if (isCloud) mountCloudAppearanceButton();
 
     // Lifecycle-safe observer for SPA route changes and initial Vue mount
     const appContainer = document.getElementById('app') || document.body || document.documentElement;
-    if (appContainer) {
+    if (isCloud && appContainer) {
       const observer = new MutationObserver(() => {
         if (!document.getElementById('cloud-appearance-btn') && document.querySelector('header')) {
           mountCloudAppearanceButton();
@@ -476,20 +499,6 @@
     openDialog,
     closeDialog,
     getState: () => ({ ...state }),
-    setState: (newState) => {
-      Object.assign(state, newState);
-      saveStoredState();
-      applyStyles();
-      updateGalleryUI();
-    },
-    resetDefaults: () => {
-      state.blur = DEFAULT_BLUR;
-      state.translucency = DEFAULT_TRANSLUCENCY;
-      if (manifest && manifest.default_id) state.wallpaperId = manifest.default_id;
-      saveStoredState();
-      applyStyles();
-      updateGalleryUI();
-    },
     fetchWallpapers
   };
 })();

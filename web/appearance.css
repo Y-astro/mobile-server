@@ -7,6 +7,11 @@
 @import "/theme-tokens.css";
 
 /* Fixed Wallpaper & Tint Layer */
+body {
+  isolation: isolate;
+  min-height: 100vh;
+}
+
 #app-wallpaper-backdrop {
   position: fixed;
   inset: 0;
@@ -24,7 +29,7 @@
   position: fixed;
   inset: 0;
   z-index: -1;
-  background-color: rgba(17, 20, 20, var(--app-tint-alpha, 0.55));
+  background-color: rgba(17, 20, 20, var(--app-tint-alpha, 0.78));
   pointer-events: none;
 }
 
@@ -138,7 +143,7 @@ dialog#appearance-dialog::backdrop {
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--md-sys-color-on-surface-variant, #bfc8c7);
-  text-transform: uppercase;
+  text-transform: none;
   letter-spacing: 0.04em;
   margin: 0 0 8px 0;
 }
@@ -184,7 +189,7 @@ dialog#appearance-dialog::backdrop {
   border-color: var(--md-sys-color-primary, #70d6c5);
 }
 
-.appearance-thumb-btn[aria-selected="true"] {
+.appearance-thumb-btn[aria-pressed="true"] {
   border-color: var(--md-sys-color-primary, #70d6c5);
   box-shadow: 0 0 0 1px var(--md-sys-color-primary, #70d6c5);
 }
@@ -212,7 +217,7 @@ dialog#appearance-dialog::backdrop {
   text-align: center;
 }
 
-.appearance-thumb-btn[aria-selected="true"] .appearance-thumb-badge {
+.appearance-thumb-btn[aria-pressed="true"] .appearance-thumb-badge {
   display: block;
 }
 
@@ -393,4 +398,10 @@ dialog#appearance-dialog::backdrop {
 
 #cloud-appearance-btn:focus-visible {
   outline: 2px solid var(--md-sys-color-primary, #70d6c5);
+}
+
+.m3-card {
+  background: rgba(29, 34, 35, var(--app-panel-alpha, 0.65)) !important;
+  backdrop-filter: blur(var(--app-blur, 15px));
+  -webkit-backdrop-filter: blur(var(--app-blur, 15px));
 }

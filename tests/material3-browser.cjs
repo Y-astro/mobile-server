@@ -207,6 +207,8 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
 
   try {
     const context = await browser.newContext();
+    // Install interception before keyboard actions can open a native picker.
+    context.on('page', page => page.on('filechooser', () => {}));
     const pageErrors = [];
     const externalRequests = [];
     context.on('page', page => page.on('pageerror', error => pageErrors.push(error.message)));

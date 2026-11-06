@@ -1,34 +1,3 @@
 import '/appearance.js';
 
-export {
-  __vite_legacy_guard,
-  C,
-  D,
-  E,
-  O,
-  S,
-  T,
-  _,
-  a,
-  b,
-  c,
-  d,
-  f,
-  g,
-  h,
-  i,
-  k,
-  l,
-  m,
-  n,
-  o,
-  p,
-  r,
-  s,
-  t,
-  u,
-  v,
-  w,
-  x,
-  y
-} from './mobile-filebrowser.js';
+export * from './mobile-filebrowser.js';

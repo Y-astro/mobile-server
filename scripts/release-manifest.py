@@ -45,6 +45,11 @@ MOBILE_SERVER_LIB_PREFIX = "/data/data/com.termux/files/home/.local/lib/mobile-s
 # Reviewed additional maintained source assets outside frozen historical baseline
 REVIEWED_ADDITIONAL_ASSETS: Dict[str, str] = {
     "web/portal-polling.js": "/data/data/com.termux/files/home/.config/dashboard/static/portal-polling.js",
+    "web/theme-tokens.css": "/data/data/com.termux/files/home/.config/dashboard/static/theme-tokens.css",
+    "web/appearance.css": "/data/data/com.termux/files/home/.config/dashboard/static/appearance.css",
+    "web/appearance.js": "/data/data/com.termux/files/home/.config/dashboard/static/appearance.js",
+    "web/filebrowser.css": "/data/data/com.termux/files/home/.config/dashboard/static/filebrowser.css",
+    "web/filebrowser-entry.js": "/data/data/com.termux/files/home/.config/dashboard/static/filebrowser-entry.js",
 }
 
 # Forbidden secret, runtime, credential, database, and history patterns.
