@@ -186,7 +186,7 @@ def dispatch_antra(
 
         if method == "POST":
             content_length_str = handler.headers.get("Content-Length", "")
-            if not content_length_str.isdigit():
+            if not content_length_str.isdigit() or len(content_length_str) > 12:
                 _send_error(handler, 400, "Invalid Content-Length")
                 return
 
@@ -216,7 +216,7 @@ def dispatch_antra(
                 return
 
             destination = payload.get("destination", "private")
-            if destination not in VALID_DESTINATIONS:
+            if not isinstance(destination, str) or destination not in VALID_DESTINATIONS:
                 _send_error(handler, 400, "Invalid destination: must be 'private' or 'family'")
                 return
 

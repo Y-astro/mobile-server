@@ -8,7 +8,7 @@ import tempfile
 import threading
 from typing import Any, Dict, Optional
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -244,6 +244,18 @@ class TestAntraApiUnit(unittest.TestCase):
         # Physical paths must NOT be present
         self.assertNotIn("/storage", json.dumps(settings))
 
+    def test_invalid_destination_types_and_oversized_length_are_refused(self):
+        for destination in (None, [], {}, 1):
+            body = json.dumps({"url": "https://tidal.com/track/fixture", "destination": destination}).encode()
+            handler = MockHandler(command="POST", path="/api/antra/jobs", user="admin", body=body,
+                                  headers={"Host": "localhost", "Content-Length": str(len(body))})
+            dispatch_antra(handler, user="admin", store=self.store, is_admin=lambda user: True)
+            self.assertEqual(handler.status_code, 400)
+        handler = MockHandler(command="POST", path="/api/antra/jobs", user="admin",
+                              headers={"Host": "localhost", "Content-Length": "9" * 5000})
+        dispatch_antra(handler, user="admin", store=self.store, is_admin=lambda user: True)
+        self.assertEqual(handler.status_code, 400)
+
     def test_job_cancel_and_retry_api_transitions(self):
         job = self.store.create_job("https://tidal.com/album/12345", destination="family")
         job_id = job["id"]
@@ -326,12 +338,22 @@ class TestDashboardAntraIntegration(unittest.TestCase):
             },
         )
 
-        import dashboard
+        import importlib.util
+        import telemetry
+        for scoped in (
+            patch.dict(os.environ, {"HOME": str(self.base_dir)}),
+            patch.object(telemetry.Telemetry, "start", return_value=None),
+            patch("antra_store.DEFAULT_DB_PATH", self.base_dir / "antra/queue.sqlite3"),
+        ):
+            scoped.start()
+            self.addCleanup(scoped.stop)
+        spec = importlib.util.spec_from_file_location("isolated_antra_dashboard", Path(__file__).resolve().parents[1] / "app/dashboard.py")
+        dashboard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(dashboard)
         self.dashboard_mod = dashboard
-        self.orig_users_file = dashboard.USER_STORE.path
         dashboard.USER_STORE.path = self.users_file
         dashboard.USER_STORE.invalidate()
-
+        dashboard.get_filebrowser_jwt = MagicMock(return_value=None)
         self.server = dashboard.ThreadingHTTPServer(("127.0.0.1", 0), dashboard.DashboardHandler)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -340,7 +362,7 @@ class TestDashboardAntraIntegration(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.server.server_close()
-        self.dashboard_mod.USER_STORE.path = self.orig_users_file
+        self.thread.join(timeout=2)
         self.tmp_dir.cleanup()
 
     def _login(self, username, password):

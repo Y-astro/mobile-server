@@ -59,7 +59,7 @@ CANCELLABLE_JOB_STATUSES = frozenset({
 RETRIABLE_JOB_STATUSES = frozenset({
     "failed",
     "cancelled",
-    "uncertain",
+    "blocked",
     "partial",
 })
 
@@ -207,6 +207,12 @@ class AntraStore:
             trk_columns = {row["name"] for row in cursor_trk.fetchall()}
             if "ack_pending" not in trk_columns:
                 conn.execute("ALTER TABLE tracks ADD COLUMN ack_pending INTEGER NOT NULL DEFAULT 0;")
+            for column, sql_type in (("publication_path", "TEXT"), ("temporary_path", "TEXT"),
+                                     ("file_sha256", "TEXT"), ("file_size", "INTEGER"),
+                                     ("temporary_dev", "INTEGER"), ("temporary_ino", "INTEGER"),
+                                     ("ack_retry_after", "REAL NOT NULL DEFAULT 0")):
+                if column not in trk_columns:
+                    conn.execute(f"ALTER TABLE tracks ADD COLUMN {column} {sql_type};")
 
         if self.db_path.exists():
             try:
@@ -394,7 +400,7 @@ class AntraStore:
     ) -> None:
         allowed = {
             "title", "artist", "status", "bit_depth", "sample_rate",
-            "filename", "message", "ack_pending"
+            "filename", "message", "ack_pending", "publication_path", "temporary_path", "file_sha256", "file_size", "ack_retry_after", "temporary_dev", "temporary_ino"
         }
         updates = {}
         for k, v in fields.items():
@@ -483,7 +489,8 @@ class AntraStore:
                     chunk_end = 0,
                     submission_intent = 0,
                     concurrency_retry_after = 0,
-                    retry_attempts = 0
+                    retry_attempts = 0,
+                    upstream_job_id = NULL
                 WHERE id = ?;
                 """,
                 (now, job_id),
@@ -491,7 +498,7 @@ class AntraStore:
             conn.execute(
                 """
                 UPDATE tracks SET status = 'queued', message = ''
-                WHERE job_id = ? AND status != 'completed';
+                WHERE job_id = ? AND status NOT IN ('completed', 'skipped');
                 """,
                 (job_id,),
             )
@@ -508,7 +515,8 @@ class AntraStore:
             cur = conn.execute(
                 """
                 SELECT * FROM jobs
-                WHERE status IN ('queued', 'resolving', 'downloading')
+                WHERE (status IN ('queued', 'resolving', 'downloading')
+                       OR (status = 'blocked' AND concurrency_retry_after > 0))
                   AND concurrency_retry_after <= ?
                 ORDER BY created_at ASC
                 LIMIT 1;
@@ -517,3 +525,17 @@ class AntraStore:
             )
             row = cur.fetchone()
             return dict(row) if row else None
+
+
+    def get_internal_track(self, job_id: str, index: int) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM tracks WHERE job_id = ? AND track_index = ?", (job_id, index)).fetchone()
+            return dict(row) if row else None
+
+    def pending_acknowledgements(self) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT tracks.*, jobs.upstream_job_id FROM tracks JOIN jobs ON jobs.id = tracks.job_id "
+                "WHERE ack_pending = 1 AND ack_retry_after <= ? AND upstream_job_id IS NOT NULL "
+                "AND tracks.status IN ('completed', 'skipped') LIMIT 8", (time.time(),)
+            ).fetchall()]

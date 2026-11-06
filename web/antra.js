@@ -75,12 +75,12 @@
     if (bitDepth === 24) {
       span.className = 'quality-badge-24';
       span.textContent = rateKhz ? `24-bit / ${rateKhz}` : '24-bit FLAC';
-    } else if (bitDepth && bitDepth < 24) {
+    } else if (bitDepth && bitDepth !== 24) {
       span.className = 'quality-badge-skipped';
       span.textContent = `${bitDepth}-bit (Skipped - 24-bit only rule)`;
     } else if (track.status === 'skipped') {
       span.className = 'quality-badge-skipped';
-      span.textContent = 'Skipped (<24-bit)';
+      span.textContent = 'Skipped (24-bit required)';
     } else {
       span.className = 'text-xs text-muted';
       span.textContent = 'Pending stream';
@@ -350,7 +350,7 @@
       }
 
       // Retry button if failed or partial or cancelled
-      if (['failed', 'cancelled', 'partial'].includes(job.status)) {
+      if (['failed', 'cancelled', 'blocked', 'partial'].includes(job.status)) {
         const retryBtn = document.createElement('button');
         retryBtn.type = 'button';
         retryBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-teal hover:text-white border-teal/40';
@@ -466,7 +466,7 @@
       const skippedCount = tracks.filter(t => t.status === 'skipped').length;
       const failedCount = tracks.filter(t => t.status === 'failed').length;
 
-      tracksSummary.textContent = `${tracks.length} tracks total • ${completedCount} completed (24-bit) • ${skippedCount} skipped (<24-bit rule) • ${failedCount} failed`;
+      tracksSummary.textContent = `${tracks.length} tracks total • ${completedCount} completed (24-bit) • ${skippedCount} skipped (24-bit required) • ${failedCount} failed`;
 
       // Render All Tracks into Tbody (Zero loss, proofs index 101+/250)
       const tbodyFrag = document.createDocumentFragment();

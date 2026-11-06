@@ -107,7 +107,7 @@ class TestAntraWorker(unittest.TestCase):
 
         status = self.store.get_worker_status()
         self.assertEqual(status["state"], "needs_setup")
-        self.assertIn("credentials.json", status["message"])
+        self.assertIn("not configured", status["message"])
 
         job_state = self.store.get_job(job["id"])
         self.assertEqual(job_state["status"], "blocked")
@@ -217,7 +217,7 @@ class TestAntraWorker(unittest.TestCase):
         )
         ok, msg = live_worker.check_output_storage("private")
         self.assertFalse(ok)
-        self.assertIn("Pre-provisioned destination directory missing", msg)
+        self.assertIn("not been provisioned", msg)
         self.assertFalse(live_roots["private"].exists())
 
     def test_cancellation_during_byte_stream(self):
@@ -260,7 +260,7 @@ class TestAntraWorker(unittest.TestCase):
         job_state = self.store.get_job(job_id)
         self.assertEqual(job_state["status"], "cancelled")
         # No temp files left behind
-        temp_files = list(self.output_roots["private"].glob("**/.tmp*"))
+        temp_files = list(self.output_roots["private"].glob("**/*.part"))
         self.assertEqual(len(temp_files), 0)
 
     def test_unknown_submission_uncertainty_and_malformed_response(self):
@@ -281,7 +281,7 @@ class TestAntraWorker(unittest.TestCase):
 
         job_state = self.store.get_job(job["id"])
         self.assertEqual(job_state["status"], "uncertain")
-        self.assertIn("manual decision required", job_state["message"])
+        self.assertIn("Automatic resubmission is disabled", job_state["message"])
 
         # Not runnable on restart
         self.assertIsNone(self.store.get_next_runnable_job())
@@ -303,79 +303,45 @@ class TestAntraWorker(unittest.TestCase):
         # Not runnable immediately (no hot loop)
         self.assertIsNone(self.store.get_next_runnable_job())
 
-    def test_restart_recovery_known_job_across_chunks_to_250(self):
-        """Verify 250 tracks across 100-track batches, with restart recovery using fresh ws-token."""
+    def test_restart_recovery_one_upstream_job_for_250_tracks(self):
+        """A replayed 250-track folder job resumes without resubmission or redownloading completed tracks."""
         self._write_credentials()
         job = self.store.create_job("https://tidal.com/playlist/large250", destination="family")
         job_id = job["id"]
-
-        mock_tracks = [
-            {"index": i, "title": f"Song {i+1}", "artist": "Big Artist"}
-            for i in range(250)
-        ]
         self.client.resolve = MagicMock(return_value={
-            "title": "Mega Playlist",
-            "artist": "Big Artist",
-            "total": 250,
-            "tracks": mock_tracks,
+            "title": "Mega Playlist", "total": 250,
+            "tracks": [{"index": i, "title": f"Song {i+1}"} for i in range(250)],
         })
-
-        real_audio_path = self.base_dir / "chunk_audio.flac"
-        generate_real_flac(real_audio_path, bits=24, sample_rate=48000)
-        audio_bytes = real_audio_path.read_bytes()
-
-        # Batch 1 (0..100) downloads, Batch 2 (100..200) gets interrupted after 5 tracks
-        def submit_batch(music_url, start_index, end_index):
-            return f"upstream_{start_index}", f"token_{start_index}"
-
-        def ws_events_run1(upstream_job_id, ws_token):
-            if upstream_job_id == "upstream_0":
-                for idx in range(100):
-                    yield {"type": "track_done", "index": idx, "path": f"Big/Mega/{idx+1:03d}.flac"}
-                yield {"type": "complete"}
-            elif upstream_job_id == "upstream_100":
-                for idx in range(100, 105):
-                    yield {"type": "track_done", "index": idx, "path": f"Big/Mega/{idx+1:03d}.flac"}
-                raise ConnectionResetError("Simulated interruption")
-
-        self.client.submit_job = MagicMock(side_effect=submit_batch)
-        self.client.connect_job_ws = MagicMock(side_effect=ws_events_run1)
-        self.client.download_track_stream = MagicMock(side_effect=lambda *args: io.BytesIO(audio_bytes))
+        audio = self.base_dir / "incoming.flac"
+        generate_real_flac(audio, bits=24, sample_rate=48000)
+        payload = audio.read_bytes()
+        self.client.submit_job = MagicMock(return_value=("one_upstream", "initial_token"))
+        self.client.get_job_status = MagicMock(return_value={"status": "downloading"})
+        self.client.fresh_ws_token = MagicMock(return_value="fresh_token")
+        def interrupted(*args):
+            for index in range(105):
+                yield {"type": "track_done", "index": index, "path": f"Artist/{index+1}.flac"}
+            raise ConnectionResetError("owned fixture disconnect")
+        def replay(*args):
+            for index in range(250):
+                yield {"type": "track_done", "index": index, "path": f"Artist/{index+1}.flac"}
+            yield {"type": "complete"}
+        self.client.connect_job_ws = MagicMock(side_effect=interrupted)
+        self.client.download_track_stream = MagicMock(side_effect=lambda *args: io.BytesIO(payload))
         self.client.ack_track = MagicMock(return_value=True)
-
         self.worker.process_job(job)
-
-        trks_mid = self.store.get_tracks(job_id)
-        comp_mid = sum(1 for t in trks_mid if t["status"] == "completed")
-        self.assertEqual(comp_mid, 105)
-
-        # RESTART: Worker recovers known job across restart using fresh_ws_token!
-        self.client.fresh_ws_token = MagicMock(return_value="fresh_token_100")
-
-        def ws_events_run2(upstream_job_id, ws_token):
-            if upstream_job_id == "upstream_100":
-                for idx in range(100, 200):
-                    yield {"type": "track_done", "index": idx, "path": f"Big/Mega/{idx+1:03d}.flac"}
-                yield {"type": "complete"}
-            elif upstream_job_id == "upstream_200":
-                for idx in range(200, 250):
-                    yield {"type": "track_done", "index": idx, "path": f"Big/Mega/{idx+1:03d}.flac"}
-                yield {"type": "complete"}
-
-        self.client.connect_job_ws = MagicMock(side_effect=ws_events_run2)
-
-        # Run worker again (simulating process restart)
-        self.assertTrue(self.worker.run_once())
-
-        final_trks = self.store.get_tracks(job_id)
-        self.assertEqual(len(final_trks), 250)
-        comp_final = sum(1 for t in final_trks if t["status"] == "completed")
-        self.assertEqual(comp_final, 250)
-
-        final_job = self.store.get_job(job_id)
-        self.assertEqual(final_job["status"], "completed")
-        self.assertEqual(final_job["completed"], 250)
-        self.assertEqual(final_job["destination"], "family")
+        self.assertEqual(self.store.get_job(job_id)["completed"], 105)
+        self.assertIsNone(self.store.get_next_runnable_job())
+        self.store.update_job(job_id, concurrency_retry_after=0)
+        self.client.connect_job_ws = MagicMock(side_effect=replay)
+        restarted = AntraWorker(store=self.store, client=self.client, output_roots=self.output_roots, lock_file=self.lock_file, is_test_env=True)
+        self.assertTrue(restarted.run_once())
+        self.assertEqual(self.store.get_job(job_id)["completed"], 250)
+        self.assertEqual(self.store.get_job(job_id)["status"], "completed")
+        self.client.submit_job.assert_called_once_with(job["url"], start_index=0, end_index=250)
+        self.client.fresh_ws_token.assert_called_once_with("one_upstream")
+        self.assertEqual(self.client.download_track_stream.call_count, 250)
+        self.assertEqual(len(list(self.output_roots["family"].rglob("*.flac"))), 250)
 
 
 if __name__ == "__main__":

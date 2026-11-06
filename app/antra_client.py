@@ -52,7 +52,12 @@ def is_supported_music_url(url: str) -> bool:
     except Exception:
         return False
 
-    if parsed.scheme != "https":
+    if parsed.scheme != "https" or parsed.username is not None or parsed.password is not None:
+        return False
+    try:
+        if parsed.port not in (None, 443):
+            return False
+    except ValueError:
         return False
     host = (parsed.hostname or "").lower()
     if not host:
@@ -65,8 +70,16 @@ def is_supported_music_url(url: str) -> bool:
 
 
 class AntraClientError(Exception):
-    """Base error for Antra client operations."""
-    pass
+    """Safe public error with optional retry scheduling and HTTP status."""
+    def __init__(self, message, *, retry_after=None, status=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.status = status
+
+
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        return None
 
 
 class MissingCredentialsError(AntraClientError):
@@ -112,6 +125,8 @@ class AntraClient:
         self._load_cookies()
 
     def _ensure_config_dir(self) -> None:
+        if self.config_dir.is_symlink():
+            raise MissingCredentialsError("Antra configuration must be private")
         self.config_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
             os.chmod(self.config_dir, 0o700)
@@ -151,7 +166,11 @@ class AntraClient:
             return
         tmp_file = self.cookies_file.parent / f".tmp_{uuid.uuid4().hex}"
         try:
+            descriptor = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.close(descriptor)
             self.cookie_jar.save(filename=str(tmp_file), ignore_discard=True, ignore_expires=True)
+            with tmp_file.open("rb") as saved:
+                os.fsync(saved.fileno())
             os.chmod(tmp_file, 0o600)
             os.replace(tmp_file, self.cookies_file)
             os.chmod(self.cookies_file, 0o600)
@@ -160,7 +179,7 @@ class AntraClient:
                 tmp_file.unlink(missing_ok=True)
 
     def _build_opener(self) -> urllib.request.OpenerDirector:
-        handlers: List[Any] = [urllib.request.HTTPCookieProcessor(self.cookie_jar)]
+        handlers: List[Any] = [urllib.request.HTTPCookieProcessor(self.cookie_jar), NoRedirects()]
         if self.base_url.startswith("https://"):
             ctx = ssl.create_default_context()
             handlers.append(urllib.request.HTTPSHandler(context=ctx))
@@ -195,7 +214,11 @@ class AntraClient:
             if stream:
                 return resp
             with resp:
-                resp_body = resp.read(2 * 1024 * 1024)
+                resp_body = resp.read(2 * 1024 * 1024 + 1)
+                if len(resp_body) > 2 * 1024 * 1024:
+                    if is_submission:
+                        raise UncertainSubmissionError("Submission response exceeded size limit")
+                    raise AntraClientError("Upstream response exceeded size limit")
                 return resp.status, resp.headers, resp_body
         except urllib.error.HTTPError as e:
             self._save_cookies()
@@ -217,17 +240,20 @@ class AntraClient:
                         pass
 
             if e.code == 429:
+                raw_retry = e.headers.get("Retry-After", "")
+                retry_after = float(raw_retry) if raw_retry.isdigit() else None
                 if error_code == "DAILY_LIMIT" or b"DAILY_LIMIT" in err_body or b"daily" in err_body.lower():
-                    raise DailyLimitError("Daily track limit reached on Antra upstream")
-                raise ConcurrencyLimitError("Concurrency limit reached on Antra upstream; backing off")
-
-            raise AntraClientError(f"HTTP {e.code}: upstream request failed")
+                    raise DailyLimitError("Daily quota reached; downloads will resume after reset.", retry_after=retry_after or (86402 - time.time() % 86400))
+                raise ConcurrencyLimitError("Provider is busy; waiting before retry.", retry_after=retry_after or 15)
+            if is_submission and e.code >= 500:
+                raise UncertainSubmissionError("Provider failed before confirming submission")
+            raise AntraClientError(f"Upstream request failed (HTTP {e.code}).", status=e.code)
         except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as e:
             if is_submission:
                 raise UncertainSubmissionError(
-                    f"Job submission timed out without confirmed job_id: {e}"
+                    "Job submission interrupted without a confirmed identifier."
                 )
-            raise AntraClientError(f"Network error communicating with Antra: {e}")
+            raise AntraClientError("Network request failed; retry later.")
 
     def login(self) -> bool:
         """Authenticate with upstream Antra using configured credentials."""
@@ -258,7 +284,9 @@ class AntraClient:
             raise AntraClientError(f"Resolve failed: HTTP {status}")
 
         data = json.loads(body.decode("utf-8"))
-        raw_tracks = data.get("tracks") or []
+        raw_tracks = data.get("tracks") if isinstance(data, dict) else None
+        if not isinstance(raw_tracks, list) or not raw_tracks or len(raw_tracks) > 10000 or any(not isinstance(track, dict) for track in raw_tracks):
+            raise AntraClientError("Provider returned an invalid track list.", status=400)
         parsed_tracks = []
         for i, trk in enumerate(raw_tracks):
             parsed_tracks.append({
@@ -316,12 +344,14 @@ class AntraClient:
         except Exception:
             raise UncertainSubmissionError("Submission response was malformed JSON")
 
+        if not isinstance(resp_data, dict):
+            raise UncertainSubmissionError("Submission response was not an object")
         job_id = resp_data.get("job_id")
         ws_token = resp_data.get("ws_token") or ""
-        if not job_id:
-            raise UncertainSubmissionError("Submission response missing job_id")
+        if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job_id):
+            raise UncertainSubmissionError("Submission response missing a valid job identifier")
 
-        return str(job_id), str(ws_token)
+        return job_id, ws_token if isinstance(ws_token, str) else ""
 
     def get_job_status(self, upstream_job_id: str) -> Dict[str, Any]:
         """Check status of known upstream job."""
@@ -332,14 +362,12 @@ class AntraClient:
 
     def fresh_ws_token(self, upstream_job_id: str) -> Optional[str]:
         """Request a fresh WebSocket token for an existing job (queue.js254)."""
-        try:
-            status, _, body = self._request("POST", f"/api/jobs/{upstream_job_id}/ws-token")
-            if status == 200:
-                data = json.loads(body.decode("utf-8"))
-                return data.get("ws_token")
-        except Exception:
-            pass
-        return None
+        status, _, body = self._request("POST", f"/api/jobs/{upstream_job_id}/ws-token")
+        data = json.loads(body.decode("utf-8"))
+        token = data.get("ws_token") if isinstance(data, dict) else None
+        if not isinstance(token, str) or not token:
+            raise AntraClientError("Could not renew the existing download session.")
+        return token
 
     def download_track_stream(self, upstream_job_id: str, track_index: int) -> Any:
         """Stream audio data for a single track."""
@@ -373,7 +401,9 @@ class AntraClient:
         ws_url = f"{ws_proto}://{host}/api/jobs/{upstream_job_id}/ws?ws_token={urllib.parse.quote(ws_token)}"
 
         headers = {}
-        cookie_header = "; ".join(f"{c.name}={c.value}" for c in self.cookie_jar)
+        cookie_request = urllib.request.Request(self.base_url + "/api/jobs/")
+        self.cookie_jar.add_cookie_header(cookie_request)
+        cookie_header = cookie_request.get_header("Cookie")
         if cookie_header:
             headers["Cookie"] = cookie_header
 
@@ -386,11 +416,8 @@ class AntraClient:
             while True:
                 try:
                     message = ws.recv(timeout=30)
-                except TimeoutError:
-                    # Inactivity timeout without completion
-                    break
-                except Exception:
-                    break
+                except Exception as error:
+                    raise AntraClientError("Download event stream interrupted; reconnecting.") from error
 
                 if isinstance(message, bytes):
                     message = message.decode("utf-8")
