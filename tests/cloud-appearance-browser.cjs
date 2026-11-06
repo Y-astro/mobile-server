@@ -99,6 +99,9 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
 (async () => {
   let wallpaperApiAuthRequired = false;
   let wallpaperApiHang = false;
+  let authCheckAdminRole = null;
+  let authCheckAdminStatus = null;
+  let authCheckAdminHang = false;
 
   const server = http.createServer((req, res) => {
     const parsed = new URL(req.url, 'http://127.0.0.1');
@@ -165,6 +168,39 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
       }
       res.writeHead(200, { 'Content-Type': 'image/webp', 'Cache-Control': 'private, no-store' });
       return res.end(defaultWallpaperBytes);
+    }
+
+    if (pathname === '/api/auth-check-admin') {
+      if (authCheckAdminHang) return;
+      if (authCheckAdminStatus === 500) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('Internal Server Error');
+      }
+      let role = authCheckAdminRole;
+      if (!role) {
+        const fwdUser = req.headers['x-forwarded-user'] || '';
+        const cookie = req.headers['cookie'] || '';
+        const referer = req.headers['referer'] || '';
+        if (fwdUser === 'admin' || fwdUser === 'astro') role = 'admin';
+        else if (fwdUser === 'family') role = 'family';
+        else if (cookie.includes('session_user=admin') || cookie.includes('session_user=astro')) role = 'admin';
+        else if (cookie.includes('session_user=family')) role = 'family';
+        else if (referer.includes('/family')) role = 'family';
+        else if (referer.includes('/login')) role = 'anonymous';
+        else if (referer.includes('/admin') || referer.includes('/drive/')) role = 'admin';
+        else role = 'admin';
+      }
+
+      if (role === 'admin') {
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'X-Forwarded-User': 'astro' });
+        return res.end('OK');
+      }
+      if (role === 'family') {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('Forbidden: Administrator privileges required.');
+      }
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ status: 'error', message: 'Unauthorized' }));
     }
 
     // Portal APIs for admin/family/stats
@@ -552,25 +588,67 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     await cloudPage.locator('#appearance-close').click();
 
     // =========================================================================
-    // TEST 5: LOGIN PAGE & AUTHENTICATION FALLBACK
+    // TEST 5: ROLE ISOLATION - LOGIN & FAMILY GATING & BACKGROUND PRESERVATION
     // =========================================================================
-    console.log('--- TEST 5: Login Page & Authentication Fallback ---');
+    console.log('--- TEST 5: Login & Family Role Restrictions & Styling Preservation ---');
+
+    // 5A: Login Page - trigger absent, openDialog fails closed, no private wallpaper leak
+    authCheckAdminRole = 'anonymous';
     wallpaperApiAuthRequired = true; // /api/wallpapers returns 401
-
     await cloudPage.goto(`${baseUrl}/login`);
-    await cloudPage.locator('#btn-appearance').waitFor({ state: 'visible' });
-    await cloudPage.locator('#btn-appearance').click();
-    await cloudPage.locator('#appearance-dialog').waitFor({ state: 'visible' });
+    await cloudPage.waitForSelector('#login-form', { state: 'visible' });
 
-    // Verify notice is shown and no private gallery images leaked
-    const authNotice = cloudPage.locator('.appearance-notice');
-    await authNotice.waitFor({ state: 'visible', timeout: 3000 });
-    const authNoticeText = await authNotice.textContent();
-    assert(authNoticeText.includes('Sign in to customize wallpaper'), '401 on login must show sign-in notice');
-    const privateImgCount = await cloudPage.locator('#appearance-gallery img').count();
-    assert.equal(privateImgCount, 0, 'No private wallpaper images may be shown before authentication');
+    const loginTriggerCount = await cloudPage.locator('#btn-appearance').count();
+    assert.equal(loginTriggerCount, 0, 'Appearance button must be completely absent from login template');
 
-    wallpaperApiAuthRequired = false;
+    // Direct invocation on login must fail closed
+    await cloudPage.evaluate(() => window.MobileAppearance.openDialog());
+    await cloudPage.waitForTimeout(100);
+    const loginDialogCount = await cloudPage.locator('#appearance-dialog').count();
+    assert.equal(loginDialogCount, 0, 'Direct openDialog on login page must fail closed and never create dialog');
+
+    // 5B: Family Portal - trigger absent, direct openDialog denied, background & styling intact
+    authCheckAdminRole = 'family';
+    wallpaperApiAuthRequired = false; // /api/wallpapers 200 authenticated
+    await cloudPage.goto(`${baseUrl}/family`);
+    await cloudPage.waitForSelector('.family-services-grid', { state: 'visible' });
+
+    const familyTriggerCount = await cloudPage.locator('#btn-appearance').count();
+    assert.equal(familyTriggerCount, 0, 'Appearance button must be completely absent from family template');
+
+    // Direct invocation on family portal must fail closed
+    await cloudPage.evaluate(() => window.MobileAppearance.openDialog());
+    await cloudPage.waitForTimeout(100);
+    const familyDialogCount = await cloudPage.locator('#appearance-dialog').count();
+    assert.equal(familyDialogCount, 0, 'Direct openDialog on family page must fail closed');
+
+    // Styling & background wallpaper must still load cleanly for family
+    await cloudPage.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue('--app-wallpaper-image').includes('url('));
+    const familyWallpaper = await cloudPage.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--app-wallpaper-image'));
+    assert(familyWallpaper.includes('url('), 'Family portal must preserve wallpaper background rendering');
+    const familyBackdrop = await cloudPage.evaluate(() => {
+      const b = document.getElementById('app-wallpaper-backdrop');
+      const t = document.getElementById('app-wallpaper-tint');
+      return !!b && !!t;
+    });
+    assert.equal(familyBackdrop, true, 'Family portal must preserve backdrop and tint layers');
+
+    // 5C: Family Native Cloud (FileBrowser) - cloud button absent, direct openDialog denied, styling loaded
+    await cloudPage.goto(`${baseUrl}/drive/files/`);
+    await cloudPage.waitForSelector('#app', { state: 'attached' });
+    await cloudPage.locator('.item:not(.header)').first().waitFor({ state: 'visible', timeout: 5000 });
+    await cloudPage.waitForTimeout(300);
+
+    const familyCloudBtnCount = await cloudPage.locator('#cloud-appearance-btn').count();
+    assert.equal(familyCloudBtnCount, 0, 'Cloud appearance button must never mount for non-admin/family role');
+
+    await cloudPage.evaluate(() => window.MobileAppearance.openDialog());
+    await cloudPage.waitForTimeout(100);
+    const familyCloudDialogCount = await cloudPage.locator('#appearance-dialog').count();
+    assert.equal(familyCloudDialogCount, 0, 'Direct openDialog in cloud for family must fail closed');
+
+    // Restore admin role for subsequent tests
+    authCheckAdminRole = 'admin';
 
     // =========================================================================
     // TEST 6: ERROR HANDLING & EDGE CASES
@@ -611,6 +689,32 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     wallpaperApiHang = false;
     await cloudPage.locator('#appearance-retry-btn').click();
     await cloudPage.locator('.appearance-thumb-btn').first().waitFor({state:'visible'});
+
+    // E. Rejected / Network-failed auth-check-admin (500 status) fails closed
+    authCheckAdminRole = null;
+    authCheckAdminStatus = 500;
+    await cloudPage.goto(`${baseUrl}/drive/files/`);
+    await cloudPage.waitForSelector('#app', { state: 'attached' });
+    await cloudPage.locator('.item:not(.header)').first().waitFor({ state: 'visible' });
+    await cloudPage.waitForTimeout(300);
+    assert.equal(await cloudPage.locator('#cloud-appearance-btn').count(), 0, 'Cloud appearance button must not mount when auth-check fails');
+    await cloudPage.evaluate(() => window.MobileAppearance.openDialog());
+    await cloudPage.waitForTimeout(100);
+    assert.equal(await cloudPage.locator('#appearance-dialog').count(), 0, 'openDialog must fail closed on 500 auth failure');
+
+    // F. Network hang/timeout on auth-check-admin fails closed
+    authCheckAdminStatus = null;
+    authCheckAdminHang = true;
+    await cloudPage.goto(`${baseUrl}/drive/files/`);
+    await cloudPage.waitForSelector('#app', { state: 'attached' });
+    await cloudPage.locator('.item:not(.header)').first().waitFor({ state: 'visible' });
+    await cloudPage.waitForTimeout(300);
+    assert.equal(await cloudPage.locator('#cloud-appearance-btn').count(), 0, 'Cloud appearance button must not mount when auth-check hangs');
+    await cloudPage.evaluate(() => { window.MobileAppearance.openDialog(); });
+    await cloudPage.waitForTimeout(100);
+    assert.equal(await cloudPage.locator('#appearance-dialog').count(), 0, 'openDialog must fail closed when auth-check hangs');
+    authCheckAdminHang = false;
+    authCheckAdminRole = 'admin';
 
     // =========================================================================
     // TEST 7: FILEBROWSER NATIVE ACTIONS & DIALOGS

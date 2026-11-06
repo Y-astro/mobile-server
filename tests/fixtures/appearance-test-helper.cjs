@@ -55,6 +55,42 @@ function handleSharedAssetHttp(req, res, wallpapersJson = null) {
     res.end(JSON.stringify(wallpapersJson || { version: 1, default_id: null, wallpapers: [] }));
     return true;
   }
+  if (pathname === '/api/auth-check-admin') {
+    const fwdUser = req.headers['x-forwarded-user'] || '';
+    const cookie = req.headers['cookie'] || '';
+    const referer = req.headers['referer'] || '';
+    let role = 'anonymous';
+
+    if (fwdUser === 'admin' || fwdUser === 'astro') {
+      role = 'admin';
+    } else if (fwdUser === 'family') {
+      role = 'family';
+    } else if (cookie.includes('session_user=admin') || cookie.includes('session_user=astro')) {
+      role = 'admin';
+    } else if (cookie.includes('session_user=family')) {
+      role = 'family';
+    } else if (referer.includes('/family')) {
+      role = 'family';
+    } else if (referer.includes('/login')) {
+      role = 'anonymous';
+    } else if (referer.includes('/admin') || referer.includes('/drive/')) {
+      role = 'admin';
+    }
+
+    if (role === 'admin') {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'X-Forwarded-User': 'astro' });
+      res.end('OK');
+      return true;
+    }
+    if (role === 'family') {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Forbidden: Administrator privileges required.');
+      return true;
+    }
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'error', message: 'Unauthorized' }));
+    return true;
+  }
   return false;
 }
 
@@ -88,6 +124,51 @@ async function attachSharedAssetRoutes(target, wallpapersJson = null) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify(wallpapersJson || { version: 1, default_id: null, wallpapers: [] })
+    });
+  });
+  await target.route('**/api/auth-check-admin', route => {
+    const req = route.request();
+    const headers = req.headers();
+    const fwdUser = headers['x-forwarded-user'] || '';
+    const cookie = headers['cookie'] || '';
+    const referer = headers['referer'] || '';
+    let role = 'anonymous';
+
+    if (fwdUser === 'admin' || fwdUser === 'astro') {
+      role = 'admin';
+    } else if (fwdUser === 'family') {
+      role = 'family';
+    } else if (cookie.includes('session_user=admin') || cookie.includes('session_user=astro')) {
+      role = 'admin';
+    } else if (cookie.includes('session_user=family')) {
+      role = 'family';
+    } else if (referer.includes('/family')) {
+      role = 'family';
+    } else if (referer.includes('/login')) {
+      role = 'anonymous';
+    } else if (referer.includes('/admin') || referer.includes('/drive/')) {
+      role = 'admin';
+    }
+
+    if (role === 'admin') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/plain; charset=utf-8',
+        headers: { 'X-Forwarded-User': 'astro' },
+        body: 'OK'
+      });
+    }
+    if (role === 'family') {
+      return route.fulfill({
+        status: 403,
+        contentType: 'text/plain; charset=utf-8',
+        body: 'Forbidden: Administrator privileges required.'
+      });
+    }
+    return route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'error', message: 'Unauthorized' })
     });
   });
 }

@@ -28,6 +28,41 @@
   let requestedWallpaperUrl = null;
   let activeTriggerEl = null;
 
+  let isAdminConfirmed = false;
+  let authCheckPromise = null;
+
+  async function checkAdminRole() {
+    if (isAdminConfirmed) return true;
+    if (authCheckPromise) return authCheckPromise;
+
+    authCheckPromise = (async () => {
+      const controller = new AbortController();
+      const deadline = setTimeout(() => controller.abort(), 5000);
+      try {
+        const res = await fetch('/api/auth-check-admin', {
+          headers: { 'X-Forwarded-Uri': '/api/auth-check-admin' },
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        if (res.status === 200) {
+          isAdminConfirmed = true;
+          return true;
+        }
+        isAdminConfirmed = false;
+        return false;
+      } catch (e) {
+        isAdminConfirmed = false;
+        return false;
+      } finally {
+        clearTimeout(deadline);
+        if (!isAdminConfirmed) {
+          authCheckPromise = null;
+        }
+      }
+    })();
+    return authCheckPromise;
+  }
+
   function validId(id) {
     return typeof id === 'string' && id.length === 64 && /^[0-9a-f]+$/.test(id);
   }
@@ -203,6 +238,7 @@
 
   // Appearance Dialog DOM & Accessibility
   function getOrCreateDialog() {
+    if (!isAdminConfirmed) return null;
     let dialog = document.getElementById('appearance-dialog');
     if (dialog) return dialog;
 
@@ -379,9 +415,13 @@
     });
   }
 
-  function openDialog(triggerEl) {
+  async function openDialog(triggerEl) {
+    const ok = await checkAdminRole();
+    if (!ok) return;
+
     activeTriggerEl = triggerEl || document.activeElement;
     const dialog = getOrCreateDialog();
+    if (!dialog) return;
 
     // Sync input values with current state
     const blurInput = dialog.querySelector('#appearance-blur-input');
@@ -423,7 +463,10 @@
 
   // Mount Appearance Button into Cloud (FileBrowser) Header
   // Mount Appearance Button into Cloud (FileBrowser) Header
-  function mountCloudAppearanceButton() {
+  async function mountCloudAppearanceButton() {
+    if (document.getElementById('cloud-appearance-btn')) return;
+    const ok = await checkAdminRole();
+    if (!ok) return;
     if (document.getElementById('cloud-appearance-btn')) return;
 
     // FileBrowser header elements
@@ -465,16 +508,26 @@
     const portalBtn = document.getElementById('btn-appearance');
     if (portalBtn) {
       portalBtn.addEventListener('click', () => openDialog(portalBtn));
+      checkAdminRole().then(ok => {
+        if (ok) {
+          portalBtn.style.display = '';
+        }
+      });
     }
 
     // Check if on FileBrowser page
     const isCloud = window.location.pathname.startsWith('/drive/');
-    if (isCloud) mountCloudAppearanceButton();
+    if (isCloud) {
+      checkAdminRole().then(ok => {
+        if (ok) mountCloudAppearanceButton();
+      });
+    }
 
     // Lifecycle-safe observer for SPA route changes and initial Vue mount
     const appContainer = document.getElementById('app') || document.body || document.documentElement;
     if (isCloud && appContainer) {
       const observer = new MutationObserver(() => {
+        if (!isAdminConfirmed) return;
         if (!document.getElementById('cloud-appearance-btn') && document.querySelector('header')) {
           mountCloudAppearanceButton();
         }
