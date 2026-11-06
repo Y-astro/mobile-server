@@ -227,11 +227,11 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
     await desktopPage.goto(`${baseUrl}/admin`);
 
     // Wait for services and stats to populate
-    await desktopPage.waitForFunction(() => {
+    await desktopPage.waitForFunction(expectedServices => {
       const memEl = document.getElementById('svc-active-mem');
       const gridEl = document.getElementById('services-grid');
-      return memEl && memEl.textContent.includes('N/A') && gridEl && gridEl.children.length === 9;
-    });
+      return memEl && memEl.textContent.includes('N/A') && gridEl && gridEl.children.length === expectedServices;
+    }, fullServices.length);
 
     // 1. Verify computed Material 3 theme colors
     const themeColors = await desktopPage.evaluate(() => {
@@ -372,9 +372,9 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
     console.log('Desktop touch target deviations count (>=48px):', desktopTargetChecks.length);
     assert(desktopTargetChecks.length === 0, `All interactive controls must meet >=48px touch boundary, found ${desktopTargetChecks.length} undersized: ${JSON.stringify(desktopTargetChecks)}`);
 
-    // 7. Verify Populated Service Grid (9 cards from catalog, no undefined text)
+    // 7. Verify Populated Service Grid (all cards from catalog, no undefined text)
     const cardCount = await desktopPage.locator('#services-grid .m3-card').count();
-    assert.equal(cardCount, 9, 'Services grid must render all 9 services from catalog');
+    assert.equal(cardCount, fullServices.length, 'Services grid must render every catalog service');
     const gridText = await desktopPage.locator('#services-grid').textContent();
     assert(!gridText.includes('undefined'), 'Services grid must not contain literal undefined text');
     const activeMemoryBadge = await desktopPage.textContent('#svc-active-mem');
