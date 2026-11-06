@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Antra Hi-Res Downloader &bull; K20 Pro Server</title>
+  <link rel="stylesheet" href="/theme-tokens.css">
+  <link rel="stylesheet" href="/portal.css">
+  <link rel="stylesheet" href="/appearance.css">
+  <link rel="stylesheet" href="/antra.css">
+  <script defer src="/appearance.js"></script>
+  <script src="/static/portal-polling.js"></script>
+  <script defer src="/antra.js"></script>
+</head>
+<body class="p-4 sm:p-6 min-h-screen">
+  <div class="max-w-7xl mx-auto space-y-6">
+
+    <!-- Top Navigation & Header -->
+    <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-white/10" role="banner">
+      <div class="flex items-center gap-3">
+        <div class="brand-mark">
+          <svg class="w-6 h-6 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-medium text-secondary">Music Service</span>
+            <span class="m3-badge badge-gold" id="role-badge">Admin &bull; 24-bit FLAC</span>
+          </div>
+          <h1 class="text-xl sm:text-2xl font-semibold text-white tracking-tight">Antra Downloader</h1>
+        </div>
+      </div>
+
+      <nav class="flex flex-wrap items-center gap-2.5" aria-label="Quick links">
+        <a href="/" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5" aria-label="Return to Portal">
+          <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
+          </svg>
+          <span>Portal</span>
+        </a>
+        <a href="/admin" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5" aria-label="Open Master Console">
+          <svg class="w-4 h-4 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+          </svg>
+          <span>Console</span>
+        </a>
+        <button id="btn-appearance" type="button" aria-label="Open appearance settings" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5" style="display: none;">
+          <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21a4 4 0 01-4-4 4 4 0 014-4c.7 0 1.37.18 1.96.5L18.4 4.07a2.5 2.5 0 013.53 3.53L12.5 17.04A4 4 0 017 21z"></path>
+          </svg>
+          <span>Appearance</span>
+        </button>
+      </nav>
+    </header>
+
+    <!-- Authentication / Access Denial Alert Banner (401/403) -->
+    <div id="auth-alert" class="m3-card p-4 rounded-xl border border-red-500/40 bg-red-950/30 text-white space-y-2 hidden" role="alert" aria-live="assertive">
+      <div class="flex items-center gap-3">
+        <svg class="w-6 h-6 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+        </svg>
+        <div class="flex-1">
+          <h2 id="auth-alert-title" class="font-semibold text-red-200 text-base">Access Denied</h2>
+          <p id="auth-alert-message" class="text-sm text-soft">Administrator authorization required to manage Antra music downloads.</p>
+        </div>
+        <a id="auth-alert-action" href="/login" class="m3-btn m3-btn-filled touch-target text-xs">Sign In</a>
+      </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <main id="antra-main" class="space-y-6">
+
+      <!-- Submit URL Card & Service Policy Status -->
+      <section class="grid grid-cols-1 lg:grid-cols-3 gap-6" aria-labelledby="section-queue-heading">
+        
+        <!-- Queue Submission Form -->
+        <div class="m3-card golden-glass-card p-5 rounded-2xl lg:col-span-2 space-y-4">
+          <div class="flex items-center justify-between">
+            <h2 id="section-queue-heading" class="text-lg font-semibold text-white tracking-tight">Queue Music Download</h2>
+            <span class="text-xs text-muted">Fixed Service Origin</span>
+          </div>
+
+          <form id="antra-form" class="space-y-4" novalidate>
+            <div>
+              <label for="antra-url-input" class="block text-sm font-medium text-white mb-1.5">
+                Song or Playlist URL
+              </label>
+              <div class="flex flex-col sm:flex-row gap-3">
+                <input
+                  type="url"
+                  id="antra-url-input"
+                  name="url"
+                  placeholder="https://..."
+                  required
+                  autocomplete="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  class="antra-input flex-1 touch-target"
+                  aria-describedby="url-hint"
+                >
+                <button
+                  type="submit"
+                  id="antra-submit-btn"
+                  class="m3-btn m3-btn-filled touch-target font-medium px-6 flex items-center justify-center gap-2 whitespace-nowrap"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                  </svg>
+                  <span id="submit-btn-text">Queue Download</span>
+                </button>
+              </div>
+              <p id="url-hint" class="text-xs text-muted mt-1.5">
+                Paste track or playlist link. Continuous batch processing automatically processes complete playlists.
+              </p>
+            </div>
+
+            <!-- Form Status / Error Message -->
+            <div id="form-status" role="status" aria-live="polite" class="text-sm font-medium hidden"></div>
+          </form>
+        </div>
+
+        <!-- Worker & Audio Policy Card -->
+        <div class="m3-card golden-glass-card p-5 rounded-2xl flex flex-col justify-between space-y-4">
+          <div>
+            <div class="flex items-center justify-between mb-3">
+              <span class="text-xs font-medium text-secondary uppercase tracking-wider">Engine Status</span>
+              <span id="worker-state-badge" class="m3-badge badge-neutral">Checking…</span>
+            </div>
+            <div class="space-y-2.5 text-sm">
+              <div>
+                <span class="text-xs text-muted block">Output Location</span>
+                <span id="output-directory-val" class="mono text-xs text-accent break-all font-medium">/storage/emulated/0/Music/Antra</span>
+                <span class="text-[11px] text-muted block">Fixed server destination (read-only)</span>
+              </div>
+              <div>
+                <span class="text-xs text-muted block">Quality Filter</span>
+                <div class="flex items-center gap-2 mt-0.5">
+                  <span class="m3-badge badge-gold text-xs">24-bit FLAC Only</span>
+                </div>
+                <span class="text-[11px] text-soft block mt-0.5">
+                  16-bit or lower quality tracks are skipped. No upsampling or lossy conversions.
+                </span>
+              </div>
+            </div>
+          </div>
+          <div class="pt-2 border-t border-white/5 text-xs text-muted">
+            <span id="worker-message-val">Supervised background service active</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Active & Historical Jobs Section -->
+      <section class="space-y-4" aria-labelledby="jobs-heading">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <h2 id="jobs-heading" class="text-lg font-semibold text-white tracking-tight">Download Jobs</h2>
+            <span id="jobs-count-badge" class="m3-badge badge-neutral">0 jobs</span>
+          </div>
+          <button id="btn-refresh" type="button" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium flex items-center gap-1.5" aria-label="Refresh job list">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+
+        <!-- Jobs List Container -->
+        <div id="jobs-list" class="space-y-3" role="region" aria-live="polite">
+          <!-- Populated dynamically by antra.js -->
+        </div>
+
+        <!-- Empty State -->
+        <div id="jobs-empty" class="m3-card p-8 rounded-2xl text-center space-y-2 hidden">
+          <svg class="w-10 h-10 text-muted mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+          </svg>
+          <p class="text-sm text-soft font-medium">No download jobs queued yet</p>
+          <p class="text-xs text-muted">Paste a music track or playlist link above to begin downloading.</p>
+        </div>
+      </section>
+
+      <!-- Track Details Section (Expanded when user inspects a job) -->
+      <section id="tracks-section" class="m3-card golden-glass-card p-5 rounded-2xl space-y-4 hidden" aria-labelledby="tracks-heading">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-medium text-secondary">Playlist Inspection</span>
+              <span id="tracks-job-status-badge" class="m3-badge badge-neutral">...</span>
+            </div>
+            <h2 id="tracks-heading" class="text-lg font-semibold text-white tracking-tight mt-0.5">
+              <span id="tracks-job-title">Track Details</span>
+            </h2>
+            <div id="tracks-summary" class="text-xs text-soft mt-1"></div>
+          </div>
+          <button id="btn-close-tracks" type="button" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium self-start sm:self-center flex items-center gap-1.5" aria-label="Close track details panel">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+            <span>Close Details</span>
+          </button>
+        </div>
+
+        <!-- 24-bit Filter Banner Note -->
+        <div class="text-xs text-muted flex items-center gap-2 bg-black/20 p-2.5 rounded-lg border border-white/5">
+          <svg class="w-4 h-4 text-gold flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+          </svg>
+          <span>
+            <strong>24-bit Only Rule:</strong> Only genuine 24-bit FLAC streams are saved. Tracks identified as 16-bit or below are skipped to preserve hi-res audio storage integrity.
+          </span>
+        </div>
+
+        <!-- Responsive Tracks Table with Horizontal Scroll Container -->
+        <div class="table-scroll-container rounded-xl border border-white/10" tabindex="0" role="region" aria-label="Playlist tracks table">
+          <table id="tracks-table" class="w-full text-left text-sm">
+            <thead class="bg-black/40 text-xs text-muted uppercase font-medium border-b border-white/10">
+              <tr>
+                <th scope="col" class="py-3 px-3 w-16">#</th>
+                <th scope="col" class="py-3 px-3 min-w-[200px]">Title</th>
+                <th scope="col" class="py-3 px-3 min-w-[140px]">Artist</th>
+                <th scope="col" class="py-3 px-3 min-w-[140px]">Audio Format</th>
+                <th scope="col" class="py-3 px-3 w-28">Status</th>
+                <th scope="col" class="py-3 px-3 min-w-[180px]">File / Message</th>
+              </tr>
+            </thead>
+            <tbody id="tracks-tbody" class="divide-y divide-white/5 font-sans">
+              <!-- Dynamically populated with textContent -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="pt-4 border-t border-white/10 text-xs text-muted flex flex-col sm:flex-row items-center justify-between gap-2" role="contentinfo">
+      <span>K20 Pro Server &bull; Antra Hi-Res FLAC Service</span>
+      <span>Strict 24-bit audio policy</span>
+    </footer>
+
+  </div>
+</body>
+</html>

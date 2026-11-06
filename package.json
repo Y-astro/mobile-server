@@ -4,7 +4,8 @@
   "description": "Phone server verification tools",
   "scripts": {
     "test": "python3 scripts/browser-fixture.py && node tests/browser.cjs && node tests/dashboard-browser.cjs && node tests/service-memory-browser.cjs && node tests/laptop-browser.cjs && node tests/portal-polling-browser.cjs && node tests/material3-browser.cjs && node --test tests/test_portal_polling.js && bash tests/test_installer_guard.sh",
-    "test:cloud": "node tests/cloud-appearance-browser.cjs"
+    "test:cloud": "node tests/cloud-appearance-browser.cjs",
+    "test:antra": "node tests/antra-browser.cjs"
   },
   "repository": {
     "type": "git",
