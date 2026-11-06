@@ -18,6 +18,11 @@ class SetupError(Exception):
     pass
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def check_private(path):
     st = path.lstat()
     if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o600:
@@ -91,7 +96,7 @@ def _provision_locked(config_dir, opener_factory):
     if os.path.lexists(cookies_path):
         check_private(cookies_path)
     jar = http.cookiejar.MozillaCookieJar()
-    opener = opener_factory(jar) if opener_factory else urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    opener = opener_factory(jar) if opener_factory else urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), NoRedirect())
     payload = {key: record[key] for key in ("username", "password")}
     registered = False
     if fresh:
@@ -129,6 +134,7 @@ def _provision_locked(config_dir, opener_factory):
 if __name__ == "__main__":
     try:
         print(json.dumps(provision(Path.home() / ".config/antra")))
-    except (SetupError, OSError, ValueError):
-        print(json.dumps({"authenticated": False, "error": "Account setup failed; credentials were preserved. Check connectivity, service availability, and private-file permissions."}))
+    except (SetupError, OSError, ValueError) as error:
+        message = str(error) if isinstance(error, SetupError) else "Check connectivity, service availability, and private-file permissions."
+        print(json.dumps({"authenticated": False, "error": message, "credentials_preserved": True}))
         raise SystemExit(1)

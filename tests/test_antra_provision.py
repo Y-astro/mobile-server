@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import urllib.error
-from tools.provision_antra_account import provision, SetupError
+from tools.provision_antra_account import provision, call, SetupError
 
 
 class FakeOpener:
@@ -25,6 +25,13 @@ class FakeOpener:
 
 
 class ProvisionTests(unittest.TestCase):
+    def test_http_failure_does_not_echo_service_body(self):
+        class RateLimited:
+            def open(self, request, timeout):
+                raise urllib.error.HTTPError(request.full_url, 429, "private-password", {}, io.BytesIO(b"private-password"))
+        with self.assertRaisesRegex(SetupError, "^Antra returned HTTP 429$"):
+            call(RateLimited(), "/api/auth/register", {"password": "private-password"})
+
     def test_interrupted_registration_keeps_identity_and_private_modes(self):
         with tempfile.TemporaryDirectory() as root:
             directory = Path(root) / "antra"
