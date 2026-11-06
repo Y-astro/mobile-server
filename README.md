@@ -5,6 +5,7 @@ Phone-side recovery and a private Tailscale-accessible dashboard, FileBrowser, p
 - Salted password hashes, bounded login verification and admin route authorization.
 - Six parallel browser files with streaming server admission, TUS write locking and body/conversion limits.
 - Measured telemetry with explicit unavailable/stale values.
+- Matching dark Material 3 portal/cloud UI, private wallpapers, and adjustable frosted glass. See [Appearance and rollback](docs/WALLPAPERS.md).
 - Real verified Tor proxy; full-device Tor routing is unavailable.
 - Laptop Kitty terminals with shared browser control over Tailscale SSH. See [usage and pairing](docs/LAPTOP-TERMINALS.md).
 - tmux response scrolling and persistent sessions; supervisor recovery respects deliberate stops.

@@ -16,4 +16,4 @@ Keep existing darkMaterial3 palette: teal#70d6c5,gold#e5c46c,surface#111414,cont
 
 ## Completion
 
-Research/spec approved. Task1/2pending. Integration/import/deploymentpending. No newUI/livechanges yet. Recordall evidence under .superpowers/sdd; do not poll AGYjobs. Afterdispatch independentrootwork thenendturn; exactcompletionwakes resume. No tests-only implementation mirrors; tests exerciseactualboundaries,source-ownedpages andnativefileapp.
+Completed 2026-11-06: both owners integrated, root corrections accepted, all26originals uploaded and verified,49owned files activated with generalprofile, dashboard/Caddy only. Live HTTP/HTTPS admin/family checks and104image responses passed.415Python tests pass(2skips); completebrowser suite and7cloudgroupspass. See docs/WALLPAPERS.md for release/rollback and compatibility limits. Recordall evidence under .superpowers/sdd; do not poll AGYjobs. Afterdispatch independentrootwork thenendturn; exactcompletionwakes resume. No tests-only implementation mirrors; tests exerciseactualboundaries,source-ownedpages andnativefileapp.
