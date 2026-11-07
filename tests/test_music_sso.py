@@ -249,6 +249,8 @@ class TestCaddyMusicRoutesContract(unittest.TestCase):
         self.assertIn("not header Cookie *session_token*", bearer_block)
 
     def test_forward_auth_route_strips_caller_token_headers(self):
+        self.assertIn("uri query -jwt", self.caddyfile_text)
+        self.assertIn("header_up -Cookie", self.caddyfile_text)
         self.assertIn("header_up -x-nd-authorization", self.caddyfile_text)
         self.assertIn("header_up -Authorization", self.caddyfile_text)
         self.assertIn("copy_headers X-Music-User", self.caddyfile_text)

@@ -858,7 +858,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.end_headers()
             return
 
-        if self.path in ("/music", "/music/"):
+        if self.path.split("?", 1)[0] in ("/music", "/music/"):
             if not user or not USER_STORE.exists(user):
                 self.send_response(302)
                 self.send_header("Location", "/login")
@@ -884,6 +884,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     localStorage.removeItem("userId");
     localStorage.removeItem("username");
     localStorage.removeItem("name");
+    localStorage.removeItem("avatar");
     localStorage.removeItem("role");
     localStorage.removeItem("subsonic-token");
     localStorage.removeItem("subsonic-salt");

@@ -34,11 +34,13 @@ The server manages 18 background services via [`scripts/server_supervisor.py`](.
 
 ### Music Player
 
-Navidrome runs in the existing Debian PRoot through the supervised `navidrome` service. Open `/music/` from the portal. It has a separate music login; client credentials are kept in private configuration files, not in the repository.
+Navidrome runs in the existing Debian PRoot through the supervised `navidrome` service. Open `/music/` from the portal to reuse the current portal login. Astro opens personal music by default and can select the Family library separately. Family opens only the shared library. The entry page resets stale music authentication and library state when accounts change.
 
-The default library is `Music/Family`. `Music/Astro` is a second library with default access for new users disabled. Grant it only to the administrator. Never set the default library to the parent `Music` directory. Navidrome reads the existing files in place; Antra continues saving new tracks independently.
+The default library is `Music/Family`. `Music/Astro` is a second library with default access for new users disabled. The non-admin `astro-web` account has both libraries; `astro-music` has only Astro, and `family-music` has only Family. Keep the native `astro` administrator for maintenance. Never set the default library to the parent `Music` directory. Navidrome reads existing files in place; Antra continues saving new tracks independently.
 
 Feishin on the laptop streams this library and uses server playlists. Its current stable release has no offline-download feature; download selected songs through Navidrome's web player and play the resulting files locally. Tempus on Android supports selective downloads and server playlists; device installation and physical offline playback require separate verification.
+
+Feishin has separate **My Music** and **Family / Older Music** profiles. Native clients use their own private credentials, without a portal cookie. Caddy strips supplied proxy identities on native routes. Requests with a portal cookie always validate that session and use its mapped music account, ignoring stale native credentials. External authentication trusts only the loopback proxy. Credentials stay in private configuration files, outside Git.
 
 The binary is pinned at `$HOME/.local/opt/navidrome/0.64.2/navidrome`. Configuration and credentials live under `$HOME/.config/navidrome/`; library metadata lives under `$HOME/.local/share/navidrome/`. Keep those directories and the music files during source rollback. Use the strict `navidrome-service` profile once for the 17-to-18 transition, then the general profile for later changes.
 

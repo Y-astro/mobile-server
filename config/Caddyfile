@@ -209,11 +209,13 @@
 
 	# All other /music routes (browser SSO, portal cookie requests, or anonymous browser)
 	handle /music/* {
+		uri query -jwt
 		forward_auth 127.0.0.1:8001 {
 			uri /api/music-auth-check
 			copy_headers X-Music-User
 		}
 		reverse_proxy 127.0.0.1:4533 {
+			header_up -Cookie
 			header_up -x-nd-authorization
 			header_up -Authorization
 			header_up -Remote-User
