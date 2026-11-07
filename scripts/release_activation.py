@@ -184,6 +184,7 @@ DEPENDENCY_ORDER = [
     "suwayomi_filter",
     "filebrowser",
     "transfer_gateway",
+    "navidrome",
     "dashboard",
     "caddy",
     "suwayomi_scheduler",
@@ -215,6 +216,7 @@ DEFAULT_SUWAYOMI_JAR_LOCAL = ".work/suwayomi-parallel.jar"
 SUWAYOMI_FORK_FREE_LAUNCHER_SHA256 = "510d7d887255832fedf2d81e681ddcdc3082bf1ae5a09c5237e3c9ae5e12df99"
 SUWAYOMI_FORK_FREE_CATALOG_SHA256 = "9c9163f9c2e1fceaf0d9dd2989d869ce76d1566b1aa66e5f78e0cb90a7d77159"
 ANTRA_SERVICE_CATALOG_SHA256 = "05b7591955d71c7b6ab7c4b3d9f5ce9026d6e09109287f52be6f56534c031ab9"
+NAVIDROME_SERVICE_CATALOG_SHA256 = "69b88b8b8e458a70fdc72cd222d40361a7df11ff14656a45c3b0d04ff2433d2e"
 SUWAYOMI_ACCEPTED_JAR_SHA256 = "9b7bf58329eccb3dcfb7246360f6818f7391b8804330a9e0491006049678bedc"
 SUWAYOMI_JAR_MODE = 0o644
 
@@ -377,6 +379,8 @@ def map_destination_to_component(remote_path: str) -> Optional[Tuple[str, bool, 
         return ("dashboard", False, False)
     if "/home/.config/dashboard/static/" in norm:
         return ("dashboard", False, False)
+    if norm == "/data/data/com.termux/files/home/.local/lib/mobile-server/navidrome.py":
+        return ("navidrome", False, False)
     # Antra / mobile-server helpers:
     if norm.endswith("home/.local/lib/mobile-server/antra_worker.py"):
         return ("antra", False, False)
@@ -553,13 +557,13 @@ def map_changed_destinations(
                         f"Profile '{PROFILE_NAVIDROME_SERVICE}' permits only modifying existing {SUPERVISOR_REMOTE} with action REPLACE, found: {action}"
                     )
                 supervisor_affected = True
-            elif norm.endswith("home/.local/lib/mobile-server/navidrome.py"):
-                if action not in (rt.ACTION_CREATE, rt.ACTION_REPLACE):
+            elif norm == "/data/data/com.termux/files/home/.local/lib/mobile-server/navidrome.py":
+                if action != rt.ACTION_CREATE:
                     raise ActivationError(
-                        f"Profile '{PROFILE_NAVIDROME_SERVICE}' permits only creating or replacing navidrome.py launcher"
+                        f"Profile '{PROFILE_NAVIDROME_SERVICE}' permits only creating the new navidrome.py launcher"
                     )
                 affected_services.add("navidrome")
-            elif norm.endswith("home/.config/caddy/Caddyfile") or norm.endswith("config/Caddyfile"):
+            elif norm == "/data/data/com.termux/files/home/.config/caddy/Caddyfile":
                 if action != rt.ACTION_REPLACE:
                     raise ActivationError(
                         f"Profile '{PROFILE_NAVIDROME_SERVICE}' permits only modifying existing Caddyfile with action REPLACE"
@@ -922,19 +926,22 @@ def validate_activation_journal(
                 f"Profile '{PROFILE_SUWAYOMI_JAR}' original mode mismatch: expected {oct(SUWAYOMI_JAR_MODE)}, got {jar_entry.get('original_mode')}"
             )
 
-    elif validated_profile == PROFILE_ANTRA_SERVICE:
+    elif validated_profile in (PROFILE_ANTRA_SERVICE, PROFILE_NAVIDROME_SERVICE):
+        new_service = "antra" if validated_profile == PROFILE_ANTRA_SERVICE else "navidrome"
+        prior_count = 16 if new_service == "antra" else 17
+        candidate_count = prior_count + 1
         transition = act_journal.get("transition")
         if not isinstance(transition, dict):
             raise ActivationError("Missing or invalid transition metadata in antra-service activation journal")
-        if transition.get("type") != "antra_16_to_17":
+        if transition.get("type") != f"{new_service}_{prior_count}_to_{candidate_count}":
             raise ActivationError(f"Invalid transition type: {transition.get('type')!r}")
         prior_cnt = transition.get("prior_service_count")
-        if type(prior_cnt) is not int or isinstance(prior_cnt, bool) or prior_cnt != 16:
+        if type(prior_cnt) is not int or isinstance(prior_cnt, bool) or prior_cnt != prior_count:
             raise ActivationError(f"Invalid prior service count: {prior_cnt!r}")
         cand_cnt = transition.get("candidate_service_count")
-        if type(cand_cnt) is not int or isinstance(cand_cnt, bool) or cand_cnt != 17:
+        if type(cand_cnt) is not int or isinstance(cand_cnt, bool) or cand_cnt != candidate_count:
             raise ActivationError(f"Invalid candidate service count: {cand_cnt!r}")
-        if transition.get("new_services") != ["antra"]:
+        if transition.get("new_services") != [new_service]:
             raise ActivationError(f"Invalid new services in transition: {transition.get('new_services')!r}")
         rec_hashes = transition.get("recovery_hashes")
         if not isinstance(rec_hashes, dict) or rec_hashes != act_journal.get("recovery_assets"):
@@ -1001,12 +1008,12 @@ def validate_activation_journal(
                 recomp_cand,
                 home_str=home_str,
                 prefix_str=prefix_str,
-                profile=PROFILE_ANTRA_SERVICE,
+                profile=validated_profile,
             )
         except RuntimeError as exc:
             raise ActivationError(f"Catalog transition validation failed during journal check: {exc}") from exc
 
-        if len(recomp_prior) != 16 or len(recomp_cand) != 17:
+        if len(recomp_prior) != prior_count or len(recomp_cand) != candidate_count:
             raise ActivationError(
                 f"Recomputed catalog service counts invalid: prior={len(recomp_prior)}, candidate={len(recomp_cand)}"
             )
@@ -1525,7 +1532,7 @@ def require_reviewed_jar_lifecycle(ns_root: Path, uid: int, driver=None) -> None
         raise ActivationError("Live launcher hash mismatch; refusing suwayomi-jar on unreviewed/legacy launcher")
 
     cat_sha = compute_file_sha256(catalog_path).lower()
-    if cat_sha not in (SUWAYOMI_FORK_FREE_CATALOG_SHA256.lower(), ANTRA_SERVICE_CATALOG_SHA256.lower()):
+    if cat_sha not in (SUWAYOMI_FORK_FREE_CATALOG_SHA256.lower(), ANTRA_SERVICE_CATALOG_SHA256.lower(), NAVIDROME_SERVICE_CATALOG_SHA256.lower()):
         raise ActivationError("Live catalog hash mismatch; refusing suwayomi-jar on unreviewed/legacy catalog")
 
     if driver is not None:
@@ -1534,8 +1541,10 @@ def require_reviewed_jar_lifecycle(ns_root: Path, uid: int, driver=None) -> None
             raise ActivationError(f"suwayomi-jar requires exact 16 managed services, found {len(services)}")
         if cat_sha == ANTRA_SERVICE_CATALOG_SHA256.lower() and len(services) != 17:
             raise ActivationError(f"suwayomi-jar requires exact 17 managed services, found {len(services)}")
-        if len(services) not in (16, 17):
-            raise ActivationError(f"suwayomi-jar requires exact 16 or 17 managed services, found {len(services)}")
+        if cat_sha == NAVIDROME_SERVICE_CATALOG_SHA256.lower() and len(services) != 18:
+            raise ActivationError(f"suwayomi-jar requires exact 18 managed services, found {len(services)}")
+        if len(services) not in (16, 17, 18):
+            raise ActivationError(f"suwayomi-jar requires exact 16, 17, or 18 managed services, found {len(services)}")
         disabled = ns_root / "home/.config/services_disabled/suwayomi"
         if (disabled.exists() or disabled.is_symlink()) and driver.matching_processes("suwayomi"):
             raise ActivationError("Disabled backend is still running; refusing JAR replacement")
@@ -1543,7 +1552,7 @@ def require_reviewed_jar_lifecycle(ns_root: Path, uid: int, driver=None) -> None
         expected = [str(ns_root / "usr/bin/python3"), str(ns_root / "home/bin/suwayomi_daily_update.py"), "--foreground"]
         if not isinstance(scheduler, dict) or scheduler.get("cmd") != expected:
             raise ActivationError("Live suwayomi_scheduler command drift")
-        if len(services) == 17:
+        if len(services) in (17, 18):
             antra_svc = services.get("antra", {})
             expected_antra = [str(ns_root / "usr/bin/python3"), "-u", str(ns_root / "home/.local/lib/mobile-server/antra_worker.py")]
             if not isinstance(antra_svc, dict) or antra_svc.get("cmd") != expected_antra:
@@ -1772,7 +1781,8 @@ def apply(
                 "candidate_catalog_sha256": str(cat_entry["candidate_sha256"]),
                 "recovery_hashes": dict(recovery_hashes),
             }
-        elif profile == PROFILE_ANTRA_SERVICE:
+        elif profile in (PROFILE_ANTRA_SERVICE, PROFILE_NAVIDROME_SERVICE):
+            new_service = "antra" if profile == PROFILE_ANTRA_SERVICE else "navidrome"
             cat_entry = next((e for e in entries if (e.get("dest_path") or e.get("remote")) == SERVICE_CATALOG_REMOTE), None)
             if cat_entry is None or cat_entry.get("action") != rt.ACTION_REPLACE:
                 raise ActivationError(f"antra-service requires replace entry for {SERVICE_CATALOG_REMOTE}")
@@ -1795,11 +1805,11 @@ def apply(
             c_svcs = load_catalog_services_from_bytes(staged_file.read_bytes(), home_str, prefix_str, "cand")
             ta.validate_catalog_transition(p_svcs, c_svcs, home_str, prefix_str, profile=profile)
             new_svcs = [k for k in c_svcs.keys() if k not in p_svcs]
-            if new_svcs != ["antra"]:
+            if new_svcs != [new_service]:
                 raise ActivationError(f"Unexpected new services in antra candidate: {new_svcs}")
 
             act_journal["transition"] = {
-                "type": "antra_16_to_17",
+                "type": f"{new_service}_{len(p_svcs)}_to_{len(c_svcs)}",
                 "prior_service_count": int(len(p_svcs)),
                 "candidate_service_count": int(len(c_svcs)),
                 "new_services": new_svcs,
@@ -1941,6 +1951,9 @@ def apply(
                         raise QuiescenceError(
                             f"suwayomi_scheduler process appeared concurrently before file mutation: {concurrent_sched}"
                         )
+
+                if profile == PROFILE_NAVIDROME_SERVICE and driver.matching_processes("navidrome"):
+                    raise QuiescenceError("navidrome process appeared concurrently before file mutation")
 
                 if profile == PROFILE_ANTRA_SERVICE:
                     concurrent_worker = driver.matching_processes("antra")

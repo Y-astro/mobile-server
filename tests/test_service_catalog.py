@@ -82,7 +82,7 @@ class ServiceCatalogTests(unittest.TestCase):
         self.assertEqual(len(baseline_keys), 15)
 
         rt_default = service_catalog.runtime_services('/data/data/com.termux/files/home', '/data/data/com.termux/files/usr')
-        self.assertEqual(len(rt_default), 17)
+        self.assertEqual(len(rt_default), 18)
         rt_default_prefix = {k: rt_default[k] for k in baseline_keys}
         self.assertEqual(rt_default_prefix, char['supervisor_default'])
         self.assertEqual(list(rt_default.keys())[:15], baseline_keys)
@@ -104,7 +104,7 @@ class ServiceCatalogTests(unittest.TestCase):
         })
 
         rt_alt = service_catalog.runtime_services('/custom/home', '/custom/usr')
-        self.assertEqual(len(rt_alt), 17)
+        self.assertEqual(len(rt_alt), 18)
         rt_alt_prefix = {k: rt_alt[k] for k in baseline_keys}
         self.assertEqual(rt_alt_prefix, char['supervisor_alt'])
         self.assertEqual(list(rt_alt.keys())[:15], list(char['supervisor_alt'].keys()))
@@ -131,10 +131,10 @@ class ServiceCatalogTests(unittest.TestCase):
             'ssh', 'dashboard', 'caddy', 'filebrowser', 'transfer_gateway',
             'adguard', 'syncthing', 'vaultwarden', 'terminal', 'agy',
             'laptop_terminal', 'tor', 'suwayomi', 'suwayomi_filter', 'battery_guard',
-            'suwayomi_scheduler', 'antra'
+            'suwayomi_scheduler', 'antra', 'navidrome'
         ]
         self.assertEqual(list(services.keys()), expected_keys)
-        self.assertEqual(len(services), 17)
+        self.assertEqual(len(services), 18)
         self.assertNotIn('port', services['suwayomi_scheduler'])
         self.assertNotIn('path', services['suwayomi_scheduler'])
         self.assertNotIn('protocol', services['suwayomi_scheduler'])
@@ -230,7 +230,7 @@ class ServiceCatalogTests(unittest.TestCase):
         spec.loader.exec_module(sup)
         self.assertTrue(callable(sup.services))
         s = sup.services()
-        self.assertEqual(len(s), 17)
+        self.assertEqual(len(s), 18)
         self.assertEqual(s['caddy']['port'], 8000)
         self.assertEqual(s['suwayomi_scheduler']['cmd'], [
             '/data/data/com.termux/files/usr/bin/python3',
@@ -315,7 +315,7 @@ assert Path(sc.__file__).resolve() == (lib_dir / 'service_catalog.py').resolve()
 
 # Run dashboard via runpy
 dash_globals = runpy.run_path(str(prefix_bin / 'dashboard'), run_name='dashboard')
-assert len(dash_globals['SERVICES_CONFIG']) == 10
+assert len(dash_globals['SERVICES_CONFIG']) == 11
 assert dash_globals['SERVICES_CONFIG']['filebrowser']['port'] == 8085
 assert dash_globals['SERVICES_CONFIG']['antra']['open_url'] == '/antra/'
 print('INSTALLED_BOOTSTRAP_OK')

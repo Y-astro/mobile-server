@@ -21,7 +21,7 @@ PROOT_DISTRO = PREFIX / "bin/proot-distro"
 
 
 def verify_binary(binary_path: Path) -> None:
-    if not binary_path.is_file():
+    if binary_path.is_symlink() or not binary_path.is_file():
         raise FileNotFoundError(f"Navidrome binary not found at {binary_path}")
     h = hashlib.sha256()
     with binary_path.open("rb") as f:

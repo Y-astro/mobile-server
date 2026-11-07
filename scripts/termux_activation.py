@@ -225,7 +225,7 @@ def validate_catalog_transition(
                 f"Candidate suwayomi_scheduler cmd drift: expected {expected_cmd!r}, got {sched_cfg.get('cmd')!r}"
             )
     elif profile == "suwayomi-jar":
-        if len(prior_keys) not in (16, 17):
+        if len(prior_keys) not in (16, 17, 18):
             raise RuntimeError(
                 f"suwayomi-jar profile requires exact 16 or 17 prior services, found {len(prior_keys)}"
             )
@@ -312,7 +312,7 @@ def validate_catalog_transition(
                 f"Candidate navidrome introduces unexpected attributes: {sorted(list(set(nav_cfg.keys()) - {'port', 'path', 'cmd'}))}"
             )
         expected_cmd = [f"{prefix_str}/bin/python3", "-u", f"{home_str}/.local/lib/mobile-server/navidrome.py"]
-        if nav_cfg.get("cmd") != expected_cmd or nav_cfg.get("port") != 4533 or nav_cfg.get("path") != "/ping":
+        if nav_cfg.get("cmd") != expected_cmd or nav_cfg.get("port") != 4533 or nav_cfg.get("path") != "/music/ping":
             raise RuntimeError(
                 f"Candidate navidrome configuration drift: {nav_cfg!r}"
             )
@@ -620,13 +620,11 @@ class TermuxLifecycleDriver(LifecycleDriver):
                 base = Path(cmdline[0]).name
                 is_match = False
                 if base.startswith("python"):
-                    script_path, _ = extract_python_script_and_args(cmdline)
-                    if script_path and script_path.resolve() == expected_launcher:
-                        is_match = True
-                elif "proot" in base and any("navidrome" in a for a in cmdline) and not any("suwayomi" in a.lower() for a in cmdline):
-                    is_match = True
-                elif base == "navidrome" and any("--configfile" in a for a in cmdline):
-                    is_match = True
+                    is_match = cmdline[1:] in ([str(expected_launcher)], ["-u", str(expected_launcher)])
+                elif base in ("proot", "proot-distro", "navidrome"):
+                    binary = str(self.home_dir / ".local/opt/navidrome/0.64.2/navidrome")
+                    config = str(self.home_dir / ".config/navidrome/navidrome.toml")
+                    is_match = cmdline[-3:] == [binary, "--configfile", config]
 
                 if is_match:
                     ident = self.process_identity(int(proc.name))

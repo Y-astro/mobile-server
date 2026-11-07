@@ -47,7 +47,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "app"))
 
-import app.service_catalog as sc
+import types
+sc = types.ModuleType("reviewed_antra_catalog")
+exec(subprocess.check_output(["git", "show", "9ec28127:app/service_catalog.py"], cwd=REPO_ROOT, text=True), sc.__dict__)
 import scripts.release_activation as ra
 import scripts.release_transaction as rt
 import scripts.server_supervisor as sup
@@ -87,6 +89,9 @@ class AntraServiceLifecycleTests(unittest.TestCase):
         self.test_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.test_dir.name).resolve()
         self.bundle, self.manifest, self.preconds, self.live, self.tx_dir = tra._make_fixture(self.root)
+        (self.bundle / "app/navidrome.py").unlink(missing_ok=True)
+        (self.live / "home/.local/lib/mobile-server/navidrome.py").unlink(missing_ok=True)
+        self.preconds["files"] = [e for e in self.preconds["files"] if not e["path"].endswith("/navidrome.py")]
 
         self.home = self.live / "home"
         self.usr = self.live / "usr"
@@ -116,7 +121,7 @@ class AntraServiceLifecycleTests(unittest.TestCase):
         # Candidate bundle setup: 17 catalog and candidate supervisor
         self.bundle_cat = self.bundle / "app/service_catalog.py"
         self.bundle_cat.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(REPO_ROOT / "app/service_catalog.py", self.bundle_cat)
+        self.bundle_cat.write_text(tra.reviewed_17_catalog_source())
         os.chmod(self.bundle_cat, 0o600)
 
         self.bundle_sup = self.bundle / "scripts/server_supervisor.py"
@@ -151,6 +156,8 @@ class AntraServiceLifecycleTests(unittest.TestCase):
                     f["sha256"] = sha
                     f["bytes"] = size
                     f["mode"] = "0o700"
+
+        self.manifest = ra.rt._load_release_manifest_module().generate_manifest(self.bundle, require_gateway=True)
 
     def tearDown(self):
         self.test_dir.cleanup()

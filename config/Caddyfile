@@ -155,7 +155,7 @@
 
 	redir /music /music/ 308
 
-	handle /music* {
+	handle /music/* {
 		reverse_proxy 127.0.0.1:4533
 	}
 
@@ -296,12 +296,6 @@ https://:8444 {
 # Tsumiru / Native client direct port
 http://:4567 {
 	encode zstd gzip
-
-	redir /music /music/ 308
-
-	handle /music* {
-		reverse_proxy 127.0.0.1:4533
-	}
 
 	redir /suwayomi /suwayomi/ 308
 

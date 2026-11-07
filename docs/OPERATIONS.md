@@ -6,9 +6,9 @@ Authoritative technical reference for managed services, runtime lifecycle contra
 
 ## 1. Service Ownership and Endpoint Reference
 
-The server manages 17 background services via [`scripts/server_supervisor.py`](../scripts/server_supervisor.py) and [`app/service_catalog.py`](../app/service_catalog.py), plus on-demand utilities and external laptop integrations. The 2026-11-06 Antra release verified 13 healthy services and preserved four intentionally disabled services.
+The server manages 18 background services via [`scripts/server_supervisor.py`](../scripts/server_supervisor.py) and [`app/service_catalog.py`](../app/service_catalog.py), plus on-demand utilities and external laptop integrations. The 2026-11-06 Antra release verified 13 healthy services and preserved four intentionally disabled services.
 
-### Managed Supervisor Services (17 Services)
+### Managed Supervisor Services (18 Services)
 
 | Service ID (`sid`) | Category & Purpose | Maintained Source / Owner | Runtime Launcher & Executable | Endpoint & Address Binding | Health Inspection Criteria | Durable Data & Config Paths |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -29,6 +29,18 @@ The server manages 17 background services via [`scripts/server_supervisor.py`](.
 | `tor` *(disabled)* | Tor SOCKS proxy | Termux Tor pkg + [`config/torrc`](../config/torrc) | `$PREFIX/bin/tor -f $HOME/.config/tor/torrc` | `127.0.0.1:9050` (SOCKS5, pinned in config/torrc) | SOCKS5 handshake (`\x05\x01\x00` -> `\x05\x00`) | Config: [`config/torrc`](../config/torrc)<br>Data: `$HOME/.local/share/mobile-server-tor` |
 | `suwayomi_scheduler` | Daily manga update scheduler | [`scripts/suwayomi_daily_update.py`](../scripts/suwayomi_daily_update.py) | `$PREFIX/bin/python3 $HOME/bin/suwayomi_daily_update.py --foreground` | None | One owned process, matching PID file, and held scheduler lock | `$HOME/suwayomi/data/scheduler.pid` and `logs/scheduler_status.json` |
 | `antra` | Persistent administrator-controlled music downloads | [`app/antra_worker.py`](../app/antra_worker.py), client and store helpers | `$PREFIX/bin/python3 -u $HOME/.local/lib/mobile-server/antra_worker.py` | No listener; administrator page `/antra/` and API `/api/antra/jobs` use the dashboard | Owned worker process; queue API reports worker state | Queue: `$HOME/.local/share/mobile-server/antra/queue.sqlite3`<br>Account: `$HOME/.config/antra/`<br>Music: `/storage/emulated/0/Music/{Astro,Family}` |
+| `navidrome` | Music streaming and server playlists | [`app/navidrome.py`](../app/navidrome.py), pinned Navidrome binary | `$PREFIX/bin/python3 -u $HOME/.local/lib/mobile-server/navidrome.py` | `127.0.0.1:4533`; portal `/music/` | `GET /music/ping` | Config: `$HOME/.config/navidrome/`<br>Metadata: `$HOME/.local/share/navidrome/`<br>Music: `/storage/emulated/0/Music/{Family,Astro}` |
+
+
+### Music Player
+
+Navidrome runs in the existing Debian PRoot through the supervised `navidrome` service. Open `/music/` from the portal. It has a separate music login; client credentials are kept in private configuration files, not in the repository.
+
+The default library is `Music/Family`. `Music/Astro` is a second library with default access for new users disabled. Grant it only to the administrator. Never set the default library to the parent `Music` directory. Navidrome reads the existing files in place; Antra continues saving new tracks independently.
+
+Feishin on the laptop streams this library and uses server playlists. Its current stable release has no offline-download feature; download selected songs through Navidrome's web player and play the resulting files locally. Tempus on Android supports selective downloads and server playlists; device installation and physical offline playback require separate verification.
+
+The binary is pinned at `$HOME/.local/opt/navidrome/0.64.2/navidrome`. Configuration and credentials live under `$HOME/.config/navidrome/`; library metadata lives under `$HOME/.local/share/navidrome/`. Keep those directories and the music files during source rollback. Use the strict `navidrome-service` profile once for the 17-to-18 transition, then the general profile for later changes.
 
 ### Antra and Music Storage
 

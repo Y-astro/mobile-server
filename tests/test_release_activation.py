@@ -49,9 +49,15 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
+def reviewed_17_catalog_source():
+    source = subprocess.check_output(["git", "show", "9ec28127:app/service_catalog.py"], cwd=REPO_ROOT, text=True)
+    assert hashlib.sha256(source.encode()).hexdigest() == ra.ANTRA_SERVICE_CATALOG_SHA256
+    return source
+
+
 def reviewed_16_catalog_source():
     """Construct the reviewed 16-service catalog by removing only the antra service."""
-    source = (REPO_ROOT / "app/service_catalog.py").read_text()
+    source = reviewed_17_catalog_source()
     source = source.replace("    'antra': {},\n", "", 1)
     source = source.replace("        'antra': dict(cmd=[f'{p}/bin/python3', '-u', f'{h}/.local/lib/mobile-server/antra_worker.py']),\n", "", 1)
     old_end = '''            "open_url": "javascript:alert('Battery Guard monitors readings and sends alerts; it cannot control charging hardware.');",

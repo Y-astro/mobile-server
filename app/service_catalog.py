@@ -27,7 +27,7 @@ SERVICE_ENDPOINTS: Dict[str, Dict[str, Any]] = {
     'battery_guard': {},
     'converter': {'is_ondemand': True},
     'antra': {},
-    'navidrome': {'port': 4533, 'path': '/ping'},
+    'navidrome': {'port': 4533, 'path': '/music/ping'},
 }
 
 
@@ -213,7 +213,7 @@ def dashboard_services() -> Dict[str, Dict[str, Any]]:
             "port": SERVICE_ENDPOINTS['navidrome']['port'],
             "pattern": "navidrome",
             "icon": "music",
-            "desc": "Personal Music Server & Streamer (Navidrome • Port 4533)",
+            "desc": "Your music library and playlists",
             "open_url": "/music/",
             "open_label": "Open Player",
             "can_toggle": True
