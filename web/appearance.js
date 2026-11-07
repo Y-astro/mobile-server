@@ -19,7 +19,8 @@
     version: 1,
     wallpaperId: null,
     blur: DEFAULT_BLUR,
-    translucency: DEFAULT_TRANSLUCENCY
+    translucency: DEFAULT_TRANSLUCENCY,
+    colorMode: 'manual' // 'manual' | 'wallpaper'
   };
 
   let manifest = null;
@@ -85,6 +86,9 @@
         } else if (parsed.wallpaperId === null) {
           state.wallpaperId = null;
         }
+        if (parsed.colorMode === 'wallpaper' || parsed.colorMode === 'manual') {
+          state.colorMode = parsed.colorMode;
+        }
       }
     } catch (e) {
       // Storage blocked or corrupt; keep defaults in memory
@@ -97,7 +101,8 @@
         version: 1,
         wallpaperId: state.wallpaperId,
         blur: state.blur,
-        translucency: state.translucency
+        translucency: state.translucency,
+        colorMode: state.colorMode
       }));
     } catch (e) {
       // Storage blocked or quota exceeded; ignore gracefully
@@ -134,7 +139,39 @@
     root.style.setProperty('--app-translucency', `${state.translucency}%`);
     root.style.setProperty('--app-panel-alpha', panelAlpha);
 
-    const match = manifest && manifest.wallpapers.find(w => w.id === state.wallpaperId);
+    const match = manifest && manifest.wallpapers && manifest.wallpapers.find(w => w.id === state.wallpaperId);
+
+    // Dynamic Matugen wallpaper color roles (strictly allowlisted 24 M3 roles)
+    const m3Roles = [
+      'surface', 'surface-dim', 'surface-bright', 'surface-container-lowest',
+      'surface-container-low', 'surface-container', 'surface-container-high',
+      'surface-container-highest', 'on-surface', 'on-surface-variant',
+      'outline', 'outline-variant', 'primary', 'on-primary',
+      'primary-container', 'on-primary-container', 'tertiary', 'on-tertiary',
+      'tertiary-container', 'on-tertiary-container', 'error', 'on-error',
+      'error-container', 'on-error-container'
+    ];
+
+    // Always reset all 24 owned roles before applying any palette or falling back
+    for (const role of m3Roles) {
+      root.style.removeProperty('--md-sys-color-' + role);
+    }
+
+    // Admit only complete, valid generated palettes (all 24 roles present and valid hex)
+    const hasValidPalette = match && match.palette && typeof match.palette === 'object' &&
+      m3Roles.every(role => {
+        const val = match.palette[role] || match.palette[role.replace(/-/g, '_')];
+        return typeof val === 'string' && /^#[0-9a-fA-F]{6}$/.test(val);
+      });
+
+    if (state.colorMode === 'wallpaper' && hasValidPalette) {
+      // Restrict CSS writes strictly to allowlisted 24 roles; preserve semantic positive default
+      for (const role of m3Roles) {
+        const val = match.palette[role] || match.palette[role.replace(/-/g, '_')];
+        root.style.setProperty('--md-sys-color-' + role, val);
+      }
+    }
+
     if (match) {
       preloadAndSetWallpaper(match.image_url);
       return;
@@ -290,6 +327,21 @@
           </div>
         </div>
 
+        <div class="appearance-control-group">
+          <div class="appearance-slider-label-row">
+            <span id="appearance-palette-mode-label">Theme colours</span>
+            <span class="appearance-slider-value" id="appearance-color-mode-val">${state.colorMode === 'wallpaper' ? 'Wallpaper' : 'Default'}</span>
+          </div>
+          <div class="appearance-segmented-wrap" role="group" aria-labelledby="appearance-palette-mode-label">
+            <button type="button" class="appearance-segment-btn ${state.colorMode !== 'wallpaper' ? 'active' : ''}" id="color-mode-manual-btn" aria-pressed="${state.colorMode !== 'wallpaper' ? 'true' : 'false'}">
+              Teal &amp; Gold
+            </button>
+            <button type="button" class="appearance-segment-btn ${state.colorMode === 'wallpaper' ? 'active' : ''}" id="color-mode-wallpaper-btn" aria-pressed="${state.colorMode === 'wallpaper' ? 'true' : 'false'}">
+              Wallpaper (Matugen)
+            </button>
+          </div>
+        </div>
+
         <div class="appearance-actions">
           <button type="button" class="appearance-action-btn appearance-btn-reset" id="appearance-reset-btn">Reset</button>
           <button type="button" class="appearance-action-btn appearance-btn-done" id="appearance-done-btn">Done</button>
@@ -305,6 +357,39 @@
     const resetBtn = dialog.querySelector('#appearance-reset-btn');
     const blurInput = dialog.querySelector('#appearance-blur-input');
     const translucencyInput = dialog.querySelector('#appearance-translucency-input');
+    const manualBtn = dialog.querySelector('#color-mode-manual-btn');
+    const wallpaperBtn = dialog.querySelector('#color-mode-wallpaper-btn');
+
+    function updateColorModeUI() {
+      const isWall = state.colorMode === 'wallpaper';
+      if (manualBtn) {
+        manualBtn.classList.toggle('active', !isWall);
+        manualBtn.setAttribute('aria-pressed', !isWall ? 'true' : 'false');
+      }
+      if (wallpaperBtn) {
+        wallpaperBtn.classList.toggle('active', isWall);
+        wallpaperBtn.setAttribute('aria-pressed', isWall ? 'true' : 'false');
+      }
+      const valEl = document.getElementById('appearance-color-mode-val');
+      if (valEl) valEl.textContent = isWall ? 'Wallpaper' : 'Default';
+    }
+
+    if (manualBtn) {
+      manualBtn.addEventListener('click', () => {
+        state.colorMode = 'manual';
+        updateColorModeUI();
+        saveStoredState();
+        applyStyles();
+      });
+    }
+    if (wallpaperBtn) {
+      wallpaperBtn.addEventListener('click', () => {
+        state.colorMode = 'wallpaper';
+        updateColorModeUI();
+        saveStoredState();
+        applyStyles();
+      });
+    }
 
     const handleClose = () => closeDialog();
     closeBtn.addEventListener('click', handleClose);
@@ -332,6 +417,7 @@
     resetBtn.addEventListener('click', () => {
       state.blur = DEFAULT_BLUR;
       state.translucency = DEFAULT_TRANSLUCENCY;
+      state.colorMode = 'manual';
       if (manifest && manifest.default_id) {
         state.wallpaperId = manifest.default_id;
       }
@@ -340,6 +426,7 @@
       translucencyInput.value = state.translucency;
       document.getElementById('appearance-blur-val').textContent = `${state.blur}%`;
       document.getElementById('appearance-translucency-val').textContent = `${state.translucency}%`;
+      updateColorModeUI();
       saveStoredState();
       applyStyles();
       updateGalleryUI();
@@ -432,6 +519,22 @@
     const transVal = dialog.querySelector('#appearance-translucency-val');
     if (blurVal) blurVal.textContent = `${state.blur}%`;
     if (transVal) transVal.textContent = `${state.translucency}%`;
+
+    const isWall = state.colorMode === 'wallpaper';
+    const manualBtn = dialog.querySelector('#color-mode-manual-btn');
+    const wallpaperBtn = dialog.querySelector('#color-mode-wallpaper-btn');
+    const colorModeVal = dialog.querySelector('#appearance-color-mode-val');
+    if (manualBtn) {
+      manualBtn.classList.toggle('active', !isWall);
+      manualBtn.setAttribute('aria-pressed', !isWall ? 'true' : 'false');
+    }
+    if (wallpaperBtn) {
+      wallpaperBtn.classList.toggle('active', isWall);
+      wallpaperBtn.setAttribute('aria-pressed', isWall ? 'true' : 'false');
+    }
+    if (colorModeVal) {
+      colorModeVal.textContent = isWall ? 'Wallpaper' : 'Default';
+    }
 
     if (!manifest && manifestStatus === 'idle') {
       fetchWallpapers();

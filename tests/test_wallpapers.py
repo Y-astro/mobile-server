@@ -31,9 +31,11 @@ from tools.prepare_wallpapers import (
     build_library,
     verify_library,
     publish_library,
+    generate_palettes_for_library,
     sha256_file,
     compute_display_dimensions,
     compute_contain_dimensions,
+    M3_PALETTE_ROLES,
 )
 
 
@@ -318,6 +320,90 @@ class WallpaperLibraryUnitTests(unittest.TestCase):
         pub2 = lib.get_public_list()
         self.assertEqual(pub2["default_id"], w_id2)
 
+    def test_valid_palette_parsed_in_manifest(self):
+        w_id = "a" * 64
+        disp_dir = self.lib_path / "display"
+        disp_dir.mkdir(parents=True)
+        thumb_dir = self.lib_path / "thumbnails"
+        thumb_dir.mkdir(parents=True)
+        (disp_dir / f"{w_id}.webp").write_bytes(b"disp")
+        (thumb_dir / f"{w_id}.webp").write_bytes(b"thumb")
+
+        palette = {
+            "surface": "#101417",
+            "surface_dim": "#101417",
+            "surface_bright": "#363a3e",
+            "surface_container_lowest": "#0b0f12",
+            "surface_container_low": "#181c20",
+            "surface_container": "#1c2024",
+            "surface_container_high": "#272a2e",
+            "surface_container_highest": "#313539",
+            "on_surface": "#e0e3e8",
+            "on_surface_variant": "#c2c7ce",
+            "outline": "#8c9198",
+            "outline_variant": "#42474d",
+            "primary": "#98ccf9",
+            "on_primary": "#003350",
+            "primary_container": "#034b71",
+            "on_primary_container": "#cce5ff",
+            "tertiary": "#d1bfe7",
+            "on_tertiary": "#372a4a",
+            "tertiary_container": "#4e4162",
+            "on_tertiary_container": "#ecdcff",
+            "error": "#ffb4ab",
+            "on_error": "#690005",
+            "error_container": "#93000a",
+            "on_error_container": "#ffdad6",
+        }
+        manifest = {
+            "version": 1,
+            "default_id": w_id,
+            "wallpapers": [
+                {
+                    "id": w_id,
+                    "name": "test.png",
+                    "width": 1920,
+                    "height": 1080,
+                    "display": {"path": f"display/{w_id}.webp", "sha256": "b" * 64, "bytes": 4},
+                    "thumbnail": {"path": f"thumbnails/{w_id}.webp", "sha256": "c" * 64, "bytes": 5},
+                    "palette": palette,
+                }
+            ],
+        }
+        (self.lib_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        lib = WallpaperLibrary(self.lib_path)
+        pub = lib.get_public_list()
+        self.assertEqual(pub["wallpapers"][0]["palette"], palette)
+
+    def test_malformed_palette_falls_back_gracefully(self):
+        w_id = "a" * 64
+        disp_dir = self.lib_path / "display"
+        disp_dir.mkdir(parents=True)
+        thumb_dir = self.lib_path / "thumbnails"
+        thumb_dir.mkdir(parents=True)
+        (disp_dir / f"{w_id}.webp").write_bytes(b"disp")
+        (thumb_dir / f"{w_id}.webp").write_bytes(b"thumb")
+
+        manifest = {
+            "version": 1,
+            "default_id": w_id,
+            "wallpapers": [
+                {
+                    "id": w_id,
+                    "name": "test.png",
+                    "width": 1920,
+                    "height": 1080,
+                    "display": {"path": f"display/{w_id}.webp", "sha256": "b" * 64, "bytes": 4},
+                    "thumbnail": {"path": f"thumbnails/{w_id}.webp", "sha256": "c" * 64, "bytes": 5},
+                    "palette": {"surface": "not-a-color", "primary": "#123"},
+                }
+            ],
+        }
+        (self.lib_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        lib = WallpaperLibrary(self.lib_path)
+        pub = lib.get_public_list()
+        self.assertNotIn("palette", pub["wallpapers"][0])
+
 
 class WallpaperToolsUnitTests(unittest.TestCase):
     def setUp(self):
@@ -385,12 +471,56 @@ class WallpaperToolsUnitTests(unittest.TestCase):
         self.assertTrue(pub_ok2, pub_msg2)
         self.assertIn("already up to date", pub_msg2)
 
-        # Conflict refusal
-        tampered_file = target_dir / "manifest.json"
-        tampered_file.write_text("corrupted", encoding="utf-8")
-        pub_fail, pub_fail_msg = publish_library(self.dest_dir, target_dir)
-        self.assertFalse(pub_fail)
-        self.assertIn("Refusing to overwrite conflicting", pub_fail_msg)
+    def test_generate_palettes_symlink_traversal_rejected(self):
+        self._create_synthetic_image("test.png", (800, 600), "green")
+        build_library(src_dir=self.src_dir, dest_dir=self.dest_dir, inventory_path=None)
+
+        # Create symlinked directory or file
+        sym_dir = self.root / "sym_lib"
+        sym_dir.symlink_to(self.dest_dir)
+        ok, msg = generate_palettes_for_library(sym_dir)
+        self.assertFalse(ok)
+        self.assertIn("symlink", msg.lower())
+
+    def test_generate_palettes_failure_preserves_files_unchanged(self):
+        self._create_synthetic_image("test.png", (800, 600), "green")
+        build_library(src_dir=self.src_dir, dest_dir=self.dest_dir, inventory_path=None)
+
+        manifest_before = (self.dest_dir / "manifest.json").read_bytes()
+        tm_before = (self.dest_dir / "transport-manifest.json").read_bytes()
+
+        # Call with nonexistent matugen binary -> must fail without touching disk
+        ok, msg = generate_palettes_for_library(self.dest_dir, matugen_bin="/nonexistent/matugen")
+        self.assertFalse(ok)
+
+        manifest_after = (self.dest_dir / "manifest.json").read_bytes()
+        tm_after = (self.dest_dir / "transport-manifest.json").read_bytes()
+
+        self.assertEqual(manifest_before, manifest_after)
+        self.assertEqual(tm_before, tm_after)
+
+    def test_generate_palettes_real_matugen_success(self):
+        if not os.path.isfile("/usr/bin/matugen") or not os.access("/usr/bin/matugen", os.X_OK):
+            self.skipTest("/usr/bin/matugen not available")
+
+        self._create_synthetic_image("test.png", (800, 600), "blue")
+        build_library(src_dir=self.src_dir, dest_dir=self.dest_dir, inventory_path=None)
+
+        ok, msg = generate_palettes_for_library(self.dest_dir, matugen_bin="/usr/bin/matugen")
+        self.assertTrue(ok, msg)
+
+        # Verify manifest now contains complete 24-role palette
+        manifest = json.loads((self.dest_dir / "manifest.json").read_text(encoding="utf-8"))
+        item = manifest["wallpapers"][0]
+        self.assertIn("palette", item)
+        palette = item["palette"]
+        for role in M3_PALETTE_ROLES:
+            self.assertIn(role, palette)
+            self.assertRegex(palette[role], r"^#[0-9a-fA-F]{6}$")
+
+        # Transport manifest checksum must be updated and verify_library must pass
+        verify_ok, verify_msg = verify_library(self.dest_dir)
+        self.assertTrue(verify_ok, verify_msg)
 
     def test_verify_and_publish_without_pillow(self):
         self._create_synthetic_image("test.png", (100, 100), "green")

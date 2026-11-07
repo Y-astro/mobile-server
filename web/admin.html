@@ -14,7 +14,7 @@
 </head>
 <body class="p-4 sm:p-6 min-h-screen">
 
-  <div class="max-w-7xl mx-auto space-y-6">
+  <div class="dashboard-container mx-auto space-y-6">
     <!-- Header -->
     <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-white/10">
       <div class="flex items-center gap-3">
@@ -178,7 +178,7 @@
 
     <!-- Main Workstation Layout: 2-Column Split on Desktop, Single-Column on Mobile -->
     <div class="workstation-layout">
-      <!-- Left Column: Core Operations & System Services (~58% width) -->
+      <!-- Left Column: Core Operations & System Services (fluid flex/grid column) -->
       <div class="workstation-col">
         <!-- System Services & Dynamic RAM Manager -->
         <section class="space-y-3">
@@ -191,12 +191,18 @@
               <p class="text-xs text-muted mt-0.5">Control background services and monitor active memory footprint</p>
             </div>
 
-            <!-- Live RAM Preservation Summary Pill -->
-            <div class="flex items-center gap-2 bg-surface-raised border border-white/10 px-3 py-1.5 rounded-lg text-xs">
-              <div class="flex items-center gap-1.5 text-positive font-medium">
+            <!-- Controls: RAM Summary Pill, Arrange Toggle & Order Reset -->
+            <div class="flex items-center gap-2">
+              <div class="flex items-center gap-1.5 bg-surface-raised border border-white/10 px-3 py-1.5 rounded-lg text-xs text-positive font-medium">
                 <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
                 <span class="mono" id="svc-active-mem">-- MB</span> <span class="text-muted">active</span>
               </div>
+              <button type="button" id="btn-toggle-arrange" onclick="toggleArrangeServices()" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition" aria-pressed="false" title="Toggle service reordering controls">
+                <span>Arrange services</span>
+              </button>
+              <button type="button" id="btn-reset-service-order" onclick="resetServiceOrder()" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition" title="Reset service order to default" style="display: none;">
+                <span>Reset Order</span>
+              </button>
             </div>
           </div>
 
@@ -270,11 +276,29 @@
         </section>
       </div>
 
-      <!-- Right Column: Autonomous Agents & Dev Control Center (~42% width) -->
+      <!-- Right Column: Terminals, Agents & Quick Notes (~340-360px width) -->
       <div class="workstation-col">
+        <!-- Laptop Terminals Section -->
+        <section class="m3-card golden-glass-card p-5 rounded-xl space-y-3" aria-labelledby="laptop-heading">
+          <div class="flex flex-col gap-3">
+            <div>
+              <h2 id="laptop-heading" class="text-base font-semibold text-white">Laptop terminals</h2>
+              <p class="text-xs text-muted mt-0.5">Control Kitty terminal sessions streamed over Tailscale from the laptop.</p>
+            </div>
+            <div>
+              <button type="button" id="laptop-new" disabled class="m3-btn m3-btn-filled gold-gradient-btn px-4 py-2 text-xs font-medium disabled:opacity-40 shrink-0">New Terminal</button>
+            </div>
+          </div>
+          <p id="laptop-status" class="text-xs text-soft" role="status" aria-live="polite">Checking laptop…</p>
+          <div id="laptop-sessions" class="space-y-2 text-sm"></div>
+          <p class="text-xs text-muted">Laptop must be awake and logged in to open Kitty. Closing the browser keeps commands running; Close terminates the session.</p>
+        </section>
+        <script src="/static/portal-polling.js"></script>
+        <script src="/static/laptop.js" defer></script>
+
         <!-- AGY Agent Instances Section -->
         <section class="m3-card golden-glass-card p-5 rounded-xl space-y-4" aria-labelledby="agy-heading">
-          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div class="flex flex-col gap-3">
             <div class="flex items-center gap-2.5">
               <div class="service-icon-box">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
@@ -287,10 +311,12 @@
                 <p class="text-xs text-muted mt-0.5">Independent Antigravity CLI coding sessions. Closing a tab keeps commands running.</p>
               </div>
             </div>
-            <button type="button" id="agy-new" onclick="createNewAgySession()" class="m3-btn m3-btn-filled gold-gradient-btn px-4 py-2 text-xs font-medium flex items-center gap-1.5 select-none shrink-0">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-              <span>New AGY Instance</span>
-            </button>
+            <div>
+              <button type="button" id="agy-new" onclick="createNewAgySession()" class="m3-btn m3-btn-filled gold-gradient-btn px-4 py-2 text-xs font-medium flex items-center gap-1.5 select-none shrink-0">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                <span>New AGY Instance</span>
+              </button>
+            </div>
           </div>
           <div id="agy-sessions-container" class="space-y-2 text-sm">
             <div class="text-xs text-muted flex items-center gap-2 p-2">
@@ -299,22 +325,6 @@
             </div>
           </div>
         </section>
-
-        <!-- Laptop Terminals Section -->
-        <section class="m3-card golden-glass-card p-5 rounded-xl space-y-3" aria-labelledby="laptop-heading">
-          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <div>
-              <h2 id="laptop-heading" class="text-base font-semibold text-white">Laptop terminals</h2>
-              <p class="text-xs text-muted mt-0.5">Control Kitty terminal sessions streamed over Tailscale from the laptop.</p>
-            </div>
-            <button type="button" id="laptop-new" disabled class="m3-btn m3-btn-filled gold-gradient-btn px-4 py-2 text-xs font-medium disabled:opacity-40 shrink-0">New Terminal</button>
-          </div>
-          <p id="laptop-status" class="text-xs text-soft" role="status" aria-live="polite">Checking laptop…</p>
-          <div id="laptop-sessions" class="space-y-2 text-sm"></div>
-          <p class="text-xs text-muted">Laptop must be awake and logged in to open Kitty. Closing the browser keeps commands running; Close terminates the session.</p>
-        </section>
-        <script src="/static/portal-polling.js"></script>
-        <script src="/static/laptop.js" defer></script>
 
         <!-- Quick Notes Card -->
         <div class="m3-card golden-glass-card p-5 rounded-xl space-y-3">
@@ -492,9 +502,114 @@
       window.location.href = '/login';
     }
 
+    const SERVICE_ORDER_KEY = 'mobile.services.order.v1';
+    let lastKnownServices = [];
+    let isArrangingServices = false;
+
+    function toggleArrangeServices() {
+      isArrangingServices = !isArrangingServices;
+      const toggleBtn = document.getElementById('btn-toggle-arrange');
+      const resetBtn = document.getElementById('btn-reset-service-order');
+      const grid = document.getElementById('services-grid');
+      if (toggleBtn) {
+        toggleBtn.setAttribute('aria-pressed', isArrangingServices ? 'true' : 'false');
+        toggleBtn.classList.toggle('active', isArrangingServices);
+      }
+      if (resetBtn) {
+        resetBtn.style.display = isArrangingServices ? 'inline-flex' : 'none';
+      }
+      if (grid) {
+        grid.classList.toggle('arranging-services', isArrangingServices);
+      }
+    }
+
+    function loadStoredServiceOrder() {
+      try {
+        const raw = localStorage.getItem(SERVICE_ORDER_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.every(id => typeof id === 'string' && id.trim().length > 0)) {
+          return parsed;
+        }
+      } catch (e) {}
+      return null;
+    }
+
+    function saveStoredServiceOrder(ids) {
+      try {
+        localStorage.setItem(SERVICE_ORDER_KEY, JSON.stringify(ids));
+      } catch (e) {}
+    }
+
+    function reconcileServicesOrder(services) {
+      if (!Array.isArray(services)) return [];
+      const storedIds = loadStoredServiceOrder();
+      if (!storedIds || storedIds.length === 0) {
+        return [...services];
+      }
+      const svcMap = new Map();
+      for (const svc of services) {
+        if (svc && svc.id) svcMap.set(svc.id, svc);
+      }
+      const ordered = [];
+      const seenIds = new Set();
+      for (const id of storedIds) {
+        if (svcMap.has(id) && !seenIds.has(id)) {
+          ordered.push(svcMap.get(id));
+          seenIds.add(id);
+        }
+      }
+      for (const svc of services) {
+        if (svc && svc.id && !seenIds.has(svc.id)) {
+          ordered.push(svc);
+          seenIds.add(svc.id);
+        }
+      }
+      return ordered;
+    }
+
+    function moveService(id, direction) {
+      const stored = reconcileServicesOrder(lastKnownServices).map(s => s.id);
+      const idx = stored.indexOf(id);
+      if (idx === -1) return;
+      const newIdx = idx + direction;
+      if (newIdx < 0 || newIdx >= stored.length) return;
+      const temp = stored[idx];
+      stored[idx] = stored[newIdx];
+      stored[newIdx] = temp;
+      saveStoredServiceOrder(stored);
+      renderServices(lastKnownServices);
+
+      const targetAction = direction === -1 ? 'move-earlier' : 'move-later';
+      const targetCard = document.querySelector(`.m3-card[data-service-id="${id}"]`);
+      if (targetCard) {
+        const btn = targetCard.querySelector(`button[data-action="${targetAction}"]`);
+        if (btn && !btn.disabled) {
+          btn.focus();
+        } else {
+          const altBtn = targetCard.querySelector(`button[data-action="${direction === -1 ? 'move-later' : 'move-earlier'}"]`);
+          if (altBtn && !altBtn.disabled) altBtn.focus();
+        }
+      }
+    }
+
+    function resetServiceOrder() {
+      try {
+        localStorage.removeItem(SERVICE_ORDER_KEY);
+      } catch (e) {}
+      renderServices(lastKnownServices);
+      const resetBtn = document.getElementById('btn-reset-service-order');
+      if (resetBtn) resetBtn.focus();
+    }
+
     function renderServices(services) {
       const grid = document.getElementById('services-grid');
       if (!grid) return;
+      grid.classList.toggle('arranging-services', isArrangingServices);
+      if (Array.isArray(services)) {
+        lastKnownServices = services;
+      }
+      const orderedServices = reconcileServicesOrder(lastKnownServices);
 
       const icons = {
         'filebrowser': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>',
@@ -508,16 +623,74 @@
         'battery_guard': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>'
       };
 
-      grid.innerHTML = services.map(svc => {
+      const existingCards = Array.from(grid.querySelectorAll(':scope > .m3-card[data-service-id]'));
+      const matchesOrder = existingCards.length === orderedServices.length &&
+        existingCards.every((card, idx) => card.getAttribute('data-service-id') === orderedServices[idx].id);
+
+      if (matchesOrder) {
+        orderedServices.forEach((svc, idx) => {
+          const card = existingCards[idx];
+          const isRunning = svc.running;
+          const badgeEl = card.querySelector('.service-status-badge');
+          if (badgeEl) {
+            badgeEl.textContent = svc.status_badge || (isRunning ? 'Active' : 'Disabled');
+            badgeEl.className = 'service-status-badge px-2 py-0.5 rounded text-xs font-medium ' +
+              (isRunning ? 'badge-positive' : 'badge-neutral text-muted');
+          }
+          const descEl = card.querySelector('.service-desc');
+          if (descEl && svc.desc !== undefined) {
+            descEl.textContent = svc.desc || '';
+          }
+          const checkbox = card.querySelector('.switch input[type="checkbox"]');
+          if (checkbox && document.activeElement !== checkbox) {
+            checkbox.checked = isRunning;
+          }
+          const openAnchor = card.querySelector('.service-open-btn');
+          if (openAnchor) {
+            const openBtnLabel = (svc.id === 'suwayomi' && svc.unread_updates > 0)
+              ? `${svc.open_label} (${svc.unread_updates} new)`
+              : svc.open_label;
+            const labelSpan = openAnchor.querySelector('span');
+            if (labelSpan) labelSpan.textContent = openBtnLabel;
+            openAnchor.href = svc.open_url;
+            if (!isRunning && svc.can_toggle) {
+              openAnchor.classList.add('opacity-40', 'pointer-events-none');
+            } else {
+              openAnchor.classList.remove('opacity-40', 'pointer-events-none');
+            }
+          }
+          const prevBtn = card.querySelector('button[data-action="move-earlier"]');
+          if (prevBtn) prevBtn.disabled = (idx === 0);
+          const nextBtn = card.querySelector('button[data-action="move-later"]');
+          if (nextBtn) nextBtn.disabled = (idx === orderedServices.length - 1);
+        });
+        return;
+      }
+
+      let activeServiceId = null;
+      let activeAction = null;
+      if (grid.contains(document.activeElement)) {
+        const currentCard = document.activeElement.closest('.m3-card[data-service-id]');
+        if (currentCard) {
+          activeServiceId = currentCard.getAttribute('data-service-id');
+          activeAction = document.activeElement.getAttribute('data-action') ||
+                         (document.activeElement.type === 'checkbox' ? 'toggle' : null);
+        }
+      }
+
+      const total = orderedServices.length;
+      grid.innerHTML = orderedServices.map((svc, idx) => {
         const isRunning = svc.running;
         const iconSvg = icons[svc.id] || icons['filebrowser'];
         const badgeClass = isRunning
           ? 'badge-positive'
           : 'badge-neutral text-muted';
+        const isFirst = (idx === 0);
+        const isLast = (idx === total - 1);
 
         const toggleHtml = svc.can_toggle ? `
           <label class="switch m3-switch">
-            <input type="checkbox" ${isRunning ? 'checked' : ''} onchange="toggleService('${svc.id}', this)">
+            <input type="checkbox" data-action="toggle" ${isRunning ? 'checked' : ''} onchange="toggleService('${svc.id}', this)">
             <span class="slider"></span>
           </label>
         ` : `
@@ -533,21 +706,21 @@
           : '';
 
         const openBtn = `
-          <a href="${svc.open_url}" ${openOnClick} ${svc.open_url.startsWith('http') || svc.open_url.startsWith('/') ? 'target="_blank"' : ''} class="m3-btn m3-btn-filled gold-gradient-btn w-full text-xs font-medium flex items-center justify-center gap-1.5 ${!isRunning && svc.can_toggle ? 'opacity-40 pointer-events-none' : ''}">
+          <a href="${svc.open_url}" ${openOnClick} ${svc.open_url.startsWith('http') || svc.open_url.startsWith('/') ? 'target="_blank"' : ''} class="service-open-btn m3-btn m3-btn-filled gold-gradient-btn w-full text-xs font-medium flex items-center justify-center gap-1.5 ${!isRunning && svc.can_toggle ? 'opacity-40 pointer-events-none' : ''}">
             <span>${openBtnLabel}</span>
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
           </a>
         `;
 
         return `
-          <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4">
+          <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4" data-service-id="${svc.id}">
             <div class="space-y-3">
               <div class="flex items-start justify-between">
                 <div class="service-icon-box">
                   ${iconSvg}
                 </div>
                 <div class="flex items-center gap-2">
-                  <span class="px-2 py-0.5 rounded text-xs font-medium ${badgeClass}">
+                  <span class="service-status-badge px-2 py-0.5 rounded text-xs font-medium ${badgeClass}">
                     ${svc.status_badge || (isRunning ? 'Active' : 'Disabled')}
                   </span>
                   ${toggleHtml}
@@ -556,7 +729,7 @@
               <div>
                 ${svc.category ? `<span class='text-xs font-medium text-muted'>${svc.category}</span>` : ''}
                 <h3 class="font-semibold text-sm text-white mt-0.5">${svc.name}</h3>
-                <p class="text-xs text-soft mt-1 leading-relaxed">${svc.desc}</p>
+                <p class="service-desc text-xs text-soft mt-1 leading-relaxed">${svc.desc || ''}</p>
                 ${svc.id === 'vaultwarden' ? `
                   <div class="mt-2 p-2 rounded-lg bg-surface-raised border border-white/5 text-xs text-soft flex items-center justify-between">
                     <span class="mono">Bitwarden: http://100.75.159.53:8082</span>
@@ -571,12 +744,31 @@
                 ` : ''}
               </div>
             </div>
-            <div class="pt-3 border-t border-white/5">
+            <div class="pt-3 border-t border-white/5 flex flex-col gap-2.5">
               ${openBtn}
+              <div class="service-order-row flex items-center justify-between text-xs text-muted pt-1">
+                <span>Order</span>
+                <div class="service-order-actions flex items-center gap-1.5" role="group" aria-label="Reorder ${svc.name}">
+                  <button type="button" class="service-order-btn touch-target" data-action="move-earlier" onclick="moveService('${svc.id}', -1)" aria-label="Move ${svc.name} earlier" ${isFirst ? 'disabled' : ''}>
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                  </button>
+                  <button type="button" class="service-order-btn touch-target" data-action="move-later" onclick="moveService('${svc.id}', 1)" aria-label="Move ${svc.name} later" ${isLast ? 'disabled' : ''}>
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         `;
       }).join('');
+
+      if (activeServiceId && activeAction) {
+        const card = grid.querySelector(`.m3-card[data-service-id="${activeServiceId}"]`);
+        if (card) {
+          const el = card.querySelector(`[data-action="${activeAction}"]`);
+          if (el && !el.disabled) el.focus();
+        }
+      }
     }
 
     function openVaultHTTPS() {
