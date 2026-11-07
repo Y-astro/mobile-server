@@ -1005,6 +1005,22 @@ class WallpaperPublishPalettesTests(unittest.TestCase):
         self.assertIsNone(backup)
         self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
 
+    def test_publish_without_hardlink_api(self):
+        with patch.object(os, "link", None):
+            result = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
+        self.assertTrue(result.ok, result.msg)
+        self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.cand_m_sha)
+        self.assertEqual(sha256_file(result.backup_path / "manifest.json"), self.old_m_sha)
+
+    def test_nonprivate_lockfile_refused(self):
+        lock = self.root / ".wallpapers-publish.lock"
+        lock.touch(mode=0o600)
+        lock.chmod(0o644)
+        result = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
+        self.assertFalse(result.ok)
+        self.assertIn("0600", result.msg)
+        self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
+
     def test_wrong_old_transport_hash_rejected(self):
         wrong_tm_sha = "1" * 64
         ok, msg, backup = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, wrong_tm_sha)

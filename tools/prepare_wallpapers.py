@@ -914,6 +914,8 @@ def publish_palettes(
             return PublishPalettesResult(False, f"Lock file is not a regular file: {lock_file}", None)
         if st.st_uid != os.getuid():
             return PublishPalettesResult(False, f"Lock file owner UID {st.st_uid} does not match current process UID {os.getuid()}", None)
+        if stat.S_IMODE(st.st_mode) != 0o600:
+            return PublishPalettesResult(False, f"Lock file must have private mode 0600: {lock_file}", None)
 
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -935,10 +937,14 @@ def publish_palettes(
                         raise RuntimeError(f"Symlink rejected in target payload: {entry}")
                     if entry.is_file():
                         dst_file = dst_sub / entry.name
-                        try:
-                            os.link(entry, dst_file)
-                        except OSError:
+                        link = getattr(os, "link", None)
+                        if link is None:
                             shutil.copy2(entry, dst_file)
+                        else:
+                            try:
+                                link(entry, dst_file)
+                            except OSError:
+                                shutil.copy2(entry, dst_file)
 
             # Copy candidate metadata (NEVER hardlinked to target metadata)
             shutil.copy2(cand_manifest_file, staging_dir / "manifest.json")
