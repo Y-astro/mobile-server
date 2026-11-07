@@ -281,9 +281,18 @@
         <!-- Laptop Terminals Section -->
         <section class="m3-card golden-glass-card p-5 rounded-xl space-y-3" aria-labelledby="laptop-heading">
           <div class="flex flex-col gap-3">
-            <div>
-              <h2 id="laptop-heading" class="text-base font-semibold text-white">Laptop terminals</h2>
-              <p class="text-xs text-muted mt-0.5">Control Kitty terminal sessions streamed over Tailscale from the laptop.</p>
+            <div class="flex items-start justify-between gap-2.5">
+              <div class="min-w-0">
+                <h2 id="laptop-heading" class="text-base font-semibold text-white">Laptop terminals</h2>
+                <p class="text-xs text-muted mt-0.5">Control Kitty terminal sessions streamed over Tailscale from the laptop.</p>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <span id="laptop-service-status-badge" class="service-status-badge px-2 py-0.5 rounded text-xs font-medium badge-neutral text-muted">Checking…</span>
+                <label class="switch m3-switch" aria-label="Toggle Laptop Gateway service">
+                  <input type="checkbox" id="laptop-service-toggle" data-action="toggle" onchange="toggleService('laptop_terminal', this)">
+                  <span class="slider"></span>
+                </label>
+              </div>
             </div>
             <div>
               <button type="button" id="laptop-new" disabled class="m3-btn m3-btn-filled gold-gradient-btn px-4 py-2 text-xs font-medium disabled:opacity-40 shrink-0">New Terminal</button>
@@ -299,16 +308,25 @@
         <!-- AGY Agent Instances Section -->
         <section class="m3-card golden-glass-card p-5 rounded-xl space-y-4" aria-labelledby="agy-heading">
           <div class="flex flex-col gap-3">
-            <div class="flex items-center gap-2.5">
-              <div class="service-icon-box">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-              </div>
-              <div>
-                <div class="flex items-center gap-2">
-                  <h2 id="agy-heading" class="text-base font-semibold text-white">Autonomous coding agent (AGY)</h2>
-                  <span class="m3-badge badge-neutral">Multi-session</span>
+            <div class="flex items-start justify-between gap-2.5">
+              <div class="flex items-start gap-2.5 min-w-0">
+                <div class="service-icon-box shrink-0 mt-0.5">
+                  <svg class="w-5 h-5 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                 </div>
-                <p class="text-xs text-muted mt-0.5">Independent Antigravity CLI coding sessions. Closing a tab keeps commands running.</p>
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <h2 id="agy-heading" class="text-base font-semibold text-white">Autonomous coding agent (AGY)</h2>
+                    <span class="m3-badge badge-neutral shrink-0">Multi-session</span>
+                  </div>
+                  <p class="text-xs text-muted mt-0.5">Independent Antigravity CLI coding sessions. Closing a tab keeps commands running.</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <span id="agy-service-status-badge" class="service-status-badge px-2 py-0.5 rounded text-xs font-medium badge-neutral text-muted">Checking…</span>
+                <label class="switch m3-switch" aria-label="Toggle AGY service">
+                  <input type="checkbox" id="agy-service-toggle" data-action="toggle" onchange="toggleService('agy', this)">
+                  <span class="slider"></span>
+                </label>
               </div>
             </div>
             <div>
@@ -541,14 +559,17 @@
       } catch (e) {}
     }
 
+    const SIDEBAR_SERVICE_IDS = new Set(['agy', 'laptop_terminal']);
+
     function reconcileServicesOrder(services) {
       if (!Array.isArray(services)) return [];
+      const visibleServices = services.filter(s => s && s.id && !SIDEBAR_SERVICE_IDS.has(s.id));
       const storedIds = loadStoredServiceOrder();
       if (!storedIds || storedIds.length === 0) {
-        return [...services];
+        return [...visibleServices];
       }
       const svcMap = new Map();
-      for (const svc of services) {
+      for (const svc of visibleServices) {
         if (svc && svc.id) svcMap.set(svc.id, svc);
       }
       const ordered = [];
@@ -559,7 +580,7 @@
           seenIds.add(id);
         }
       }
-      for (const svc of services) {
+      for (const svc of visibleServices) {
         if (svc && svc.id && !seenIds.has(svc.id)) {
           ordered.push(svc);
           seenIds.add(svc.id);
@@ -602,13 +623,68 @@
       if (resetBtn) resetBtn.focus();
     }
 
+    function updateSidebarControls(services) {
+      if (!Array.isArray(services)) return;
+      const agySvc = services.find(s => s && s.id === 'agy');
+      const laptopSvc = services.find(s => s && s.id === 'laptop_terminal');
+
+      if (agySvc) {
+        const badge = document.getElementById('agy-service-status-badge');
+        if (badge) {
+          badge.textContent = agySvc.status_badge || (agySvc.running ? 'Active' : 'Disabled');
+          badge.className = 'service-status-badge px-2 py-0.5 rounded text-xs font-medium ' +
+            (agySvc.running ? 'badge-positive' : 'badge-neutral text-muted');
+        }
+        const toggle = document.getElementById('agy-service-toggle');
+        if (toggle && document.activeElement !== toggle && !toggle.disabled) {
+          toggle.checked = Boolean(agySvc.running);
+        }
+        window.agyServiceRunning = Boolean(agySvc.running);
+        const agyNew = document.getElementById('agy-new');
+        if (agyNew && !agyNew.dataset.creating) {
+          agyNew.disabled = !agySvc.running;
+        }
+        const sessionLinks = document.querySelectorAll('#agy-sessions-container a[href^="/agy/"]');
+        sessionLinks.forEach(a => {
+          if (!agySvc.running) {
+            a.classList.add('opacity-40', 'pointer-events-none');
+            a.setAttribute('aria-disabled', 'true');
+          } else {
+            a.classList.remove('opacity-40', 'pointer-events-none');
+            a.removeAttribute('aria-disabled');
+          }
+        });
+      }
+
+      if (laptopSvc) {
+        const badge = document.getElementById('laptop-service-status-badge');
+        if (badge) {
+          badge.textContent = laptopSvc.status_badge || (laptopSvc.running ? 'Active' : 'Disabled');
+          badge.className = 'service-status-badge px-2 py-0.5 rounded text-xs font-medium ' +
+            (laptopSvc.running ? 'badge-positive' : 'badge-neutral text-muted');
+        }
+        const toggle = document.getElementById('laptop-service-toggle');
+        if (toggle && document.activeElement !== toggle && !toggle.disabled) {
+          toggle.checked = Boolean(laptopSvc.running);
+          toggle.dataset.gatewayState = laptopSvc.running ? 'running' : 'stopped';
+        }
+        window.dispatchEvent(new CustomEvent('laptop-gateway-state', {
+          detail: {
+            running: Boolean(laptopSvc.running),
+            badge: laptopSvc.status_badge
+          }
+        }));
+      }
+    }
+
     function renderServices(services) {
+      if (Array.isArray(services)) {
+        lastKnownServices = services;
+        updateSidebarControls(services);
+      }
       const grid = document.getElementById('services-grid');
       if (!grid) return;
       grid.classList.toggle('arranging-services', isArrangingServices);
-      if (Array.isArray(services)) {
-        lastKnownServices = services;
-      }
       const orderedServices = reconcileServicesOrder(lastKnownServices);
 
       const icons = {
@@ -642,7 +718,7 @@
             descEl.textContent = svc.desc || '';
           }
           const checkbox = card.querySelector('.switch input[type="checkbox"]');
-          if (checkbox && document.activeElement !== checkbox) {
+          if (checkbox && document.activeElement !== checkbox && !checkbox.disabled) {
             checkbox.checked = isRunning;
           }
           const openAnchor = card.querySelector('.service-open-btn');
@@ -792,11 +868,25 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
+        if (res.status === 401 || res.status === 403) {
+          alert('Administrator access required');
+          if (el) el.checked = !origChecked;
+          return;
+        }
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          alert('Toggle failed: ' + (errData.message || res.statusText || 'Request failed'));
+          if (el) el.checked = !origChecked;
+          return;
+        }
         const data = await res.json();
         if (data.status === 'error' || data.error) {
           alert('Toggle failed: ' + (data.message || data.error));
           if (el) el.checked = !origChecked;
         } else {
+          if (Array.isArray(data.services)) {
+            renderServices(data.services);
+          }
           await (servicesLoop ? servicesLoop.refreshAfterMutation() : fetchServices());
         }
       } catch (err) {
@@ -1273,7 +1363,7 @@
                 <span class="px-1.5 py-0.5 rounded text-xs font-mono m3-badge badge-neutral">${badgeText}</span>
               </div>
               <div class="flex items-center gap-2 flex-wrap">
-                <a href="${openUrl}" target="_blank" rel="noopener noreferrer" class="m3-btn m3-btn-tonal text-xs font-medium flex items-center gap-1.5">
+                <a href="${openUrl}" target="_blank" rel="noopener noreferrer" class="m3-btn m3-btn-tonal text-xs font-medium flex items-center gap-1.5 ${window.agyServiceRunning === false ? 'opacity-40 pointer-events-none' : ''}" ${window.agyServiceRunning === false ? 'aria-disabled="true"' : ''}>
                   <span>Open / Reconnect</span>
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
                 </a>
@@ -1295,8 +1385,15 @@
     }
 
     async function createNewAgySession() {
+      if (window.agyServiceRunning === false) {
+        alert('AGY service is disabled. Enable AGY service to start a new instance.');
+        return;
+      }
       const newBtn = document.getElementById('agy-new');
-      if (newBtn) newBtn.disabled = true;
+      if (newBtn) {
+        newBtn.disabled = true;
+        newBtn.dataset.creating = 'true';
+      }
       try {
         const res = await fetch('/api/agy/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
         if (!res.ok) {
@@ -1313,7 +1410,10 @@
       } catch (e) {
         alert('Network error creating AGY session: ' + e);
       } finally {
-        if (newBtn) newBtn.disabled = false;
+        if (newBtn) {
+          delete newBtn.dataset.creating;
+          newBtn.disabled = (window.agyServiceRunning === false);
+        }
       }
     }
 

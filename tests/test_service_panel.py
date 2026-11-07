@@ -388,6 +388,40 @@ class ServicePanelTests(ServicePanelBaseTestCase):
         self.assertEqual(mock_sleep.call_count, 15)
         mock_sleep.assert_called_with(0.1)
 
+    @patch("subprocess.run")
+    def test_toggle_laptop_terminal_and_agy_whitelisted(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        from service_catalog import dashboard_services
+        cfg = dashboard_services()
+        self.assertIn("laptop_terminal", cfg)
+        self.assertIn("agy", cfg)
+        panel = self.make_panel(
+            services_config=cfg,
+            supervisor_script="/test/bin/server_supervisor.py",
+            get_service_pids=lambda p: [],
+            is_service_port_open=lambda p: False,
+        )
+
+        # Toggle laptop_terminal explicitly off
+        res1 = panel.toggle_service("laptop_terminal", enable=False)
+        self.assertIn("services", res1)
+        mock_run.assert_called_with([
+            "python3", "/test/bin/server_supervisor.py",
+            "--service", "laptop_terminal", "--enable", "false"
+        ], capture_output=True, text=True, timeout=25)
+
+        # Toggle agy explicitly on
+        res2 = panel.toggle_service("agy", enable=True)
+        self.assertIn("services", res2)
+        mock_run.assert_called_with([
+            "python3", "/test/bin/server_supervisor.py",
+            "--service", "agy", "--enable", "true"
+        ], capture_output=True, text=True, timeout=25)
+
+        # Non-dashboard service like tor should be rejected
+        res3 = panel.toggle_service("tor", enable=True)
+        self.assertEqual(res3, {"status": "error", "message": "Unknown service"})
+
 
 class ProbeHelpersTests(ServicePanelBaseTestCase):
     def test_probe_port_zero_or_none(self):

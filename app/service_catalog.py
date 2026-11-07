@@ -217,5 +217,17 @@ def dashboard_services() -> Dict[str, Dict[str, Any]]:
             "open_url": "/music/",
             "open_label": "Open Player",
             "can_toggle": True
+        },
+        "laptop_terminal": {
+            "id": "laptop_terminal",
+            "name": "Laptop Terminal Gateway",
+            "category": "System & Control",
+            "port": SERVICE_ENDPOINTS['laptop_terminal']['port'],
+            "pattern": "ttyd.*7683",
+            "icon": "terminal",
+            "desc": f"Tailscale Kitty Streaming Gateway (Port {SERVICE_ENDPOINTS['laptop_terminal']['port']})",
+            "open_url": "/laptop/",
+            "open_label": "Open Gateway",
+            "can_toggle": True
         }
     }

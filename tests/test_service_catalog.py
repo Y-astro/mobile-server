@@ -152,11 +152,12 @@ class ServiceCatalogTests(unittest.TestCase):
         cards = service_catalog.dashboard_services()
         expected_keys = [
             'filebrowser', 'suwayomi', 'vaultwarden', 'adguard', 'terminal',
-            'agy', 'converter', 'syncthing', 'battery_guard', 'antra', 'navidrome'
+            'agy', 'converter', 'syncthing', 'battery_guard', 'antra', 'navidrome',
+            'laptop_terminal'
         ]
         self.assertEqual(list(cards.keys()), expected_keys)
         self.assertEqual(list(cards.keys())[:9], list(char['dashboard_services_config'].keys()))
-        self.assertEqual(len(cards), 11)
+        self.assertEqual(len(cards), 12)
 
         for k in expected_keys[:9]:
             orig = dict(char['dashboard_services_config'][k])
@@ -315,9 +316,10 @@ assert Path(sc.__file__).resolve() == (lib_dir / 'service_catalog.py').resolve()
 
 # Run dashboard via runpy
 dash_globals = runpy.run_path(str(prefix_bin / 'dashboard'), run_name='dashboard')
-assert len(dash_globals['SERVICES_CONFIG']) == 11
+assert len(dash_globals['SERVICES_CONFIG']) == 12
 assert dash_globals['SERVICES_CONFIG']['filebrowser']['port'] == 8085
 assert dash_globals['SERVICES_CONFIG']['antra']['open_url'] == '/antra/'
+assert dash_globals['SERVICES_CONFIG']['laptop_terminal']['port'] == 7683
 print('INSTALLED_BOOTSTRAP_OK')
 '''
             child_runner = tmp / 'runner.py'
