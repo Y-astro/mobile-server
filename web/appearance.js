@@ -19,8 +19,7 @@
     version: 1,
     wallpaperId: null,
     blur: DEFAULT_BLUR,
-    translucency: DEFAULT_TRANSLUCENCY,
-    colorMode: 'manual' // 'manual' | 'wallpaper'
+    translucency: DEFAULT_TRANSLUCENCY
   };
 
   let manifest = null;
@@ -86,9 +85,7 @@
         } else if (parsed.wallpaperId === null) {
           state.wallpaperId = null;
         }
-        if (parsed.colorMode === 'wallpaper' || parsed.colorMode === 'manual') {
-          state.colorMode = parsed.colorMode;
-        }
+        // Legacy colorMode ignored transparently (Matugen automatic)
       }
     } catch (e) {
       // Storage blocked or corrupt; keep defaults in memory
@@ -101,8 +98,7 @@
         version: 1,
         wallpaperId: state.wallpaperId,
         blur: state.blur,
-        translucency: state.translucency,
-        colorMode: state.colorMode
+        translucency: state.translucency
       }));
     } catch (e) {
       // Storage blocked or quota exceeded; ignore gracefully
@@ -164,7 +160,7 @@
         return typeof val === 'string' && /^#[0-9a-fA-F]{6}$/.test(val);
       });
 
-    if (state.colorMode === 'wallpaper' && hasValidPalette) {
+    if (hasValidPalette) {
       // Restrict CSS writes strictly to allowlisted 24 roles; preserve semantic positive default
       for (const role of m3Roles) {
         const val = match.palette[role] || match.palette[role.replace(/-/g, '_')];
@@ -328,18 +324,7 @@
         </div>
 
         <div class="appearance-control-group">
-          <div class="appearance-slider-label-row">
-            <span id="appearance-palette-mode-label">Theme colours</span>
-            <span class="appearance-slider-value" id="appearance-color-mode-val">${state.colorMode === 'wallpaper' ? 'Wallpaper' : 'Default'}</span>
-          </div>
-          <div class="appearance-segmented-wrap" role="group" aria-labelledby="appearance-palette-mode-label">
-            <button type="button" class="appearance-segment-btn ${state.colorMode !== 'wallpaper' ? 'active' : ''}" id="color-mode-manual-btn" aria-pressed="${state.colorMode !== 'wallpaper' ? 'true' : 'false'}">
-              Teal &amp; Gold
-            </button>
-            <button type="button" class="appearance-segment-btn ${state.colorMode === 'wallpaper' ? 'active' : ''}" id="color-mode-wallpaper-btn" aria-pressed="${state.colorMode === 'wallpaper' ? 'true' : 'false'}">
-              Wallpaper (Matugen)
-            </button>
-          </div>
+          <p class="appearance-caption">Colours follow the selected wallpaper</p>
         </div>
 
         <div class="appearance-actions">
@@ -357,39 +342,6 @@
     const resetBtn = dialog.querySelector('#appearance-reset-btn');
     const blurInput = dialog.querySelector('#appearance-blur-input');
     const translucencyInput = dialog.querySelector('#appearance-translucency-input');
-    const manualBtn = dialog.querySelector('#color-mode-manual-btn');
-    const wallpaperBtn = dialog.querySelector('#color-mode-wallpaper-btn');
-
-    function updateColorModeUI() {
-      const isWall = state.colorMode === 'wallpaper';
-      if (manualBtn) {
-        manualBtn.classList.toggle('active', !isWall);
-        manualBtn.setAttribute('aria-pressed', !isWall ? 'true' : 'false');
-      }
-      if (wallpaperBtn) {
-        wallpaperBtn.classList.toggle('active', isWall);
-        wallpaperBtn.setAttribute('aria-pressed', isWall ? 'true' : 'false');
-      }
-      const valEl = document.getElementById('appearance-color-mode-val');
-      if (valEl) valEl.textContent = isWall ? 'Wallpaper' : 'Default';
-    }
-
-    if (manualBtn) {
-      manualBtn.addEventListener('click', () => {
-        state.colorMode = 'manual';
-        updateColorModeUI();
-        saveStoredState();
-        applyStyles();
-      });
-    }
-    if (wallpaperBtn) {
-      wallpaperBtn.addEventListener('click', () => {
-        state.colorMode = 'wallpaper';
-        updateColorModeUI();
-        saveStoredState();
-        applyStyles();
-      });
-    }
 
     const handleClose = () => closeDialog();
     closeBtn.addEventListener('click', handleClose);
@@ -417,7 +369,6 @@
     resetBtn.addEventListener('click', () => {
       state.blur = DEFAULT_BLUR;
       state.translucency = DEFAULT_TRANSLUCENCY;
-      state.colorMode = 'manual';
       if (manifest && manifest.default_id) {
         state.wallpaperId = manifest.default_id;
       }
@@ -426,7 +377,6 @@
       translucencyInput.value = state.translucency;
       document.getElementById('appearance-blur-val').textContent = `${state.blur}%`;
       document.getElementById('appearance-translucency-val').textContent = `${state.translucency}%`;
-      updateColorModeUI();
       saveStoredState();
       applyStyles();
       updateGalleryUI();
@@ -520,21 +470,7 @@
     if (blurVal) blurVal.textContent = `${state.blur}%`;
     if (transVal) transVal.textContent = `${state.translucency}%`;
 
-    const isWall = state.colorMode === 'wallpaper';
-    const manualBtn = dialog.querySelector('#color-mode-manual-btn');
-    const wallpaperBtn = dialog.querySelector('#color-mode-wallpaper-btn');
-    const colorModeVal = dialog.querySelector('#appearance-color-mode-val');
-    if (manualBtn) {
-      manualBtn.classList.toggle('active', !isWall);
-      manualBtn.setAttribute('aria-pressed', !isWall ? 'true' : 'false');
-    }
-    if (wallpaperBtn) {
-      wallpaperBtn.classList.toggle('active', isWall);
-      wallpaperBtn.setAttribute('aria-pressed', isWall ? 'true' : 'false');
-    }
-    if (colorModeVal) {
-      colorModeVal.textContent = isWall ? 'Wallpaper' : 'Default';
-    }
+
 
     if (!manifest && manifestStatus === 'idle') {
       fetchWallpapers();

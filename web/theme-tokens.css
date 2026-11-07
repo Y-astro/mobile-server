@@ -23,17 +23,17 @@
   --md-sys-color-outline: #899392;
   --md-sys-color-outline-variant: #3f4948;
 
-  /* --- Primary: Teal --- */
-  --md-sys-color-primary: #70d6c5;
-  --md-sys-color-on-primary: #003734;
-  --md-sys-color-primary-container: #004f4a;
-  --md-sys-color-on-primary-container: #8bf2e1;
+  /* --- Primary: Neutral M3 Dark Fallback --- */
+  --md-sys-color-primary: #c2c8c7;
+  --md-sys-color-on-primary: #2b3131;
+  --md-sys-color-primary-container: #424848;
+  --md-sys-color-on-primary-container: #dde4e3;
 
-  /* --- Tertiary: Restrained Warm Gold --- */
-  --md-sys-color-tertiary: #e5c46c;
-  --md-sys-color-on-tertiary: #3c2f00;
-  --md-sys-color-tertiary-container: #574400;
-  --md-sys-color-on-tertiary-container: #ffe08b;
+  /* --- Tertiary: Neutral M3 Dark Fallback --- */
+  --md-sys-color-tertiary: #c6c6cb;
+  --md-sys-color-on-tertiary: #2f3034;
+  --md-sys-color-tertiary-container: #45474b;
+  --md-sys-color-on-tertiary-container: #e2e2e7;
 
   /* --- Semantic Error --- */
   --md-sys-color-error: #ffb4ab;

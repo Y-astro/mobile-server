@@ -477,21 +477,17 @@ const mockServices = [
     // -------------------------------------------------------------
     // TEST 5: MATUGEN WALLPAPER COLOUR MODES & FALLBACKS
     // -------------------------------------------------------------
-    console.log('--- TEST 5: Matugen Wallpaper-Derived Colours ---');
+    console.log('--- TEST 5: Automatic Matugen Wallpaper-Derived Colours ---');
     await page.goto(`${baseUrl}/admin`);
     await page.locator('#btn-appearance').waitFor({ state: 'visible' });
     await page.locator('#btn-appearance').click();
     await page.waitForSelector('#appearance-dialog[open], dialog#appearance-dialog:modal');
 
-    // Verify Default M3 colors before enabling wallpaper mode
-    let currentPrimary = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--md-sys-color-primary').trim());
-    assert.equal(currentPrimary, '#70d6c5', 'Default primary must be Teal #70d6c5');
+    // Verify obsolete segmented theme buttons are removed
+    assert.equal(await page.locator('#color-mode-wallpaper-btn').count(), 0, 'No wallpaper colour mode button');
+    assert.equal(await page.locator('#color-mode-manual-btn').count(), 0, 'No manual colour mode button');
 
-    // Click "Wallpaper (Matugen)" segmented button
-    const wallColorBtn = page.locator('#color-mode-wallpaper-btn');
-    await wallColorBtn.click();
-
-    // Verify Frosted Glass palette applied
+    // Verify Frosted Glass palette is automatically applied without manual mode selection
     let themeColors = await page.evaluate(() => {
       const s = getComputedStyle(document.documentElement);
       return {
@@ -500,7 +496,7 @@ const mockServices = [
         surface: s.getPropertyValue('--md-sys-color-surface').trim()
       };
     });
-    console.log('Applied Frosted Glass Palette:', themeColors);
+    console.log('Automatically Applied Frosted Glass Palette:', themeColors);
     assert.equal(themeColors.primary, paletteFrostedGlass.primary);
     assert.equal(themeColors.tertiary, paletteFrostedGlass.tertiary);
     assert.equal(themeColors.surface, paletteFrostedGlass.surface);
@@ -511,7 +507,7 @@ const mockServices = [
     const positiveDefault = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--md-sys-color-positive').trim());
     assert.equal(positiveDefault, '#70d6c5', 'Semantic positive default must be preserved');
 
-    // Switch wallpaper to Saturn Rings
+    // Switch wallpaper to Saturn Rings -> automatically updates all 24 roles
     const saturnThumb = page.locator('.appearance-thumb-btn[data-id="a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890"]');
     await saturnThumb.click();
 
@@ -528,7 +524,7 @@ const mockServices = [
     assert.equal(themeColors.tertiary, paletteSaturnRings.tertiary);
     assert.equal(themeColors.surface, paletteSaturnRings.surface);
 
-    // Switch to wallpaper with partial/malformed palette B -> fallback to Teal & Gold
+    // Switch to wallpaper with partial/malformed palette B -> fallback to quiet neutral dark tokens
     const partialPalThumb = page.locator('.appearance-thumb-btn[data-id="d1e2f3a4b5c67890d1e2f3a4b5c67890d1e2f3a4b5c67890d1e2f3a4b5c67890"]');
     await partialPalThumb.click();
 
@@ -541,14 +537,14 @@ const mockServices = [
       };
     });
     console.log('Partial Palette Fallback:', themeColors);
-    assert.equal(themeColors.primary, '#70d6c5', 'Partial palette must fall back to Teal #70d6c5');
-    assert.equal(themeColors.tertiary, '#e5c46c', 'Partial palette must fall back to Gold #e5c46c');
+    assert.equal(themeColors.primary, '#c2c8c7', 'Partial palette must fall back to neutral primary #c2c8c7');
+    assert.equal(themeColors.tertiary, '#c6c6cb', 'Partial palette must fall back to neutral tertiary #c6c6cb');
 
-    // Regression check: verify no stale-state leak from Palette A (on-primary must be empty string)
+    // Regression check: verify no stale-state leak from Saturn Rings (on-primary must be empty string)
     const staleRoleLeak = await page.evaluate(() => document.documentElement.style.getPropertyValue('--md-sys-color-on-primary'));
     assert.equal(staleRoleLeak, '', 'Fallback must reset all owned roles without leaking previous palette');
 
-    // Switch to wallpaper without palette -> fallback to Teal & Gold
+    // Switch to wallpaper without palette -> fallback to quiet neutral dark tokens
     const noPalThumb = page.locator('.appearance-thumb-btn[data-id="c1d2e3f405162738c1d2e3f405162738c1d2e3f405162738c1d2e3f405162738"]');
     await noPalThumb.click();
 
@@ -560,28 +556,38 @@ const mockServices = [
         surface: s.getPropertyValue('--md-sys-color-surface').trim()
       };
     });
-    console.log('Fallback to Default Palette:', themeColors);
-    assert.equal(themeColors.primary, '#70d6c5', 'Missing palette must fall back to Teal #70d6c5');
-    assert.equal(themeColors.tertiary, '#e5c46c', 'Missing palette must fall back to Gold #e5c46c');
+    console.log('Fallback to Neutral Palette:', themeColors);
+    assert.equal(themeColors.primary, '#c2c8c7', 'Missing palette must fall back to neutral primary #c2c8c7');
+    assert.equal(themeColors.tertiary, '#c6c6cb', 'Missing palette must fall back to neutral tertiary #c6c6cb');
 
-    // Switch back to Teal & Gold manual mode explicitly
-    const manualColorBtn = page.locator('#color-mode-manual-btn');
-    await manualColorBtn.click();
-    assert.equal(
-      await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--md-sys-color-primary').trim()),
-      '#70d6c5'
-    );
-    // Verify all inline palette variables are removed
-    const inlinePrimaryManual = await page.evaluate(() => document.documentElement.style.getPropertyValue('--md-sys-color-primary'));
-    assert.equal(inlinePrimaryManual, '', 'Manual mode must remove inline palette CSS variables');
+    // Transparent migration test: legacy localStorage with colorMode: 'manual' does NOT override automatic Matugen
+    await page.evaluate((saturnId) => {
+      localStorage.setItem('mobile.appearance.v1', JSON.stringify({
+        version: 1,
+        wallpaperId: saturnId,
+        blur: 50,
+        translucency: 35,
+        colorMode: 'manual'
+      }));
+    }, 'a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890');
+    await page.reload();
+    await page.waitForFunction((expected) => getComputedStyle(document.documentElement).getPropertyValue('--md-sys-color-primary').trim() === expected, paletteSaturnRings.primary);
+    const migratedPrimary = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--md-sys-color-primary').trim());
+    assert.equal(migratedPrimary, paletteSaturnRings.primary, 'Legacy colorMode: manual must migrate transparently and not override automatic Matugen');
 
-    // Reset button in dialog resets mode to manual
-    await wallColorBtn.click();
+    // Verify MobileAppearance.getState() contains no obsolete colorMode
+    const appearanceState = await page.evaluate(() => window.MobileAppearance.getState());
+    assert.equal(appearanceState.colorMode, undefined, 'getState() must not expose obsolete colorMode');
+
+    // Reset button in dialog resets to default wallpaper with automatic Matugen palette
+    await page.locator('#btn-appearance').waitFor({ state: 'visible' });
+    await page.locator('#btn-appearance').click();
+    await page.waitForSelector('#appearance-dialog[open], dialog#appearance-dialog:modal');
     await page.locator('#appearance-reset-btn').click();
     assert.equal(
       await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--md-sys-color-primary').trim()),
-      '#70d6c5',
-      'Reset button must reset theme colours to default'
+      paletteFrostedGlass.primary,
+      'Reset button must keep automatic Matugen with default wallpaper palette'
     );
 
     // -------------------------------------------------------------
@@ -595,7 +601,7 @@ const mockServices = [
         wallpaperId: frostedId,
         blur: 15,
         translucency: 45,
-        colorMode: 'wallpaper'
+        // colorMode omitted
       }));
     }, mockWallpapersData.wallpapers[0].id);
 
