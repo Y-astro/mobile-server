@@ -27,7 +27,7 @@ if os.path.isdir(MOBILE_LIB) and MOBILE_LIB not in sys.path:
 elif str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from antra_store import AntraStore, DEFAULT_OUTPUT_ROOTS
+from antra_store import AntraStore, DEFAULT_OUTPUT_ROOTS, MAX_AUTOMATIC_RETRY_ROUNDS
 from antra_client import (
     AntraClient,
     DailyLimitError,
@@ -410,8 +410,33 @@ class AntraWorker:
             records = self.store.get_tracks(job_id)
             completed = sum(t["status"] == "completed" for t in records)
             skipped = sum(t["status"] == "skipped" for t in records)
-            state = "completed" if completed == len(records) else ("partial" if completed or skipped else "failed")
-            self.store.update_job(job_id, status=state, message="")
+            failed = len(records) - completed - skipped
+
+            if self.store.is_job_cancelled(job_id):
+                return
+
+            if failed == 0:
+                state = "completed" if completed == len(records) else "skipped"
+                self.store.update_job(job_id, status=state, message="", upstream_job_id=None)
+                return
+
+            current = self.store.get_internal_job(job_id)
+            if not current or current.get("status") == "cancelled" or self.store.is_job_cancelled(job_id):
+                return
+
+            rounds = int(current.get("automatic_retry_rounds", 0))
+            if rounds < MAX_AUTOMATIC_RETRY_ROUNDS:
+                next_round = rounds + 1
+                delay = getattr(self, "_retry_pass_delay", None)
+                if delay is None:
+                    delay = min(60.0, 10.0 * next_round)
+                msg = f"Retrying {failed} failed track{'s' if failed != 1 else ''} (pass {next_round} of {MAX_AUTOMATIC_RETRY_ROUNDS})."
+                if self.store.schedule_automatic_retry(job_id, delay=delay, round_number=next_round, message=msg):
+                    return
+
+            state = "partial" if (completed or skipped) else "failed"
+            final_msg = f"Completed with {failed} failed track{'s' if failed != 1 else ''} after {MAX_AUTOMATIC_RETRY_ROUNDS} retry passes. Manual retry is available."
+            self.store.update_job(job_id, status=state, message=final_msg, upstream_job_id=None)
         except UncertainSubmissionError:
             self.store.update_job(job_id, status="uncertain", message="Submission was not confirmed. Automatic resubmission is disabled.")
         except DailyLimitError as error:
@@ -446,6 +471,18 @@ class AntraWorker:
         if record["status"] == "skipped":
             self._acknowledge(job_id, global_index, upstream_job_id)
             return
+        if record["status"] == "completed":
+            pub_path = record.get("publication_path") or record.get("filename")
+            if pub_path:
+                final = sanitize_track_path(pub_path, destination_root)
+                if final.exists() and not final.is_symlink():
+                    if not record.get("file_sha256") or file_digest(final) != record["file_sha256"]:
+                        raise ValueError("Existing file differs from the owned checkpoint")
+                    if self.store.is_job_cancelled(job_id):
+                        return
+                    self.store.update_track(job_id, global_index, status="completed", filename=pub_path, ack_pending=1)
+                    self._acknowledge(job_id, global_index, upstream_job_id)
+                    return
         temporary = None
         temporary_identity = None
         publication_directory = None

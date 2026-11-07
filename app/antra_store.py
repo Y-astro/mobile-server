@@ -56,6 +56,7 @@ CANCELLABLE_JOB_STATUSES = frozenset({
     "uncertain",
 })
 
+MAX_AUTOMATIC_RETRY_ROUNDS = 3
 RETRIABLE_JOB_STATUSES = frozenset({
     "failed",
     "cancelled",
@@ -93,6 +94,7 @@ def _row_to_job_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "message": row["message"],
+        "automatic_retry_rounds": row["automatic_retry_rounds"] if "automatic_retry_rounds" in row.keys() else 0,
     }
 
 
@@ -159,7 +161,8 @@ class AntraStore:
                     chunk_end INTEGER NOT NULL DEFAULT 0,
                     submission_intent INTEGER NOT NULL DEFAULT 0,
                     concurrency_retry_after REAL NOT NULL DEFAULT 0,
-                    retry_attempts INTEGER NOT NULL DEFAULT 0
+                    retry_attempts INTEGER NOT NULL DEFAULT 0,
+                    automatic_retry_rounds INTEGER NOT NULL DEFAULT 0
                 );
             """)
             conn.execute("""
@@ -198,6 +201,8 @@ class AntraStore:
                 conn.execute("ALTER TABLE jobs ADD COLUMN chunk_end INTEGER NOT NULL DEFAULT 0;")
             if "submission_intent" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN submission_intent INTEGER NOT NULL DEFAULT 0;")
+            if "automatic_retry_rounds" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN automatic_retry_rounds INTEGER NOT NULL DEFAULT 0;")
             if "concurrency_retry_after" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN concurrency_retry_after REAL NOT NULL DEFAULT 0;")
             if "retry_attempts" not in columns:
@@ -464,6 +469,44 @@ class AntraStore:
             raise JobNotFoundError(f"Job not found: {job_id}")
         return job
 
+    def schedule_automatic_retry(
+        self, job_id: str, delay: float, round_number: int, message: str = ""
+    ) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("SELECT status FROM jobs WHERE id = ?;", (job_id,))
+            row = cur.fetchone()
+            if not row or row["status"] == "cancelled":
+                return False
+
+            now = time.time()
+            retry_after = now + max(0.0, float(delay))
+            msg = message or f"Automatic retry pass {round_number} of {MAX_AUTOMATIC_RETRY_ROUNDS} scheduled."
+            conn.execute(
+                """
+                UPDATE jobs SET
+                    status = 'queued',
+                    message = ?,
+                    updated_at = ?,
+                    chunk_start = 0,
+                    chunk_end = 0,
+                    submission_intent = 0,
+                    concurrency_retry_after = ?,
+                    retry_attempts = 0,
+                    automatic_retry_rounds = ?,
+                    upstream_job_id = NULL
+                WHERE id = ? AND status != 'cancelled';
+                """,
+                (msg, now, retry_after, round_number, job_id),
+            )
+            conn.execute(
+                """
+                UPDATE tracks SET status = 'queued', message = ''
+                WHERE job_id = ? AND status NOT IN ('completed', 'skipped');
+                """,
+                (job_id,),
+            )
+            return True
+
     def retry_job(self, job_id: str) -> Dict[str, Any]:
         with self._connect() as conn:
             cur = conn.execute("SELECT status, destination FROM jobs WHERE id = ?;", (job_id,))
@@ -490,6 +533,7 @@ class AntraStore:
                     submission_intent = 0,
                     concurrency_retry_after = 0,
                     retry_attempts = 0,
+                    automatic_retry_rounds = 0,
                     upstream_job_id = NULL
                 WHERE id = ?;
                 """,
