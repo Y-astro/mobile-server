@@ -225,7 +225,7 @@ const mockServices = [
     }
     if (pathname === '/api/agy/sessions') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ sessions: [] }));
+      return res.end(JSON.stringify({ sessions: [{ id: 'primary', is_primary: true }] }));
     }
     if (pathname === '/api/laptop/terminals') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -325,6 +325,12 @@ const mockServices = [
     assert.equal(rightSidebarLayout.flexDirection, 'column', 'Laptop card header must use column layout in narrow sidebar');
     assert.equal(rightSidebarLayout.hasOverflow, false, 'Laptop card must not have horizontal overflow');
     assert.equal(rightSidebarLayout.btnFitsInside, true, 'Laptop New button must fit inside card boundaries');
+    const agyLabelFits = await page.locator('#agy-sessions-container').getByText('Primary AGY', { exact: true }).evaluate(el => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return range.getClientRects().length === 1;
+    });
+    assert.equal(agyLabelFits, true, 'AGY session label must remain readable on one line in narrow sidebar');
 
     // -------------------------------------------------------------
     // TEST 2: CUSTOM SERVICE ORDERING & PERSISTENCE
