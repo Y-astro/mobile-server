@@ -231,7 +231,7 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
       const memEl = document.getElementById('svc-active-mem');
       const gridEl = document.getElementById('services-grid');
       return memEl && memEl.textContent.includes('N/A') && gridEl && gridEl.children.length === expectedServices;
-    }, fullServices.length);
+    }, fullServices.filter(service => !['agy', 'laptop_terminal'].includes(service.id)).length);
 
     // 1. Verify computed Material 3 theme colors
     const themeColors = await desktopPage.evaluate(() => {
@@ -249,9 +249,9 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
     console.log('Computed M3 Tokens:', themeColors);
     assert.equal(themeColors.surface, '#111414', 'M3 Surface token must be #111414');
     assert.equal(themeColors.surfaceContainer, '#1d2223', 'M3 Surface Container token must be #1d2223');
-    assert.equal(themeColors.primary, '#70d6c5', 'M3 Primary Teal token must be #70d6c5');
-    assert.equal(themeColors.onPrimary, '#003734', 'M3 On-Primary token must be #003734');
-    assert.equal(themeColors.tertiary, '#e5c46c', 'M3 Tertiary Gold token must be #e5c46c');
+    assert.equal(themeColors.primary, '#c2c8c7', 'Missing wallpaper palette uses the neutral primary fallback');
+    assert.equal(themeColors.onPrimary, '#2b3131', 'Neutral primary fallback retains its matching foreground');
+    assert.equal(themeColors.tertiary, '#c6c6cb', 'Missing wallpaper palette uses the neutral tertiary fallback');
 
     // 2. Verify typography: Sans-serif Roboto stack on headings & telemetry (no Georgia/Times!)
     const typography = await desktopPage.evaluate(() => {
@@ -374,7 +374,7 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
 
     // 7. Verify Populated Service Grid (all cards from catalog, no undefined text)
     const cardCount = await desktopPage.locator('#services-grid .m3-card').count();
-    assert.equal(cardCount, fullServices.length, 'Services grid must render every catalog service');
+    assert.equal(cardCount, fullServices.filter(service => !['agy', 'laptop_terminal'].includes(service.id)).length, 'Grid renders catalog services that are not represented in the sidebar');
     const gridText = await desktopPage.locator('#services-grid').textContent();
     assert(!gridText.includes('undefined'), 'Services grid must not contain literal undefined text');
     const activeMemoryBadge = await desktopPage.textContent('#svc-active-mem');
