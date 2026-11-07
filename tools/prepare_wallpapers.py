@@ -29,6 +29,52 @@ ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024  # 2 MiB
 
 
+HEX_COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+M3_PALETTE_ROLES = (
+    "surface", "surface_dim", "surface_bright", "surface_container_lowest",
+    "surface_container_low", "surface_container", "surface_container_high",
+    "surface_container_highest", "on_surface", "on_surface_variant",
+    "outline", "outline_variant", "primary", "on_primary",
+    "primary_container", "on_primary_container", "tertiary", "on_tertiary",
+    "tertiary_container", "on_tertiary_container", "error", "on_error",
+    "error_container", "on_error_container",
+)
+
+
+def generate_matugen_palette(image_path: Path, matugen_bin: str = "/usr/bin/matugen") -> Optional[Dict[str, str]]:
+    """Generate real Material 3 dark palette from an image using isolated Matugen."""
+    if not os.path.isfile(matugen_bin) or not os.access(matugen_bin, os.X_OK):
+        return None
+    try:
+        import subprocess
+        with tempfile.NamedTemporaryFile("w", suffix=".toml") as cfg:
+            cfg.write("[config]\n[templates]\n")
+            cfg.flush()
+            cmd = [
+                matugen_bin,
+                "--dry-run",
+                "-c", cfg.name,
+                "--source-color-index", "0",
+                "-m", "dark",
+                "-j", "hex",
+                "image", str(image_path)
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+            data = json.loads(res.stdout)
+            colors = data.get("colors", {})
+            palette: Dict[str, str] = {}
+            for role in M3_PALETTE_ROLES:
+                val = colors.get(role, {}).get("dark", {}).get("color")
+                if isinstance(val, str) and HEX_COLOR_PATTERN.fullmatch(val):
+                    palette[role] = val
+            if all(role in palette for role in M3_PALETTE_ROLES):
+                return {role: palette[role] for role in M3_PALETTE_ROLES}
+    except Exception:
+        return None
+    return None
+
+
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -220,6 +266,18 @@ def verify_library(library_dir: Path) -> Tuple[bool, str]:
             return False, f"Thumbnail file byte size mismatch for {expected_thumb_path}"
         if sha256_file(thumb_file) != thumb_sha:
             return False, f"Thumbnail file SHA256 mismatch for {expected_thumb_path}"
+        # 4. Optional Matugen palette validation (complete 24 M3 roles)
+        palette = item.get("palette")
+        if palette is not None:
+            if not isinstance(palette, dict):
+                return False, f"Invalid palette structure for {w_id}"
+            for role in M3_PALETTE_ROLES:
+                val = palette.get(role)
+                if not isinstance(val, str) or not HEX_COLOR_PATTERN.fullmatch(val):
+                    return False, f"Missing or invalid role {role} in palette for {w_id}"
+            if not all(k in M3_PALETTE_ROLES for k in palette.keys()):
+                return False, f"Unknown key in palette for {w_id}"
+
         expected_files.add(expected_thumb_path)
 
     if default_id and default_id not in seen_ids:
@@ -432,7 +490,8 @@ def build_library(
                     "bytes": thumb_bytes,
                 })
 
-            wallpapers_meta.append({
+            pal = generate_matugen_palette(dest_orig)
+            meta_entry = {
                 "id": w_id,
                 "name": s_file.name,
                 "width": orig_w,
@@ -456,7 +515,10 @@ def build_library(
                     "width": thumb_w,
                     "height": thumb_h,
                 },
-            })
+            }
+            if pal:
+                meta_entry["palette"] = pal
+            wallpapers_meta.append(meta_entry)
 
         wallpapers_meta.sort(key=lambda x: x["name"])
         if not default_id and wallpapers_meta:
@@ -571,6 +633,111 @@ def publish_library(staging_dir: Path, target_dir: Path = DEFAULT_PHONE_DEST) ->
     return True, f"Library published successfully to {target_dir}"
 
 
+def generate_palettes_for_library(library_dir: Path, matugen_bin: str = "/usr/bin/matugen") -> Tuple[bool, str]:
+    if library_dir.is_symlink():
+        return False, f"Library directory is a symlink: {library_dir}"
+    if not library_dir.is_dir():
+        return False, f"Invalid library directory: {library_dir}"
+
+    # Staging pre-verification: must be a valid library structure first
+    pre_ok, pre_msg = verify_library(library_dir)
+    if not pre_ok:
+        return False, f"Initial library verification failed: {pre_msg}"
+
+    if not os.path.isfile(matugen_bin) or not os.access(matugen_bin, os.X_OK):
+        return False, f"Matugen binary not found or not executable: {matugen_bin}"
+
+    manifest_path = library_dir / "manifest.json"
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception as e:
+        return False, f"Failed to read manifest: {e}"
+
+    wallpapers = manifest.get("wallpapers", [])
+    if not isinstance(wallpapers, list) or len(wallpapers) == 0:
+        return False, "Library contains no wallpapers to generate palettes for"
+
+    root_resolved = library_dir.resolve()
+    updated_wallpapers = []
+    count = 0
+
+    # Generate all palette updates in memory before writing to disk
+    for item in wallpapers:
+        w_id = item.get("id", "unknown")
+        # Safely locate image path: prefer original, fallback to display
+        orig_rel = item.get("original", {}).get("path") if isinstance(item.get("original"), dict) else None
+        disp_rel = item.get("display", {}).get("path") if isinstance(item.get("display"), dict) else None
+        target_rel = orig_rel if (orig_rel and isinstance(orig_rel, str)) else disp_rel
+        if not target_rel or not isinstance(target_rel, str) or os.path.isabs(target_rel):
+            return False, f"Invalid or missing relative image path for {w_id}"
+
+        img_p = library_dir / target_rel
+        if img_p.is_symlink():
+            return False, f"Image path for {w_id} is an untrusted symlink: {target_rel}"
+        if not img_p.resolve().is_relative_to(root_resolved):
+            return False, f"Image path for {w_id} escapes library root: {target_rel}"
+        if not img_p.is_file():
+            return False, f"Image file for {w_id} not found: {target_rel}"
+
+        pal = generate_matugen_palette(img_p, matugen_bin=matugen_bin)
+        if not pal:
+            return False, f"Failed to generate complete 24-role Matugen palette for {w_id}"
+
+        item_copy = dict(item)
+        item_copy["palette"] = pal
+        updated_wallpapers.append(item_copy)
+        count += 1
+
+    if count == 0 or count != len(wallpapers):
+        return False, f"Generated palettes for {count} of {len(wallpapers)} wallpapers"
+
+    # All palettes generated in memory; stage files atomically
+    updated_manifest = dict(manifest)
+    updated_manifest["wallpapers"] = updated_wallpapers
+    manifest_bytes = json.dumps(updated_manifest, indent=2).encode("utf-8")
+    new_manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+    new_manifest_size = len(manifest_bytes)
+
+    tm_path = library_dir / "transport-manifest.json"
+    tm_bytes = None
+    if tm_path.is_file():
+        try:
+            with open(tm_path, "r", encoding="utf-8") as f:
+                tm = json.load(f)
+            files = tm.get("files", [])
+            for entry in files:
+                if entry.get("path") == "manifest.json":
+                    entry["sha256"] = new_manifest_sha
+                    entry["bytes"] = new_manifest_size
+            tm["total_payload_bytes"] = sum(e["bytes"] for e in files)
+            tm_bytes = json.dumps(tm, indent=2).encode("utf-8")
+        except Exception as e:
+            return False, f"Failed to update transport manifest: {e}"
+
+    tmp_manifest = library_dir / ".manifest.json.tmp"
+    tmp_tm = library_dir / ".transport-manifest.json.tmp" if tm_bytes else None
+    try:
+        tmp_manifest.write_bytes(manifest_bytes)
+        if tmp_tm and tm_bytes:
+            tmp_tm.write_bytes(tm_bytes)
+            # Update transport-manifest.json checksums if present
+            tmp_tm.replace(tm_path)
+        tmp_manifest.replace(manifest_path)
+    except Exception as e:
+        if tmp_manifest.exists():
+            tmp_manifest.unlink()
+        if tmp_tm and tmp_tm.exists():
+            tmp_tm.unlink()
+        return False, f"Failed to write updated manifests: {e}"
+
+    post_ok, post_msg = verify_library(library_dir)
+    if not post_ok:
+        return False, f"Post-generation verification failed: {post_msg}"
+
+    return True, f"Generated Matugen palettes for {count} wallpapers"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Wallpaper preparation, verification, and publication tool")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -586,6 +753,10 @@ def main():
     publish_parser = subparsers.add_parser("publish", help="Publish verified staging library using stdlib only")
     publish_parser.add_argument("staging", type=Path, help="Staged library directory")
     publish_parser.add_argument("target", type=Path, nargs="?", default=DEFAULT_PHONE_DEST, help="Target publication directory")
+
+    palettes_parser = subparsers.add_parser("palettes", help="Generate real Matugen palettes for library manifest")
+    palettes_parser.add_argument("path", type=Path, help="Library directory to generate palettes for")
+    palettes_parser.add_argument("--matugen", type=str, default="/usr/bin/matugen", help="Path to matugen executable")
 
     args = parser.parse_args()
 
@@ -612,6 +783,14 @@ def main():
             print(f"PUBLISH OK: {msg}")
         else:
             print(f"PUBLISH FAILED: {msg}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.command == "palettes":
+        ok, msg = generate_palettes_for_library(args.path, matugen_bin=args.matugen)
+        if ok:
+            print(f"PALETTES OK: {msg}")
+        else:
+            print(f"PALETTES FAILED: {msg}", file=sys.stderr)
             sys.exit(1)
 
 

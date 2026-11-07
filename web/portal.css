@@ -592,9 +592,14 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
 @media (min-width: 1024px) {
   .workstation-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 340px;
     gap: 24px;
     align-items: start;
+  }
+}
+@media (min-width: 1280px) {
+  .workstation-layout {
+    grid-template-columns: minmax(0, 1fr) 360px;
   }
 }
 .workstation-col {
@@ -602,6 +607,12 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   flex-direction: column;
   gap: 24px;
   min-width: 0;
+}
+
+.dashboard-container {
+  max-width: min(1480px, 100%);
+  width: 100%;
+  margin-inline: auto;
 }
 
 .services-subgrid, .family-services-grid {
@@ -622,6 +633,52 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   .family-services-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+}
+@media (min-width: 1280px) {
+  .services-subgrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Service Order Controls (Strict 48x48 min touch targets) */
+.service-order-row {
+  display: none;
+}
+.arranging-services .service-order-row {
+  display: flex;
+}
+.service-order-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.service-order-btn {
+  min-width: 48px;
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--md-shape-corner-small, 8px);
+  color: var(--md-sys-color-on-surface-variant);
+  background: var(--md-sys-color-surface-container-high);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  box-sizing: border-box;
+  padding: 0;
+  transition: color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
+  cursor: pointer;
+}
+.service-order-btn:hover:not(:disabled) {
+  color: var(--md-sys-color-primary);
+  background: rgba(112, 214, 197, 0.12);
+  border-color: var(--md-sys-color-primary);
+}
+.service-order-btn:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+.service-order-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 /* Dialog / Modal Backdrop */

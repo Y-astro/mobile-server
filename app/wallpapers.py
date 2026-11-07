@@ -18,6 +18,17 @@ DERIVATIVE_DIRS = {
 }
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024  # 2 MiB
 MAX_DERIVATIVE_BYTES = 20 * 1024 * 1024  # 20 MiB
+HEX_COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+M3_PALETTE_ROLES = (
+    "surface", "surface_dim", "surface_bright", "surface_container_lowest",
+    "surface_container_low", "surface_container", "surface_container_high",
+    "surface_container_highest", "on_surface", "on_surface_variant",
+    "outline", "outline_variant", "primary", "on_primary",
+    "primary_container", "on_primary_container", "tertiary", "on_tertiary",
+    "tertiary_container", "on_tertiary_container", "error", "on_error",
+    "error_container", "on_error_container",
+)
 
 
 class WallpaperError(Exception):
@@ -153,14 +164,27 @@ class WallpaperLibrary:
                 except OSError:
                     raise CorruptLibraryError("Wallpaper library is corrupt or incomplete")
 
-            public_wallpapers.append({
+            palette = entry.get("palette")
+            valid_palette = None
+            if isinstance(palette, dict):
+                if all(
+                    isinstance(palette.get(role), str)
+                    and HEX_COLOR_PATTERN.fullmatch(palette[role])
+                    for role in M3_PALETTE_ROLES
+                ):
+                    valid_palette = {role: palette[role] for role in M3_PALETTE_ROLES}
+
+            public_item = {
                 "id": w_id,
                 "name": w_name,
                 "width": w_width,
                 "height": w_height,
                 "thumbnail_url": f"/api/wallpapers/{w_id}/thumbnail.webp",
                 "image_url": f"/api/wallpapers/{w_id}/display.webp",
-            })
+            }
+            if valid_palette:
+                public_item["palette"] = valid_palette
+            public_wallpapers.append(public_item)
             validated_manifest["wallpapers"][w_id] = entry
 
         default_id = raw_manifest.get("default_id")
