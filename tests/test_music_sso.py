@@ -230,6 +230,7 @@ class TestCaddyMusicRoutesContract(unittest.TestCase):
     def test_cookie_precedence_on_subsonic_and_login_routes(self):
         self.assertIn("@musicSubsonicNative", self.caddyfile_text)
         self.assertIn("@musicLoginNative", self.caddyfile_text)
+        self.assertIn("@musicPortalLogin", self.caddyfile_text)
         self.assertIn("@musicBearerNative", self.caddyfile_text)
 
         lines = self.caddyfile_text.splitlines()
@@ -243,6 +244,10 @@ class TestCaddyMusicRoutesContract(unittest.TestCase):
 
         login_block = get_block("@musicLoginNative")
         self.assertIn("not header Cookie *session_token*", login_block)
+
+        portal_login_block = get_block("@musicPortalLogin")
+        self.assertIn("header Cookie *session_token*", portal_login_block)
+        self.assertIn('respond "Use your portal login for music." 403', self.caddyfile_text)
 
         bearer_block = get_block("@musicBearerNative")
         self.assertIn("path /music/api/* /music/events/*", bearer_block)

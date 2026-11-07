@@ -182,6 +182,18 @@
 	}
 
 	# 2. Native password login (Feishin native mode)
+	@musicPortalLogin {
+		method POST
+		path /music/auth/login
+		header Cookie *session_token*
+	}
+	handle @musicPortalLogin {
+		forward_auth 127.0.0.1:8001 {
+			uri /api/music-auth-check
+		}
+		respond "Use your portal login for music." 403
+	}
+
 	@musicLoginNative {
 		method POST
 		path /music/auth/login
