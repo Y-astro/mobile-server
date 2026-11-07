@@ -858,20 +858,86 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.end_headers()
             return
 
+        if self.path in ("/music", "/music/"):
+            if not user or not USER_STORE.exists(user):
+                self.send_response(302)
+                self.send_header("Location", "/login")
+                self.send_header("Cache-Control", "no-store, private")
+                self.end_headers()
+                return
+
+            admin = is_admin(user)
+            target_user = "astro-web" if admin else "family-music"
+            target_lib = 2 if admin else 1
+            body = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Music</title>
+<script>
+(function() {{
+  var targetUser = "{target_user}";
+  var targetLib = {target_lib};
+  var current = localStorage.getItem("username");
+  if (current !== targetUser) {{
+    localStorage.removeItem("token");
+    localStorage.removeItem("userId");
+    localStorage.removeItem("username");
+    localStorage.removeItem("name");
+    localStorage.removeItem("role");
+    localStorage.removeItem("subsonic-token");
+    localStorage.removeItem("subsonic-salt");
+    localStorage.removeItem("is-authenticated");
+    localStorage.setItem("state", JSON.stringify({{
+      theme: "DarkTheme",
+      library: {{
+        userLibraries: [],
+        selectedLibraries: [targetLib]
+      }}
+    }}));
+  }} else {{
+    try {{
+      var s = JSON.parse(localStorage.getItem("state") || "{{}}");
+      if (!s.library || !Array.isArray(s.library.selectedLibraries) || s.library.selectedLibraries.length === 0) {{
+        s.library = s.library || {{}};
+        s.library.selectedLibraries = [targetLib];
+        localStorage.setItem("state", JSON.stringify(s));
+      }}
+    }} catch(e) {{}}
+  }}
+  window.location.replace("/music/app/");
+}})();
+</script>
+</head>
+<body style="background:#121212;color:#eee;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+<p>Opening Music...</p>
+</body>
+</html>""".encode("utf-8")
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, private")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if getattr(self, "command", "GET") != "HEAD":
+                self.wfile.write(body)
+            return
+
         if self.path.split("?", 1)[0] == "/api/music-auth-check":
             fwd_uri = self.headers.get("X-Forwarded-Uri", "")
             if not user or not USER_STORE.exists(user):
-                if "/api/" in fwd_uri or "/rest/" in fwd_uri:
+                is_page = fwd_uri.endswith("/music/") or fwd_uri.endswith("/music/app/") or fwd_uri in ("/music", "/music/")
+                if is_page:
+                    self.send_response(302)
+                    self.send_header("Location", "/login")
+                    self.send_header("Cache-Control", "no-store, private")
+                    self.end_headers()
+                else:
                     self.send_response(401)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Cache-Control", "no-store, private")
                     self.end_headers()
                     self.wfile.write(b'{"status":"error","message":"Unauthorized"}')
-                else:
-                    self.send_response(302)
-                    self.send_header("Location", "/login")
-                    self.send_header("Cache-Control", "no-store, private")
-                    self.end_headers()
                 return
 
             if is_admin(user):

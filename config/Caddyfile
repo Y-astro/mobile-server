@@ -157,41 +157,65 @@
 
 	redir /music /music/ 308
 
-	handle /music/rest/* {
+	# Browser entry point for music: same-origin bootstrap and state sync
+	@musicBrowserEntry {
+		path /music/
+		header Cookie *session_token*
+	}
+	handle @musicBrowserEntry {
+		reverse_proxy 127.0.0.1:8001 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# Native client bypass routes: ONLY when NO portal session cookie is present!
+	# 1. Native Subsonic API
+	@musicSubsonicNative {
+		path /music/rest/*
+		not header Cookie *session_token*
+	}
+	handle @musicSubsonicNative {
 		reverse_proxy 127.0.0.1:4533 {
 			header_up -X-Music-User
 			header_up -Remote-User
 		}
 	}
 
-	@musicNativeAuth {
+	# 2. Native password login (Feishin native mode)
+	@musicLoginNative {
 		method POST
 		path /music/auth/login
+		not header Cookie *session_token*
 	}
-	handle @musicNativeAuth {
+	handle @musicLoginNative {
 		reverse_proxy 127.0.0.1:4533 {
 			header_up -X-Music-User
 			header_up -Remote-User
 		}
 	}
 
-	@musicNativeBearer {
+	# 3. Native bearer token on music paths (Feishin native API)
+	@musicBearerNative {
+		path /music/api/* /music/events/*
 		header x-nd-authorization *
 		not header Cookie *session_token*
 	}
-	handle @musicNativeBearer {
+	handle @musicBearerNative {
 		reverse_proxy 127.0.0.1:4533 {
 			header_up -X-Music-User
 			header_up -Remote-User
 		}
 	}
 
+	# All other /music routes (browser SSO, portal cookie requests, or anonymous browser)
 	handle /music/* {
 		forward_auth 127.0.0.1:8001 {
 			uri /api/music-auth-check
 			copy_headers X-Music-User
 		}
 		reverse_proxy 127.0.0.1:4533 {
+			header_up -x-nd-authorization
+			header_up -Authorization
 			header_up -Remote-User
 		}
 	}

@@ -51,8 +51,6 @@ def main() -> None:
         "--",
         "/usr/bin/env",
         f"PATH={PREFIX}/bin:/usr/local/bin:/usr/bin:/bin",
-        "ND_REVERSEPROXYUSERHEADER=X-Music-User",
-        "ND_REVERSEPROXYWHITELIST=127.0.0.1/32,::1/128",
         "ND_EXTAUTH_USERHEADER=X-Music-User",
         "ND_EXTAUTH_TRUSTEDSOURCES=127.0.0.1/32,::1/128",
         str(BINARY_PATH),
