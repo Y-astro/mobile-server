@@ -30,6 +30,13 @@ Atomically publishes a verified staging directory to the destination (default `~
 python3 tools/prepare_wallpapers.py publish <STAGING_DIR> [TARGET_DIR]
 ```
 
+### 4. Publish Palettes (Standard-Library Only Migration)
+Atomically publishes validated candidate palettes (`manifest.json` and `transport-manifest.json`) to an existing complete library (default `~/wallpapers`) using Linux/Android atomic directory exchange (`renameat2 RENAME_EXCHANGE`). Validates strict schema and checksum preconditions before exchange and post-verifies target with automatic rollback on error. Retains old directory as rollback backup.
+
+```bash
+python3 tools/prepare_wallpapers.py publish-palettes <CANDIDATE_DIR> [TARGET_DIR] --old-manifest-sha <SHA> --old-transport-sha <SHA>
+```
+
 ## Phone Deployment Workflow for Root
 
 1. Transfer staged files to phone staging:
