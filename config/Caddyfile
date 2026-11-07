@@ -18,6 +18,11 @@
 	encode zstd gzip
 	request_header -X-Music-User
 	request_header -Remote-User
+	@musicPrivateData path /music/api/* /music/rest/* /music/auth/*
+	header @musicPrivateData {
+		Cache-Control "no-store, private"
+		+Vary Cookie
+	}
 
     @portalPages path / /login /api/login /api/logout
     header @portalPages {

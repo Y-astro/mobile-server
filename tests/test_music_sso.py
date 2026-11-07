@@ -227,6 +227,11 @@ class TestCaddyMusicRoutesContract(unittest.TestCase):
         self.assertIn("request_header -X-Music-User", self.caddyfile_text)
         self.assertIn("request_header -Remote-User", self.caddyfile_text)
 
+    def test_music_metadata_and_audio_are_not_cached_across_users(self):
+        self.assertIn("@musicPrivateData path /music/api/* /music/rest/* /music/auth/*", self.caddyfile_text)
+        self.assertIn('Cache-Control "no-store, private"', self.caddyfile_text)
+        self.assertIn("+Vary Cookie", self.caddyfile_text)
+
     def test_cookie_precedence_on_subsonic_and_login_routes(self):
         self.assertIn("@musicSubsonicNative", self.caddyfile_text)
         self.assertIn("@musicLoginNative", self.caddyfile_text)
