@@ -100,7 +100,10 @@ def exercise_thumbnail_proxy(block):
                         result = reading.result(timeout=17.8)
                         assert result['status'] == 200, result
                         assert time.monotonic() - started < 17.8, 'Reading remained starved behind covers'
-                        assert all(job.result()['status'] in (502, 504) for job in covers)
+                        for job in covers:
+                            failed = job.result()
+                            assert failed['status'] in (502, 504), failed
+                            assert failed['cache'] == 'no-store', failed
                     # Abandon a cold cover, then verify a cached cover still responds promptly.
                     abandoned = socket.create_connection(('127.0.0.1', port), timeout=2)
                     abandoned.sendall(b'GET /suwayomi/api/v1/manga/6/thumbnail HTTP/1.1\r\nHost: localhost\r\n\r\n')

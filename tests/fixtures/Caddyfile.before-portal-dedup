@@ -147,6 +147,7 @@ http://:8000 {
 			file_server
 		}
 		handle {
+			header Cache-Control "no-store"
 			reverse_proxy 127.0.0.1:4569 {
 				header_down Cache-Control "no-store"
 				@thumbnailImage {
@@ -349,6 +350,7 @@ https://:8443 {
 			file_server
 		}
 		handle {
+			header Cache-Control "no-store"
 			reverse_proxy 127.0.0.1:4569 {
 				header_down Cache-Control "no-store"
 				@thumbnailImage {
@@ -482,6 +484,7 @@ http://:4567 {
 			file_server
 		}
 		handle {
+			header Cache-Control "no-store"
 			reverse_proxy 127.0.0.1:4569 {
 				header_down Cache-Control "no-store"
 				@thumbnailImage {
