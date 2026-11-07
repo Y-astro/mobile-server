@@ -10,7 +10,6 @@ Features:
 import argparse
 import copy
 import ctypes
-import dis
 import errno
 import fcntl
 import hashlib
@@ -20,10 +19,11 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 EXCLUDED_EXTENSIONS = {".mp4", ".mkv", ".webm", ".avi", ".mov"}
 ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -701,35 +701,30 @@ def atomic_exchange_dirs(dir_a: Path, dir_b: Path) -> None:
         raise OSError(err, f"renameat2 syscall failed: {os.strerror(err)}")
 
 
-class PublishPalettesResult(tuple):
-    """Result tuple for publish_palettes supporting 2-unpack, 3-unpack, and attribute access."""
+def _validate_path_no_symlinks_or_traversal(path: Path, name: str) -> Path:
+    """Validate that path components and parent directories contain no symlinks or traversal."""
+    raw_str = str(path)
+    if ".." in path.parts or "/../" in raw_str or raw_str.endswith("/..") or raw_str == "..":
+        raise ValueError(f"{name} path traversal ('..') rejected: {path}")
 
-    def __new__(cls, ok: bool, msg: str, backup_path: Optional[Path] = None):
-        return super().__new__(cls, (ok, msg, backup_path))
+    abs_path = Path(os.path.abspath(path))
+    curr = abs_path
+    ancestors = [curr]
+    while curr != curr.parent:
+        curr = curr.parent
+        ancestors.append(curr)
 
-    @property
-    def ok(self) -> bool:
-        return self[0]
+    for p in reversed(ancestors):
+        if p.is_symlink():
+            raise ValueError(f"{name} path component or parent directory is a symlink: {p}")
 
-    @property
-    def msg(self) -> str:
-        return self[1]
+    return abs_path
 
-    @property
-    def backup_path(self) -> Optional[Path]:
-        return self[2]
 
-    def __iter__(self):
-        try:
-            f = sys._getframe(1)
-            op = f.f_code.co_code[f.f_lasti]
-            if dis.opname[op] == "UNPACK_SEQUENCE":
-                arg = f.f_code.co_code[f.f_lasti + 1]
-                if arg == 2:
-                    return iter((self[0], self[1]))
-        except Exception:
-            pass
-        return super().__iter__()
+class PublishPalettesResult(NamedTuple):
+    ok: bool
+    msg: str
+    backup_path: Optional[Path] = None
 
 
 def publish_palettes(
@@ -746,43 +741,36 @@ def publish_palettes(
     expected_old_manifest_sha = expected_old_manifest_sha.lower()
     expected_old_transport_sha = expected_old_transport_sha.lower()
 
-    if candidate_dir.is_symlink():
-        return PublishPalettesResult(False, f"Candidate directory {candidate_dir} is a symlink", None)
+    # Validate caller paths against symlinks and traversal across all existing components
+    try:
+        candidate_dir = _validate_path_no_symlinks_or_traversal(candidate_dir, "Candidate")
+        target_dir = _validate_path_no_symlinks_or_traversal(target_dir, "Target")
+    except ValueError as val_err:
+        return PublishPalettesResult(False, str(val_err), None)
+
     if not candidate_dir.is_dir():
-        return PublishPalettesResult(False, f"Candidate directory {candidate_dir} does not exist or is not a directory", None)
+        return PublishPalettesResult(False, f"Candidate directory does not exist or is not a directory: {candidate_dir}", None)
+    if not target_dir.is_dir():
+        return PublishPalettesResult(False, f"Target directory does not exist or is not a directory: {target_dir}", None)
+
+    # Refuse candidate extras: exactly two regular metadata files, no subdirectories or extra files
+    cand_entries = list(candidate_dir.iterdir())
+    cand_names = {e.name for e in cand_entries}
+    if cand_names != {"manifest.json", "transport-manifest.json"}:
+        return PublishPalettesResult(
+            False,
+            f"Candidate directory must contain exactly manifest.json and transport-manifest.json; found: {sorted(cand_names)}",
+            None,
+        )
+
+    for e in cand_entries:
+        if e.is_symlink():
+            return PublishPalettesResult(False, f"Candidate entry is a symlink: {e.name}", None)
+        if not e.is_file():
+            return PublishPalettesResult(False, f"Candidate entry is not a regular file: {e.name}", None)
 
     cand_manifest_file = candidate_dir / "manifest.json"
     cand_tm_file = candidate_dir / "transport-manifest.json"
-
-    if cand_manifest_file.is_symlink():
-        return PublishPalettesResult(False, "Candidate manifest.json is a symlink", None)
-    if not cand_manifest_file.is_file():
-        return PublishPalettesResult(False, "Candidate manifest.json not found", None)
-    if cand_tm_file.is_symlink():
-        return PublishPalettesResult(False, "Candidate transport-manifest.json is a symlink", None)
-    if not cand_tm_file.is_file():
-        return PublishPalettesResult(False, "Candidate transport-manifest.json not found", None)
-
-    # Validate caller candidate path: no symlinks or traversal
-    cand_resolved = candidate_dir.resolve()
-    for root, dirs, files in os.walk(candidate_dir, followlinks=False):
-        for d in dirs:
-            dp = Path(root) / d
-            if dp.is_symlink():
-                return PublishPalettesResult(False, f"Symlink directory rejected in candidate: {dp}", None)
-            if not dp.resolve().is_relative_to(cand_resolved):
-                return PublishPalettesResult(False, f"Path traversal in candidate directory: {dp}", None)
-        for fn in files:
-            fp = Path(root) / fn
-            if fp.is_symlink():
-                return PublishPalettesResult(False, f"Symlink file rejected in candidate: {fp}", None)
-            if not fp.resolve().is_relative_to(cand_resolved):
-                return PublishPalettesResult(False, f"Path traversal in candidate file: {fp}", None)
-
-    if target_dir.is_symlink():
-        return PublishPalettesResult(False, f"Target directory {target_dir} is a symlink", None)
-    if not target_dir.is_dir():
-        return PublishPalettesResult(False, f"Target directory {target_dir} does not exist or is not a directory", None)
 
     # Target pre-verification
     target_ok, target_msg = verify_library(target_dir)
@@ -867,63 +855,77 @@ def publish_palettes(
     if cand_m_no_pal != target_m_no_pal:
         return PublishPalettesResult(False, "Candidate manifest contains non-palette mutations relative to target", None)
 
-    # Validate candidate transport manifest
+    # Validate candidate transport manifest schema & records
     if not isinstance(cand_tm, dict) or cand_tm.get("version") != 1:
         return PublishPalettesResult(False, "Candidate transport manifest invalid structure or version", None)
-    if cand_tm.get("payload_entries") != target_tm.get("payload_entries"):
-        return PublishPalettesResult(False, "Candidate transport payload_entries mismatch", None)
-    if cand_tm.get("total_actual_files") != target_tm.get("total_actual_files"):
-        return PublishPalettesResult(False, "Candidate transport total_actual_files mismatch", None)
 
     cand_files = cand_tm.get("files")
     target_files = target_tm.get("files")
     if not isinstance(cand_files, list) or not isinstance(target_files, list):
         return PublishPalettesResult(False, "Transport files must be a list", None)
-    if len(cand_files) != len(target_files):
-        return PublishPalettesResult(False, f"Transport files count mismatch: {len(cand_files)} vs {len(target_files)}", None)
 
-    cand_files_map = {f.get("path"): f for f in cand_files if isinstance(f, dict) and "path" in f}
-    target_files_map = {f.get("path"): f for f in target_files if isinstance(f, dict) and "path" in f}
+    cand_m_entries = [f for f in cand_files if isinstance(f, dict) and f.get("path") == "manifest.json"]
+    old_m_entries = [f for f in target_files if isinstance(f, dict) and f.get("path") == "manifest.json"]
+    if len(cand_m_entries) != 1 or len(old_m_entries) != 1:
+        return PublishPalettesResult(False, "transport-manifest.json must contain exactly one manifest.json entry", None)
 
-    if set(cand_files_map.keys()) != set(target_files_map.keys()):
-        return PublishPalettesResult(False, "Candidate transport files set does not match target", None)
+    cand_m_entry = cand_m_entries[0]
+    old_m_entry = old_m_entries[0]
 
-    # All 78 image payload records in transport must be identical; only manifest record changes
-    for p, target_entry in target_files_map.items():
-        cand_entry = cand_files_map[p]
-        if p == "manifest.json":
-            if cand_entry.get("sha256") != cand_m_sha:
-                return PublishPalettesResult(False, f"Candidate transport manifest record sha {cand_entry.get('sha256')} does not match disk {cand_m_sha}", None)
-            if cand_entry.get("bytes") != cand_manifest_file.stat().st_size:
-                return PublishPalettesResult(False, f"Candidate transport manifest record bytes {cand_entry.get('bytes')} does not match disk {cand_manifest_file.stat().st_size}", None)
-        else:
-            if cand_entry != target_entry:
-                return PublishPalettesResult(False, f"Candidate transport record altered for payload file {p}: {cand_entry} vs {target_entry}", None)
+    if cand_m_entry.get("sha256") != cand_m_sha:
+        return PublishPalettesResult(False, f"Candidate transport manifest record sha {cand_m_entry.get('sha256')} does not match disk {cand_m_sha}", None)
+    if cand_m_entry.get("bytes") != cand_manifest_file.stat().st_size:
+        return PublishPalettesResult(False, f"Candidate transport manifest record bytes {cand_m_entry.get('bytes')} does not match disk {cand_manifest_file.stat().st_size}", None)
 
-    expected_total_bytes = sum(f["bytes"] for f in cand_files)
+    expected_total_bytes = sum(f.get("bytes", 0) for f in cand_files if isinstance(f, dict))
     if cand_tm.get("total_payload_bytes") != expected_total_bytes:
         return PublishPalettesResult(False, f"Candidate transport total_payload_bytes mismatch: {cand_tm.get('total_payload_bytes')} vs {expected_total_bytes}", None)
 
-    # Serialize own publication with flock in private parent
-    target_parent = target_dir.resolve().parent
+    # Deep compare original/candidate transport after normalizing allowed changes (manifest sha/bytes and total_payload_bytes)
+    cand_tm_norm = copy.deepcopy(cand_tm)
+    cand_norm_m_entry = next(f for f in cand_tm_norm["files"] if f.get("path") == "manifest.json")
+    cand_norm_m_entry["sha256"] = old_m_entry["sha256"]
+    cand_norm_m_entry["bytes"] = old_m_entry["bytes"]
+    cand_tm_norm["total_payload_bytes"] = target_tm.get("total_payload_bytes")
+
+    if cand_tm_norm != target_tm:
+        return PublishPalettesResult(False, "Candidate transport contains unauthorized mutations relative to target", None)
+
+    # Secure own lock file with O_NOFOLLOW and regular file/uid checks (private 0o600)
+    target_parent = target_dir.parent
     lock_file = target_parent / ".wallpapers-publish.lock"
+    if lock_file.is_symlink():
+        return PublishPalettesResult(False, f"Lock file is an untrusted symlink: {lock_file}", None)
+
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+
     try:
-        lock_fd = os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o600)
-    except Exception as e:
+        lock_fd = os.open(lock_file, flags, 0o600)
+    except OSError as e:
         return PublishPalettesResult(False, f"Failed to open publication lock file {lock_file}: {e}", None)
 
     try:
+        st = os.fstat(lock_fd)
+        if not stat.S_ISREG(st.st_mode):
+            return PublishPalettesResult(False, f"Lock file is not a regular file: {lock_file}", None)
+        if st.st_uid != os.getuid():
+            return PublishPalettesResult(False, f"Lock file owner UID {st.st_uid} does not match current process UID {os.getuid()}", None)
+
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except (BlockingIOError, OSError) as e:
             return PublishPalettesResult(False, f"Publication lock {lock_file} currently held by another process: {e}", None)
 
-        # Sibling private staging directory
+        # Phase 1: Staging clone (pre-exchange)
         staging_dir_str = tempfile.mkdtemp(prefix=".wallpapers-staging-", dir=target_parent)
         staging_dir = Path(staging_dir_str)
+        exchanged = False
 
         try:
-            # Clone existing payload into staging directory
             for subdir in ("originals", "display", "thumbnails"):
                 src_sub = target_dir / subdir
                 dst_sub = staging_dir / subdir
@@ -948,7 +950,12 @@ def publish_palettes(
                 shutil.rmtree(staging_dir)
                 return PublishPalettesResult(False, f"Staging clone verification failed: {clone_msg}", None)
 
-            # Live drift precondition check immediately before activation
+            # Check full target validity immediately before activation so image drift is not lost
+            pre_ok, pre_msg = verify_library(target_dir)
+            if not pre_ok:
+                shutil.rmtree(staging_dir)
+                return PublishPalettesResult(False, f"Pre-activation target library verification failed: {pre_msg}", None)
+
             pre_m_sha = sha256_file(target_manifest_file)
             pre_tm_sha = sha256_file(target_tm_file)
             if pre_m_sha != expected_old_manifest_sha or pre_tm_sha != expected_old_transport_sha:
@@ -958,48 +965,82 @@ def publish_palettes(
             # Native atomic directory exchange
             try:
                 atomic_exchange_dirs(staging_dir, target_dir)
+                exchanged = True
             except Exception as exc_err:
                 shutil.rmtree(staging_dir)
                 return PublishPalettesResult(False, f"Atomic directory exchange (renameat2 RENAME_EXCHANGE) failed: {exc_err}", None)
 
-            # Post-verify actual target
-            post_ok, post_msg = verify_library(target_dir)
-            post_m_sha = sha256_file(target_manifest_file) if target_manifest_file.exists() else ""
-            post_tm_sha = sha256_file(target_tm_file) if target_tm_file.exists() else ""
+        except Exception as pre_exc:
+            if not exchanged:
+                if staging_dir.exists():
+                    shutil.rmtree(staging_dir)
+                return PublishPalettesResult(False, f"Pre-exchange staging failed: {pre_exc}", None)
 
-            if not post_ok or post_m_sha != cand_m_sha or post_tm_sha != cand_tm_sha:
-                # Post-verification failed! Rollback via second atomic exchange
-                rollback_err = None
-                try:
-                    atomic_exchange_dirs(staging_dir, target_dir)
-                except Exception as rb_exc:
-                    rollback_err = rb_exc
+        # Phase 2: Post-exchange (staging_dir now contains live old library; NEVER delete staging_dir)
+        post_ok = False
+        post_error = ""
+        try:
+            v_ok, v_msg = verify_library(target_dir)
+            if not v_ok:
+                post_error = f"verify_library failed: {v_msg}"
+            else:
+                post_m_sha = sha256_file(target_manifest_file)
+                post_tm_sha = sha256_file(target_tm_file)
+                if post_m_sha != cand_m_sha:
+                    post_error = f"Target manifest SHA256 mismatch after exchange: {post_m_sha} != {cand_m_sha}"
+                elif post_tm_sha != cand_tm_sha:
+                    post_error = f"Target transport SHA256 mismatch after exchange: {post_tm_sha} != {cand_tm_sha}"
+                else:
+                    post_ok = True
+        except Exception as exc:
+            post_error = f"Post-exchange verification error: {exc}"
 
-                if rollback_err is not None:
-                    return PublishPalettesResult(False, f"Post-exchange verification failed ({post_msg}) and rollback failed: {rollback_err}. Recoverable state at {staging_dir}", staging_dir)
-
-                return PublishPalettesResult(False, f"Post-exchange verification failed: {post_msg}; rolled back target to original state. Recoverable candidate state at {staging_dir}", staging_dir)
-
-            # Successful exchange: staging_dir now contains old library.
-            # Keep old directory as explicit rollback backup.
-            timestamp = time.strftime("%Y%m%d%H%M%S")
-            backup_dir = target_parent / f"wallpapers-backup-{timestamp}"
-            counter = 0
-            while backup_dir.exists():
-                counter += 1
-                backup_dir = target_parent / f"wallpapers-backup-{timestamp}-{counter}"
-
+        if not post_ok:
+            # Post-exchange verification failed; rollback via second atomic exchange
+            rollback_err = None
             try:
-                staging_dir.rename(backup_dir)
-            except Exception:
-                backup_dir = staging_dir
+                atomic_exchange_dirs(staging_dir, target_dir)
+            except Exception as rb_exc:
+                rollback_err = rb_exc
 
-            return PublishPalettesResult(True, f"Library palettes published successfully to {target_dir}. Backup retained at {backup_dir}", backup_dir)
+            restored_proven = False
+            if rollback_err is None:
+                try:
+                    r_m_sha = sha256_file(target_manifest_file)
+                    r_tm_sha = sha256_file(target_tm_file)
+                    r_ok, _ = verify_library(target_dir)
+                    restored_proven = r_ok and (r_m_sha == expected_old_manifest_sha) and (r_tm_sha == expected_old_transport_sha)
+                except Exception:
+                    restored_proven = False
 
-        except Exception as stage_exc:
-            if staging_dir.exists():
-                shutil.rmtree(staging_dir)
-            raise stage_exc
+            if restored_proven:
+                return PublishPalettesResult(
+                    False,
+                    f"Post-exchange verification failed: {post_error}; rolled back target to original state. Recoverable candidate state at {staging_dir}",
+                    staging_dir,
+                )
+            else:
+                return PublishPalettesResult(
+                    False,
+                    f"Post-exchange verification failed ({post_error}) and rollback could not be confirmed ({rollback_err}). Preserved states: target={target_dir}, old_library={staging_dir}",
+                    staging_dir,
+                )
+
+        # Successful exchange: staging_dir now contains old library.
+        # Keep old directory as explicit rollback backup.
+        timestamp = time.strftime("%Y%m%d%H%M%S")
+        backup_dir = target_parent / f"wallpapers-backup-{timestamp}"
+        counter = 0
+        while backup_dir.exists():
+            counter += 1
+            backup_dir = target_parent / f"wallpapers-backup-{timestamp}-{counter}"
+
+        try:
+            staging_dir.rename(backup_dir)
+        except Exception:
+            backup_dir = staging_dir
+
+        return PublishPalettesResult(True, f"Library palettes published successfully to {target_dir}. Backup retained at {backup_dir}", backup_dir)
 
     finally:
         try:
@@ -1141,10 +1182,8 @@ def main():
     pub_pal_parser = subparsers.add_parser("publish-palettes", help="Publish validated candidate palettes to existing library via atomic exchange")
     pub_pal_parser.add_argument("candidate", type=Path, help="Candidate metadata directory containing manifest.json and transport-manifest.json")
     pub_pal_parser.add_argument("target", type=Path, nargs="?", default=DEFAULT_PHONE_DEST, help="Target library directory to update (default: ~/wallpapers)")
-    pub_pal_parser.add_argument("--old-manifest-sha", type=str, default=None, help="Expected SHA256 of target's current manifest.json")
-    pub_pal_parser.add_argument("--old-transport-sha", type=str, default=None, help="Expected SHA256 of target's current transport-manifest.json")
-    pub_pal_parser.add_argument("old_manifest_sha_pos", nargs="?", default=None, help=argparse.SUPPRESS)
-    pub_pal_parser.add_argument("old_transport_sha_pos", nargs="?", default=None, help=argparse.SUPPRESS)
+    pub_pal_parser.add_argument("--old-manifest-sha", type=str, required=True, help="Expected SHA256 of target's current manifest.json")
+    pub_pal_parser.add_argument("--old-transport-sha", type=str, required=True, help="Expected SHA256 of target's current transport-manifest.json")
 
     args = parser.parse_args()
 
@@ -1182,16 +1221,11 @@ def main():
             sys.exit(1)
 
     elif args.command == "publish-palettes":
-        old_m_sha = args.old_manifest_sha or args.old_manifest_sha_pos
-        old_tm_sha = args.old_transport_sha or args.old_transport_sha_pos
-        if not old_m_sha or not old_tm_sha:
-            print("PUBLISH-PALETTES FAILED: Both old manifest SHA and old transport SHA are required", file=sys.stderr)
-            sys.exit(1)
         ok, msg, backup_path = publish_palettes(
             candidate_dir=args.candidate,
             target_dir=args.target,
-            expected_old_manifest_sha=old_m_sha,
-            expected_old_transport_sha=old_tm_sha,
+            expected_old_manifest_sha=args.old_manifest_sha,
+            expected_old_transport_sha=args.old_transport_sha,
         )
         if ok:
             print(f"PUBLISH-PALETTES OK: {msg}")

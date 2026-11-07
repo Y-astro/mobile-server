@@ -1063,7 +1063,7 @@ class WallpaperPublishPalettesTests(unittest.TestCase):
         self._create_candidate_metadata(cand_mut, self.target_dir, mutate_tm_fn=alter_image_record)
         ok, msg, backup = publish_palettes(cand_mut, self.target_dir, self.old_m_sha, self.old_tm_sha)
         self.assertFalse(ok)
-        self.assertIn("Candidate transport record altered for payload file", msg)
+        self.assertIn("Candidate transport contains unauthorized mutations relative to target", msg)
         self.assertEqual(sha256_file(self.target_dir / "transport-manifest.json"), self.old_tm_sha)
 
     def test_symlink_target_and_candidate_rejected(self):
@@ -1103,15 +1103,20 @@ class WallpaperPublishPalettesTests(unittest.TestCase):
 
     def test_post_exchange_failure_rolls_back_preserving_original(self):
         real_verify = verify_library
-        call_count = [0]
+        stage = {"post_exchange": False}
+        real_exchange = atomic_exchange_dirs
+
+        def tracking_exchange(a, b):
+            real_exchange(a, b)
+            stage["post_exchange"] = not stage["post_exchange"]
 
         def fail_post_verify(path):
-            call_count[0] += 1
-            if call_count[0] == 3:
+            if stage["post_exchange"] and path == self.target_dir:
                 return False, "Simulated post-exchange corruption"
             return real_verify(path)
 
-        with patch("tools.prepare_wallpapers.verify_library", side_effect=fail_post_verify):
+        with patch("tools.prepare_wallpapers.atomic_exchange_dirs", side_effect=tracking_exchange), \
+             patch("tools.prepare_wallpapers.verify_library", side_effect=fail_post_verify):
             ok, msg, backup = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
             self.assertFalse(ok)
             self.assertIn("Post-exchange verification failed", msg)
@@ -1122,6 +1127,188 @@ class WallpaperPublishPalettesTests(unittest.TestCase):
         self.assertTrue(tgt_ok, tgt_msg)
         self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
         self.assertEqual(sha256_file(self.target_dir / "transport-manifest.json"), self.old_tm_sha)
+
+    def test_post_exchange_verify_raises_preserves_old_library(self):
+        real_verify = verify_library
+        stage = {"post_exchange": False}
+        real_exchange = atomic_exchange_dirs
+
+        def tracking_exchange(a, b):
+            real_exchange(a, b)
+            stage["post_exchange"] = not stage["post_exchange"]
+
+        def raise_post_verify(path):
+            if stage["post_exchange"] and path == self.target_dir:
+                raise OSError("root injected post-exchange read error")
+            return real_verify(path)
+
+        with patch("tools.prepare_wallpapers.atomic_exchange_dirs", side_effect=tracking_exchange), \
+             patch("tools.prepare_wallpapers.verify_library", side_effect=raise_post_verify):
+            ok, msg, candidate_state = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
+            self.assertFalse(ok)
+            self.assertIn("post-exchange read error", msg)
+            self.assertIn("rolled back target to original state", msg)
+
+        # Old library MUST survive in target after rollback
+        self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
+        self.assertEqual(sha256_file(self.target_dir / "transport-manifest.json"), self.old_tm_sha)
+        # Staging/candidate state was preserved and NOT deleted
+        self.assertIsNotNone(candidate_state)
+        self.assertTrue(candidate_state.is_dir())
+
+    def test_post_exchange_hash_read_raises_preserves_old_library(self):
+        real_sha = sha256_file
+        stage = {"post_exchange": False}
+        real_exchange = atomic_exchange_dirs
+
+        def tracking_exchange(a, b):
+            real_exchange(a, b)
+            stage["post_exchange"] = not stage["post_exchange"]
+
+        def raise_post_sha(path):
+            if stage["post_exchange"] and "manifest.json" in str(path):
+                raise PermissionError("injected hash read permission error")
+            return real_sha(path)
+
+        with patch("tools.prepare_wallpapers.atomic_exchange_dirs", side_effect=tracking_exchange), \
+             patch("tools.prepare_wallpapers.sha256_file", side_effect=raise_post_sha):
+            ok, msg, candidate_state = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
+            self.assertFalse(ok)
+            self.assertIn("hash read permission error", msg)
+
+        # Old library survived
+        self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
+        self.assertEqual(sha256_file(self.target_dir / "transport-manifest.json"), self.old_tm_sha)
+
+    def test_post_exchange_failure_and_rollback_raises_preserves_both(self):
+        real_exchange = atomic_exchange_dirs
+        real_verify = verify_library
+        stage = {"post_exchange": False}
+        call_count = [0]
+
+        def fail_second_exchange(a, b):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                stage["post_exchange"] = True
+                return real_exchange(a, b)
+            raise OSError("injected rollback failure")
+
+        def fail_post_verify(path):
+            if stage["post_exchange"] and path == self.target_dir:
+                return False, "injected post corruption"
+            return real_verify(path)
+
+        with patch("tools.prepare_wallpapers.atomic_exchange_dirs", side_effect=fail_second_exchange), \
+             patch("tools.prepare_wallpapers.verify_library", side_effect=fail_post_verify):
+            ok, msg, old_lib_state = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
+            self.assertFalse(ok)
+            self.assertIn("rollback could not be confirmed", msg)
+            self.assertIn("injected rollback failure", msg)
+
+        # Both states must be preserved on disk; nothing deleted
+        self.assertTrue(self.target_dir.is_dir())
+        self.assertIsNotNone(old_lib_state)
+        self.assertTrue(old_lib_state.is_dir())
+        self.assertEqual(sha256_file(old_lib_state / "manifest.json"), self.old_m_sha)
+
+    def test_pre_copy_exception_cleans_up_staging_and_leaves_target_untouched(self):
+        real_copy = shutil.copy2
+
+        def fail_first_copy(src, dst):
+            if "manifest.json" in str(src):
+                raise OSError("injected disk full during copy")
+            return real_copy(src, dst)
+
+        with patch("shutil.copy2", side_effect=fail_first_copy):
+            ok, msg, backup = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
+            self.assertFalse(ok)
+            self.assertIn("injected disk full during copy", msg)
+            self.assertIsNone(backup)
+
+        self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
+
+    def test_symlink_parent_directory_and_traversal_rejected(self):
+        # 1. Target parent is a symlink
+        real_parent = self.root / "real_parent"
+        real_parent.mkdir()
+        sym_parent = self.root / "sym_parent"
+        sym_parent.symlink_to(real_parent, target_is_directory=True)
+
+        target_in_sym = sym_parent / "wallpapers"
+        self._create_synthetic_library(target_in_sym)
+        ok, msg, _ = publish_palettes(self.candidate_dir, target_in_sym, self.old_m_sha, self.old_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("symlink", msg.lower())
+
+        # 2. Candidate parent is a symlink
+        cand_real_parent = self.root / "cand_real_parent"
+        cand_real_parent.mkdir()
+        cand_sym_parent = self.root / "cand_sym_parent"
+        cand_sym_parent.symlink_to(cand_real_parent, target_is_directory=True)
+
+        cand_in_sym = cand_sym_parent / "candidate"
+        self._create_candidate_metadata(cand_in_sym, self.target_dir)
+        ok, msg, _ = publish_palettes(cand_in_sym, self.target_dir, self.old_m_sha, self.old_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("symlink", msg.lower())
+
+        # 3. Path traversal ('..') in target
+        traversal_target = self.target_dir / ".." / "wallpapers"
+        ok, msg, _ = publish_palettes(self.candidate_dir, traversal_target, self.old_m_sha, self.old_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("traversal", msg.lower())
+
+    def test_symlink_lockfile_rejected(self):
+        target_parent = self.target_dir.parent
+        lock_file = target_parent / ".wallpapers-publish.lock"
+        decoy = self.root / "decoy.lock"
+        decoy.write_text("decoy")
+        lock_file.symlink_to(decoy)
+
+        ok, msg, backup = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("symlink", msg.lower())
+        self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
+
+    def test_candidate_extras_rejected(self):
+        # 1. Candidate with extra file
+        cand_extra = self.root / "cand_extra"
+        self._create_candidate_metadata(cand_extra, self.target_dir)
+        (cand_extra / "palette-provenance.json").write_text('{"extra": true}', encoding="utf-8")
+        ok, msg, _ = publish_palettes(cand_extra, self.target_dir, self.old_m_sha, self.old_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("Candidate directory must contain exactly manifest.json and transport-manifest.json", msg)
+
+        # 2. Candidate with subdirectory
+        cand_dir_extra = self.root / "cand_dir_extra"
+        self._create_candidate_metadata(cand_dir_extra, self.target_dir)
+        (cand_dir_extra / "subdir").mkdir()
+        ok, msg, _ = publish_palettes(cand_dir_extra, self.target_dir, self.old_m_sha, self.old_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("Candidate directory must contain exactly manifest.json and transport-manifest.json", msg)
+
+    def test_candidate_transport_unauthorized_mutation_rejected(self):
+        # 1. Extra top-level field
+        def extra_top_level(tm):
+            tm["unauthorized_top_level"] = "forbidden"
+
+        # 2. Extra file entry in transport
+        def extra_file_entry(tm):
+            tm["files"].append({"path": "extra.txt", "sha256": "0" * 64, "bytes": 10})
+            tm["total_payload_bytes"] = sum(f["bytes"] for f in tm["files"])
+
+        # 3. Altered record order
+        def reverse_order(tm):
+            tm["files"].reverse()
+
+        for mutate in (extra_top_level, extra_file_entry, reverse_order):
+            cand_mut = self.root / f"cand_tm_mut_{abs(hash(mutate))}"
+            cand_mut.mkdir()
+            self._create_candidate_metadata(cand_mut, self.target_dir, mutate_tm_fn=mutate)
+            ok, msg, backup = publish_palettes(cand_mut, self.target_dir, self.old_m_sha, self.old_tm_sha)
+            self.assertFalse(ok, f"Expected unauthorized transport mutation to fail: {msg}")
+            self.assertIn("Candidate transport contains unauthorized mutations relative to target", msg)
+            self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
 
     def test_publish_without_pillow_prerequisite(self):
         target2 = self.root / "wallpapers_no_pil"
@@ -1151,7 +1338,7 @@ class WallpaperPublishPalettesTests(unittest.TestCase):
         with patch("os.link", side_effect=drift_target):
             ok, msg, backup = publish_palettes(cand3, target3, old_m, old_tm)
             self.assertFalse(ok)
-            self.assertIn("Pre-activation drift detected", msg)
+            self.assertTrue("Pre-activation" in msg and ("drift detected" in msg or "verification failed" in msg))
 
     def test_cli_publish_palettes(self):
         import subprocess
@@ -1204,7 +1391,18 @@ class WallpaperPublishPalettesTests(unittest.TestCase):
         self.assertEqual(sha256_file(test_target / "manifest.json"), old_m_sha)
         self.assertEqual(sha256_file(test_target / "transport-manifest.json"), old_tm_sha)
 
-        ok, msg, backup_path = publish_palettes(cand_dir, test_target, old_m_sha, old_tm_sha)
+        # 1. Calling directly with raw candidate directory containing extra provenance files must be refused
+        ok_raw, msg_raw, _ = publish_palettes(cand_dir, test_target, old_m_sha, old_tm_sha)
+        self.assertFalse(ok_raw)
+        self.assertIn("Candidate directory must contain exactly manifest.json and transport-manifest.json", msg_raw)
+
+        # 2. Candidate metadata directory with ONLY manifest.json and transport-manifest.json succeeds
+        cand_clean = self.root / "real_candidate_clean"
+        cand_clean.mkdir()
+        shutil.copy2(cand_dir / "manifest.json", cand_clean / "manifest.json")
+        shutil.copy2(cand_dir / "transport-manifest.json", cand_clean / "transport-manifest.json")
+
+        ok, msg, backup_path = publish_palettes(cand_clean, test_target, old_m_sha, old_tm_sha)
         self.assertTrue(ok, msg)
         self.assertIsNotNone(backup_path)
         self.assertTrue(backup_path.is_dir())
