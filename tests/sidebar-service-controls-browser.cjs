@@ -53,6 +53,8 @@ const initialMockServices = [
   let deleteLog = [];
   let simulateToggleFailure = false;
   let simulateToggleForbidden = false;
+  let holdToggleReply = false;
+  let completeToggleReply = null;
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1:8000');
@@ -122,6 +124,7 @@ const initialMockServices = [
         }
         const data = JSON.parse(body || '{}');
         toggleLog.push(data);
+        const applyToggle = () => {
         const svc = servicesState.find(s => s.id === data.service);
         if (svc) {
           svc.running = data.enable !== undefined ? Boolean(data.enable) : !svc.running;
@@ -129,6 +132,9 @@ const initialMockServices = [
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ services: servicesState }));
+        };
+        if (holdToggleReply) completeToggleReply = applyToggle;
+        else applyToggle();
       });
       return;
     }
@@ -257,31 +263,51 @@ const initialMockServices = [
     // Restore desktop
     await page.setViewportSize({ width: 1440, height: 900 });
 
+    // Keyboard users retain focus on the switch after a toggle response.
+    holdToggleReply = true;
+    await laptopToggle.focus();
+    await laptopToggle.press('Space');
+    await page.waitForFunction(() => document.getElementById('laptop-service-toggle').disabled);
+    await page.evaluate(() => fetchServices());
+    assert.equal(await laptopToggle.isChecked(), false, 'An old poll cannot overwrite the pending keyboard choice');
+    assert(await page.locator('#laptop-new').isDisabled(), 'Do not create terminals while gateway state changes');
+    assert.equal(typeof completeToggleReply, 'function');
+    holdToggleReply = false;
+    completeToggleReply();
+    await page.waitForFunction(() => !document.getElementById('laptop-service-toggle').disabled);
+    assert.equal(await laptopToggle.getAttribute('data-gateway-state'), 'stopped');
+    assert(await laptopToggle.evaluate(el => document.activeElement === el), 'Restore keyboard focus after the confirmed switch update');
+    assert(await page.locator('#laptop-new').isDisabled(), 'Confirmed Off must disable New while switch retains keyboard focus');
+    await laptopToggle.press('Space');
+    await page.waitForFunction(() => !document.getElementById('laptop-service-toggle').disabled);
+    assert.equal(await laptopToggle.getAttribute('data-gateway-state'), 'running');
+
     // -------------------------------------------------------------
     // TEST 3: AGY SERVICE TOGGLE (OFF -> ON)
     // -------------------------------------------------------------
     console.log('--- TEST 3: AGY Service Toggle ---');
-    await page.waitForSelector('#agy-sessions-container a[href^="/agy/"]');
-    const sessionLink = page.locator('#agy-sessions-container a[href^="/agy/"]').first();
+    await page.waitForSelector('#agy-sessions-container a[data-agy-url]');
+    const sessionLink = page.locator('#agy-sessions-container a[data-agy-url]').first();
     assert.equal(await sessionLink.getAttribute('aria-disabled'), null, 'Session link active when AGY on');
 
     // Click AGY switch to turn OFF
     toggleLog = [];
     await agySwitch.click();
-    await page.waitForFunction(() => document.querySelector('#agy-new').disabled);
+    await page.waitForFunction(() => !document.querySelector('#agy-service-toggle').disabled && !document.querySelector('#agy-service-toggle').checked);
     assert.equal(toggleLog.length, 1);
     assert.deepEqual(toggleLog[0], { service: 'agy', enable: false });
 
     // Verify New AGY button is disabled and session link is disabled
     assert(await page.locator('#agy-new').isDisabled(), 'New AGY button must be disabled when AGY service off');
     assert.equal(await sessionLink.getAttribute('aria-disabled'), 'true', 'Session link must be aria-disabled when service off');
+    assert.equal(await sessionLink.getAttribute('href'), null, 'AGY Off removes keyboard navigation as well as mouse navigation');
     const agyBadgeOff = await page.locator('#agy-service-status-badge').textContent();
     assert(agyBadgeOff.includes('Disabled'), 'AGY badge must show Disabled');
 
     // Click AGY switch to turn ON
     toggleLog = [];
     await agySwitch.click();
-    await page.waitForFunction(() => !document.querySelector('#agy-new').disabled);
+    await page.waitForFunction(() => !document.querySelector('#agy-service-toggle').disabled && document.querySelector('#agy-service-toggle').checked);
     assert.equal(toggleLog.length, 1);
     assert.deepEqual(toggleLog[0], { service: 'agy', enable: true });
     assert.equal(await page.locator('#agy-new').isDisabled(), false, 'New AGY button must re-enable when service on');
@@ -300,7 +326,7 @@ const initialMockServices = [
     toggleLog = [];
     deleteLog = [];
     await laptopSwitch.click();
-    await page.waitForFunction(() => !document.querySelector('#laptop-service-toggle').checked);
+    await page.waitForFunction(() => !document.querySelector('#laptop-service-toggle').disabled && !document.querySelector('#laptop-service-toggle').checked);
     assert.equal(toggleLog.length, 1);
     assert.deepEqual(toggleLog[0], { service: 'laptop_terminal', enable: false });
     assert.equal(deleteLog.length, 0, 'Turning off gateway must NEVER fire DELETE to sessions');
@@ -322,7 +348,7 @@ const initialMockServices = [
     // Click Laptop switch to turn ON
     toggleLog = [];
     await laptopSwitch.click();
-    await page.waitForFunction(() => document.querySelector('#laptop-service-toggle').checked);
+    await page.waitForFunction(() => !document.querySelector('#laptop-service-toggle').disabled && document.querySelector('#laptop-service-toggle').checked);
     assert.equal(toggleLog.length, 1);
     assert.deepEqual(toggleLog[0], { service: 'laptop_terminal', enable: true });
     await page.waitForFunction(() => !document.querySelector('#laptop-new').disabled);

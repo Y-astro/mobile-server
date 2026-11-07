@@ -11,10 +11,16 @@
   function isGatewayActive() {
     const toggle = document.getElementById('laptop-service-toggle');
     if (!toggle) return true;
+    if (toggle.disabled) return false;
     if (toggle.dataset.gatewayState !== undefined) {
       return toggle.dataset.gatewayState === 'running';
     }
     return toggle.checked;
+  }
+
+  function canStartTerminal() {
+    return !changing && isGatewayActive() && lastBrokerData && lastBrokerData.online &&
+      lastBrokerData.sessions.length < lastBrokerData.max_sessions;
   }
 
   function applyState() {
@@ -23,11 +29,12 @@
     const gwActive = isGatewayActive();
 
     if (!gwActive) {
-      status.textContent = 'Laptop gateway is off (web access disabled)';
+      const toggle = document.getElementById('laptop-service-toggle');
+      status.textContent = toggle && toggle.disabled ? 'Updating terminal access…' : 'Laptop web access is off';
       start.disabled = true;
     } else {
       status.textContent = data.online ? 'Laptop connected over Tailscale' : data.error || 'Laptop offline';
-      start.disabled = !data.online || data.sessions.length >= data.max_sessions;
+      start.disabled = !canStartTerminal();
     }
 
     list.replaceChildren();
@@ -95,7 +102,7 @@
   });
 
   start.addEventListener('click', async () => {
-    if (changing || !isGatewayActive()) return;
+    if (!canStartTerminal()) return;
     changing = true; start.disabled = true;
     // Open on the click gesture; otherwise browsers block a tab opened after SSH.
     const terminal = window.open('about:blank', '_blank');
@@ -113,7 +120,7 @@
       changing = false;
       // Preserve the actual operation error until the next periodic status check.
       if (!failed) await (laptopLoop ? laptopLoop.refreshAfterMutation() : refresh());
-      else start.disabled = false;
+      else start.disabled = !canStartTerminal();
     }
   });
 

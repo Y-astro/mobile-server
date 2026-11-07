@@ -12,6 +12,10 @@ const assert=require('node:assert/strict');
    const request=route.request(),url=new URL(request.url());
    if(url.pathname==='/static/portal-polling.js')return route.fulfill({body:fs.readFileSync('web/portal-polling.js','utf8'),contentType:'application/javascript'});
    if(url.pathname==='/static/laptop.js')return route.fulfill({body:fs.readFileSync('web/laptop.js','utf8'),contentType:'application/javascript'});
+   if(url.pathname==='/api/services')return route.fulfill({json:{services:[
+    {id:'laptop_terminal',running:true,status_badge:'Active'},
+    {id:'agy',running:true,status_badge:'Active'}
+   ]}});
    if(url.pathname==='/api/laptop/terminals'){
     if(request.method()==='POST'){
      if(failCreate)return route.fulfill({status:503,json:{message:'Laptop went offline'}});
@@ -23,7 +27,7 @@ const assert=require('node:assert/strict');
     deleted.push(ident);sessions=[];return route.fulfill({json:{closed:true}});
    }
    if(url.pathname==='/laptop/')return route.fulfill({body:'<html>Terminal fixture</html>',contentType:'text/html'});
-   if(url.origin==='http://mobile.test' && url.pathname==='/')return route.fulfill({body:fs.readFileSync('.work/dashboard-test.html','utf8'),contentType:'text/html'});
+   if(url.origin==='http://mobile.test' && url.pathname==='/')return route.fulfill({body:fs.readFileSync('web/admin.html','utf8'),contentType:'text/html'});
    await route.abort();
   });
   await page.goto('http://mobile.test/');

@@ -223,7 +223,7 @@ def dashboard_services() -> Dict[str, Dict[str, Any]]:
             "name": "Laptop Terminal Gateway",
             "category": "System & Control",
             "port": SERVICE_ENDPOINTS['laptop_terminal']['port'],
-            "pattern": "ttyd.*7683",
+            "pattern": f"ttyd.*{SERVICE_ENDPOINTS['laptop_terminal']['port']}",
             "icon": "terminal",
             "desc": f"Tailscale Kitty Streaming Gateway (Port {SERVICE_ENDPOINTS['laptop_terminal']['port']})",
             "open_url": "/laptop/",

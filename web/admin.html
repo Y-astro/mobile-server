@@ -281,7 +281,7 @@
         <!-- Laptop Terminals Section -->
         <section class="m3-card golden-glass-card p-5 rounded-xl space-y-3" aria-labelledby="laptop-heading">
           <div class="flex flex-col gap-3">
-            <div class="flex items-start justify-between gap-2.5">
+            <div class="flex flex-col gap-3">
               <div class="min-w-0">
                 <h2 id="laptop-heading" class="text-base font-semibold text-white">Laptop terminals</h2>
                 <p class="text-xs text-muted mt-0.5">Control Kitty terminal sessions streamed over Tailscale from the laptop.</p>
@@ -289,7 +289,7 @@
               <div class="flex items-center gap-2 shrink-0">
                 <span id="laptop-service-status-badge" class="service-status-badge px-2 py-0.5 rounded text-xs font-medium badge-neutral text-muted">Checking…</span>
                 <label class="switch m3-switch" aria-label="Toggle Laptop Gateway service">
-                  <input type="checkbox" id="laptop-service-toggle" data-action="toggle" onchange="toggleService('laptop_terminal', this)">
+                  <input type="checkbox" id="laptop-service-toggle" disabled data-loading="true" aria-label="Enable laptop terminal web access" data-action="toggle" onchange="toggleService('laptop_terminal', this)">
                   <span class="slider"></span>
                 </label>
               </div>
@@ -300,7 +300,7 @@
           </div>
           <p id="laptop-status" class="text-xs text-soft" role="status" aria-live="polite">Checking laptop…</p>
           <div id="laptop-sessions" class="space-y-2 text-sm"></div>
-          <p class="text-xs text-muted">Laptop must be awake and logged in to open Kitty. Closing the browser keeps commands running; Close terminates the session.</p>
+          <p class="text-xs text-muted">Laptop must be awake and logged in to open Kitty. Turning web access off keeps terminal commands running; Close terminates the session.</p>
         </section>
         <script src="/static/portal-polling.js"></script>
         <script src="/static/laptop.js" defer></script>
@@ -308,7 +308,7 @@
         <!-- AGY Agent Instances Section -->
         <section class="m3-card golden-glass-card p-5 rounded-xl space-y-4" aria-labelledby="agy-heading">
           <div class="flex flex-col gap-3">
-            <div class="flex items-start justify-between gap-2.5">
+            <div class="flex flex-col gap-3">
               <div class="flex items-start gap-2.5 min-w-0">
                 <div class="service-icon-box shrink-0 mt-0.5">
                   <svg class="w-5 h-5 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
@@ -318,19 +318,19 @@
                     <h2 id="agy-heading" class="text-base font-semibold text-white">Autonomous coding agent (AGY)</h2>
                     <span class="m3-badge badge-neutral shrink-0">Multi-session</span>
                   </div>
-                  <p class="text-xs text-muted mt-0.5">Independent Antigravity CLI coding sessions. Closing a tab keeps commands running.</p>
+                  <p class="text-xs text-muted mt-0.5">Closing a tab keeps commands running. Turning AGY off stops its sessions.</p>
                 </div>
               </div>
               <div class="flex items-center gap-2 shrink-0">
                 <span id="agy-service-status-badge" class="service-status-badge px-2 py-0.5 rounded text-xs font-medium badge-neutral text-muted">Checking…</span>
                 <label class="switch m3-switch" aria-label="Toggle AGY service">
-                  <input type="checkbox" id="agy-service-toggle" data-action="toggle" onchange="toggleService('agy', this)">
+                  <input type="checkbox" id="agy-service-toggle" disabled data-loading="true" aria-label="Enable AGY service" data-action="toggle" onchange="toggleService('agy', this)">
                   <span class="slider"></span>
                 </label>
               </div>
             </div>
             <div>
-              <button type="button" id="agy-new" onclick="createNewAgySession()" class="m3-btn m3-btn-filled gold-gradient-btn px-4 py-2 text-xs font-medium flex items-center gap-1.5 select-none shrink-0">
+              <button type="button" id="agy-new" disabled onclick="createNewAgySession()" class="m3-btn m3-btn-filled gold-gradient-btn px-4 py-2 text-xs font-medium flex items-center gap-1.5 select-none shrink-0">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
                 <span>New AGY Instance</span>
               </button>
@@ -636,22 +636,28 @@
             (agySvc.running ? 'badge-positive' : 'badge-neutral text-muted');
         }
         const toggle = document.getElementById('agy-service-toggle');
-        if (toggle && document.activeElement !== toggle && !toggle.disabled) {
+        if (toggle && toggle.dataset.loading) {
+          delete toggle.dataset.loading;
+          toggle.disabled = false;
+        }
+        if (toggle && !toggle.disabled) {
           toggle.checked = Boolean(agySvc.running);
         }
         window.agyServiceRunning = Boolean(agySvc.running);
         const agyNew = document.getElementById('agy-new');
         if (agyNew && !agyNew.dataset.creating) {
-          agyNew.disabled = !agySvc.running;
+          agyNew.disabled = !agySvc.running || Boolean(toggle && toggle.disabled);
         }
-        const sessionLinks = document.querySelectorAll('#agy-sessions-container a[href^="/agy/"]');
+        const sessionLinks = document.querySelectorAll('#agy-sessions-container a[data-agy-url]');
         sessionLinks.forEach(a => {
           if (!agySvc.running) {
             a.classList.add('opacity-40', 'pointer-events-none');
             a.setAttribute('aria-disabled', 'true');
+            a.removeAttribute('href');
           } else {
             a.classList.remove('opacity-40', 'pointer-events-none');
             a.removeAttribute('aria-disabled');
+            a.href = a.dataset.agyUrl;
           }
         });
       }
@@ -664,9 +670,13 @@
             (laptopSvc.running ? 'badge-positive' : 'badge-neutral text-muted');
         }
         const toggle = document.getElementById('laptop-service-toggle');
-        if (toggle && document.activeElement !== toggle && !toggle.disabled) {
-          toggle.checked = Boolean(laptopSvc.running);
+        if (toggle) {
           toggle.dataset.gatewayState = laptopSvc.running ? 'running' : 'stopped';
+          if (toggle.dataset.loading) {
+            delete toggle.dataset.loading;
+            toggle.disabled = false;
+          }
+          if (!toggle.disabled) toggle.checked = Boolean(laptopSvc.running);
         }
         window.dispatchEvent(new CustomEvent('laptop-gateway-state', {
           detail: {
@@ -859,7 +869,9 @@
 
     async function toggleService(sid, el) {
       const origChecked = el ? el.checked : false;
+      const hadFocus = el && document.activeElement === el;
       if (el) el.disabled = true;
+      updateSidebarControls(lastKnownServices);
       try {
         const payload = { service: sid };
         if (el) payload.enable = origChecked;
@@ -894,6 +906,8 @@
         if (el) el.checked = !origChecked;
       } finally {
         if (el) el.disabled = false;
+        updateSidebarControls(lastKnownServices);
+        if (hadFocus && document.activeElement === document.body) el.focus();
       }
     }
 
@@ -1363,7 +1377,7 @@
                 <span class="px-1.5 py-0.5 rounded text-xs font-mono m3-badge badge-neutral">${badgeText}</span>
               </div>
               <div class="flex items-center gap-2 flex-wrap">
-                <a href="${openUrl}" target="_blank" rel="noopener noreferrer" class="m3-btn m3-btn-tonal text-xs font-medium flex items-center gap-1.5 ${window.agyServiceRunning === false ? 'opacity-40 pointer-events-none' : ''}" ${window.agyServiceRunning === false ? 'aria-disabled="true"' : ''}>
+                <a data-agy-url="${openUrl}" ${window.agyServiceRunning === false ? '' : `href="${openUrl}"`} target="_blank" rel="noopener noreferrer" class="m3-btn m3-btn-tonal text-xs font-medium flex items-center gap-1.5 ${window.agyServiceRunning === false ? 'opacity-40 pointer-events-none' : ''}" ${window.agyServiceRunning === false ? 'aria-disabled="true"' : ''}>
                   <span>Open / Reconnect</span>
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
                 </a>
