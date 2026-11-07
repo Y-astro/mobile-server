@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 from antra_store import AntraStore
 from antra_client import (
     AntraClient,
+    AntraClientError,
     DailyLimitError,
     ConcurrencyLimitError,
     UncertainSubmissionError,
@@ -435,6 +436,214 @@ class TestAntraWorker(unittest.TestCase):
         self.client.fresh_ws_token.assert_called_once_with("one_upstream")
         self.assertEqual(self.client.download_track_stream.call_count, 250)
         self.assertEqual(len(list(self.output_roots["family"].rglob("*.flac"))), 250)
+
+
+class TestAntraAutomaticRetries(unittest.TestCase):
+    def setUp(self):
+        import hashlib
+        self.hashlib = hashlib
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "antra.db"
+        self.output_root = Path(self.temp_dir.name) / "music"
+        self.output_root.mkdir()
+        self.store = AntraStore(self.db_path, output_roots={"private": self.output_root})
+        self.client = MagicMock()
+        self.client.has_credentials.return_value = True
+        self.client.ack_track.return_value = True
+        self.client.resolve.side_effect = lambda url: {"tracks": self.store.get_tracks(self.store.list_jobs()[0]["id"])}
+        self.worker = AntraWorker(self.store, self.client, output_roots={"private": self.output_root}, lock_file=Path(self.temp_dir.name)/"lock", is_test_env=True)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_zero_failure_completion_does_not_schedule_retry(self):
+        job = self.store.create_job("https://example.com/album", destination="private")
+        tracks = [{"title": "T1", "artist": "A1", "index": 0}]
+        self.store.set_tracks(job["id"], tracks)
+        self.client.submit_job.return_value = ("upstream_1", "token_1")
+        self.client.connect_job_ws.return_value = [
+            {"type": "track_done", "index": 0, "path": "A1/01.flac"},
+            {"type": "complete"}
+        ]
+        with patch.object(self.worker, "_download_and_publish_track", side_effect=lambda *args: self.store.update_track(job["id"], 0, status="completed")) as mock_dl:
+            self.worker.process_job(job)
+            mock_dl.assert_called_once()
+        final_job = self.store.get_job(job["id"])
+        self.assertEqual(final_job["status"], "completed")
+        self.assertEqual(final_job["automatic_retry_rounds"], 0)
+
+    def test_automatic_retry_up_to_max_passes_then_terminal_partial(self):
+        job = self.store.create_job("https://example.com/playlist", destination="private")
+        tracks = [
+            {"title": "T1", "artist": "A1", "index": 0},
+            {"title": "T2", "artist": "A1", "index": 1},
+        ]
+        self.store.set_tracks(job["id"], tracks)
+        self.store.update_track(job["id"], 0, status="completed")
+        # T2 remains failed across passes
+        self.client.submit_job.return_value = ("up_1", "tok_1")
+        self.client.connect_job_ws.return_value = [
+            {"type": "track_failed", "index": 1, "error": "bad source"},
+            {"type": "complete"}
+        ]
+
+        # Pass 1
+        with patch.object(self.worker, "_download_and_publish_track"):
+            self.worker.process_job(self.store.get_job(job["id"]))
+        j1 = self.store.get_job(job["id"])
+        self.assertEqual(j1["status"], "queued")
+        self.assertEqual(j1["automatic_retry_rounds"], 1)
+
+        # Pass 2
+        with patch.object(self.worker, "_download_and_publish_track"):
+            self.worker.process_job(self.store.get_job(job["id"]))
+        j2 = self.store.get_job(job["id"])
+        self.assertEqual(j2["status"], "queued")
+        self.assertEqual(j2["automatic_retry_rounds"], 2)
+
+        # Pass 3
+        with patch.object(self.worker, "_download_and_publish_track"):
+            self.worker.process_job(self.store.get_job(job["id"]))
+        j3 = self.store.get_job(job["id"])
+        self.assertEqual(j3["status"], "queued")
+        self.assertEqual(j3["automatic_retry_rounds"], 3)
+
+        # Pass 4: exceeds max 3, must not schedule pass 4
+        with patch.object(self.worker, "_download_and_publish_track"):
+            self.worker.process_job(self.store.get_job(job["id"]))
+        j4 = self.store.get_job(job["id"])
+        self.assertEqual(j4["status"], "partial")
+        self.assertEqual(j4["automatic_retry_rounds"], 3)
+        self.assertIn("Manual retry is available", j4["message"])
+
+    def test_manual_retry_resets_automatic_round_budget(self):
+        job = self.store.create_job("https://example.com/playlist", destination="private")
+        self.store.set_tracks(job["id"], [{"index": 0, "title": "Failed"}])
+        for round_number in range(1, 4):
+            self.store.update_job(job["id"], status="downloading", upstream_job_id="finished")
+            self.store.update_track(job["id"], 0, status="failed")
+            self.assertTrue(self.store.schedule_automatic_retry(job["id"], delay=0, round_number=round_number))
+        self.store.update_job(job["id"], status="partial")
+        retried = self.store.retry_job(job["id"])
+        self.assertEqual(retried["status"], "queued")
+        self.assertEqual(retried["automatic_retry_rounds"], 0)
+
+    def test_cancelled_job_not_scheduled_by_retry(self):
+        job = self.store.create_job("https://example.com/playlist", destination="private")
+        self.store.cancel_job(job["id"])
+        scheduled = self.store.schedule_automatic_retry(job["id"], delay=0, round_number=1)
+        self.assertFalse(scheduled)
+        self.assertEqual(self.store.get_job(job["id"])["status"], "cancelled")
+
+    def test_429_does_not_burn_automatic_retry_round(self):
+        job = self.store.create_job("https://example.com/playlist", destination="private")
+        tracks = [{"title": "T1", "artist": "A1", "index": 0}]
+        self.store.set_tracks(job["id"], tracks)
+        self.client.submit_job.side_effect = ConcurrencyLimitError("busy", retry_after=10)
+        self.worker.process_job(job)
+        j = self.store.get_internal_job(job["id"])
+        self.assertEqual(j["automatic_retry_rounds"], 0)
+        self.assertEqual(j["retry_attempts"], 1)
+        self.assertGreater(j["concurrency_retry_after"], time.time())
+
+    def test_mixed_replay_downloads_only_failed_tracks(self):
+        job = self.store.create_job("https://example.com/playlist", destination="private")
+        tracks = [
+            {"title": "T1", "artist": "A1", "index": 0},
+            {"title": "T2", "artist": "A1", "index": 1},
+            {"title": "T3", "artist": "A1", "index": 2},
+        ]
+        self.store.set_tracks(job["id"], tracks)
+        # T1 and T2 are already completed on disk with checksums
+        f1 = self.output_root / "t1.flac"
+        f2 = self.output_root / "t2.flac"
+        f1.write_bytes(b"MOCK_AUDIO_1")
+        f2.write_bytes(b"MOCK_AUDIO_2")
+        h1 = self.hashlib.sha256(b"MOCK_AUDIO_1").hexdigest()
+        h2 = self.hashlib.sha256(b"MOCK_AUDIO_2").hexdigest()
+        self.store.update_track(job["id"], 0, status="completed", filename="t1.flac", publication_path="t1.flac", file_sha256=h1)
+        self.store.update_track(job["id"], 1, status="completed", filename="t2.flac", publication_path="t2.flac", file_sha256=h2)
+        # T3 failed previously and is queued for retry
+        self.store.update_track(job["id"], 2, status="queued")
+
+        self.client.submit_job.return_value = ("up_retry", "token_retry")
+        self.client.connect_job_ws.return_value = [
+            {"type": "track_done", "index": 0, "path": "t1.flac"},
+            {"type": "track_done", "index": 1, "path": "t2.flac"},
+            {"type": "track_done", "index": 2, "path": "t3.flac"},
+            {"type": "complete"}
+        ]
+        incoming = Path(self.temp_dir.name) / "incoming.flac"
+        generate_real_flac(incoming, bits=16, sample_rate=44100)
+        response = io.BytesIO(incoming.read_bytes())
+        response.headers = {"Content-Length": str(incoming.stat().st_size)}
+        self.client.download_track_stream.return_value = response
+        self.worker.process_job(self.store.get_job(job["id"]))
+        self.client.download_track_stream.assert_called_once_with("up_retry", 2)
+        self.assertEqual(f1.read_bytes(), b"MOCK_AUDIO_1")
+        self.assertEqual(f2.read_bytes(), b"MOCK_AUDIO_2")
+        self.assertEqual(self.store.get_job(job["id"])["completed"], 3)
+
+        # All 3 tracks acknowledged to upstream
+        self.assertEqual(self.client.ack_track.call_count, 3)
+
+    def test_retry_round_and_delay_survive_store_restart(self):
+        job = self.store.create_job("https://example.com/playlist")
+        self.store.set_tracks(job["id"], [{"index": 0, "title": "Failed"}])
+        self.store.update_track(job["id"], 0, status="failed")
+        self.store.update_job(job["id"], status="downloading", upstream_job_id="finished")
+        self.assertTrue(self.store.schedule_automatic_retry(job["id"], delay=60, round_number=1))
+        restarted = AntraStore(self.db_path)
+        self.assertEqual(restarted.get_internal_job(job["id"])["automatic_retry_rounds"], 1)
+        self.assertIsNone(restarted.get_next_runnable_job())
+        self.assertFalse(restarted.schedule_automatic_retry(job["id"], delay=0, round_number=2))
+
+    def test_uncertain_submission_and_cancelled_finalization_are_preserved(self):
+        job = self.store.create_job("https://example.com/playlist")
+        self.store.set_tracks(job["id"], [{"index": 0, "title": "Failed"}])
+        self.store.update_track(job["id"], 0, status="failed")
+        self.store.update_job(job["id"], status="uncertain", submission_intent=1)
+        self.assertFalse(self.store.schedule_automatic_retry(job["id"], delay=0, round_number=1))
+        self.assertEqual(self.store.get_internal_job(job["id"])["submission_intent"], 1)
+        self.store.cancel_job(job["id"])
+        self.store.finish_job(job["id"], "partial", "stale completion")
+        self.assertEqual(self.store.get_job(job["id"])["status"], "cancelled")
+
+    def test_retry_reconnect_keeps_confirmed_provider_id(self):
+        job = self.store.create_job("https://example.com/playlist")
+        self.store.set_tracks(job["id"], [{"index": 0, "title": "Failed"}])
+        self.store.update_track(job["id"], 0, status="failed")
+        self.store.update_job(job["id"], status="downloading", upstream_job_id="finished")
+        self.store.schedule_automatic_retry(job["id"], delay=0, round_number=1)
+        self.store.update_job(job["id"], status="downloading", upstream_job_id="confirmed_retry")
+        self.client.get_job_status.return_value = {"status": "downloading"}
+        self.client.fresh_ws_token.return_value = "new-token"
+        self.client.connect_job_ws.side_effect = AntraClientError("Interrupted")
+        self.worker.process_job(self.store.get_job(job["id"]))
+        self.client.submit_job.assert_not_called()
+        current = self.store.get_internal_job(job["id"])
+        self.assertEqual(current["upstream_job_id"], "confirmed_retry")
+        self.assertEqual(current["automatic_retry_rounds"], 1)
+
+    def test_changed_playlist_is_not_submitted_as_original_indices(self):
+        job = self.store.create_job("https://example.com/playlist")
+        self.store.set_tracks(job["id"], [{"index": 0, "title": "Original"}, {"index": 1, "title": "Failed"}])
+        self.store.update_track(job["id"], 0, status="completed")
+        self.client.resolve.side_effect = None
+        self.client.resolve.return_value = {"tracks": [{"title": "Changed", "artist": ""}]}
+        self.worker.process_job(job)
+        self.client.submit_job.assert_not_called()
+        self.assertIn("Playlist contents changed", self.store.get_job(job["id"])["message"])
+        self.assertEqual(self.store.get_tracks(job["id"])[0]["status"], "completed")
+
+    def test_concurrent_startup_migrates_legacy_database_once(self):
+        from concurrent.futures import ThreadPoolExecutor
+        job = self.store.create_job("https://example.com/playlist")
+        with self.store._connect() as connection:
+            connection.execute("ALTER TABLE jobs DROP COLUMN automatic_retry_rounds")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: AntraStore(self.db_path).get_job(job["id"]), range(2)))
+        self.assertEqual([row["automatic_retry_rounds"] for row in results], [0, 0])
 
 
 if __name__ == "__main__":

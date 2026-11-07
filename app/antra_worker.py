@@ -27,7 +27,7 @@ if os.path.isdir(MOBILE_LIB) and MOBILE_LIB not in sys.path:
 elif str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from antra_store import AntraStore, DEFAULT_OUTPUT_ROOTS
+from antra_store import AntraStore, DEFAULT_OUTPUT_ROOTS, MAX_AUTOMATIC_RETRY_ROUNDS
 from antra_client import (
     AntraClient,
     DailyLimitError,
@@ -358,7 +358,7 @@ class AntraWorker:
                 self.store.update_job(job_id, title=resolved["title"])
                 tracks = self.store.get_tracks(job_id)
             if tracks and all(track["status"] in ("completed", "skipped") for track in tracks):
-                self.store.update_job(job_id, status="completed" if all(track["status"] == "completed" for track in tracks) else "partial", message="")
+                self.store.finish_job(job_id, status="completed" if all(track["status"] == "completed" for track in tracks) else "partial", message="")
                 return
             upstream = job.get("upstream_job_id")
             if upstream:
@@ -369,6 +369,13 @@ class AntraWorker:
             else:
                 if self.store.is_job_cancelled(job_id):
                     return
+                if job.get("automatic_retry_rounds", 0) or any(t["status"] in ("completed", "skipped") for t in tracks):
+                    refreshed = self.client.resolve(job["url"])
+                    expected = [(t["title"], t["artist"]) for t in tracks]
+                    actual = [(t["title"], t["artist"]) for t in refreshed["tracks"]]
+                    if actual != expected:
+                        self.store.finish_job(job_id, "failed", "Playlist contents changed. Queue a new download; completed files were preserved.")
+                        return
                 self.store.update_job(job_id, submission_intent=1, chunk_start=0, chunk_end=len(tracks))
                 upstream, token = self.client.submit_job(job["url"], start_index=0, end_index=len(tracks))
                 self.store.update_job(job_id, upstream_job_id=upstream, submission_intent=0)
@@ -410,8 +417,31 @@ class AntraWorker:
             records = self.store.get_tracks(job_id)
             completed = sum(t["status"] == "completed" for t in records)
             skipped = sum(t["status"] == "skipped" for t in records)
-            state = "completed" if completed == len(records) else ("partial" if completed or skipped else "failed")
-            self.store.update_job(job_id, status=state, message="")
+            failed = len(records) - completed - skipped
+
+            if self.store.is_job_cancelled(job_id):
+                return
+
+            if failed == 0:
+                state = "completed" if completed == len(records) else "partial"
+                self.store.finish_job(job_id, status=state, message="")
+                return
+
+            current = self.store.get_internal_job(job_id)
+            if not current or current.get("status") == "cancelled" or self.store.is_job_cancelled(job_id):
+                return
+
+            rounds = int(current.get("automatic_retry_rounds", 0))
+            if rounds < MAX_AUTOMATIC_RETRY_ROUNDS:
+                next_round = rounds + 1
+                delay = min(60.0, 10.0 * next_round)
+                msg = f"Retrying {failed} failed track{'s' if failed != 1 else ''} (pass {next_round} of {MAX_AUTOMATIC_RETRY_ROUNDS})."
+                if self.store.schedule_automatic_retry(job_id, delay=delay, round_number=next_round, message=msg):
+                    return
+
+            state = "partial" if (completed or skipped) else "failed"
+            final_msg = f"Completed with {failed} failed track{'s' if failed != 1 else ''} after {MAX_AUTOMATIC_RETRY_ROUNDS} retry passes. Manual retry is available."
+            self.store.finish_job(job_id, status=state, message=final_msg)
         except UncertainSubmissionError:
             self.store.update_job(job_id, status="uncertain", message="Submission was not confirmed. Automatic resubmission is disabled.")
         except DailyLimitError as error:
@@ -453,6 +483,10 @@ class AntraWorker:
         try:
             if not self.check_output_storage(self.store.get_job(job_id)["destination"])[0]:
                 raise ValueError("Music isolation is unavailable")
+            if record["status"] == "completed" and not record.get("publication_path"):
+                record["publication_path"] = record.get("filename")
+                if not record["publication_path"]:
+                    raise ValueError("Completed track has no owned file checkpoint")
             if record.get("publication_path"):
                 final = sanitize_track_path(record["publication_path"], destination_root)
                 ensure_track_parent(final, destination_root)
