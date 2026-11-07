@@ -141,6 +141,7 @@ class AntraStore:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode = WAL;")
             conn.execute("PRAGMA foreign_keys = ON;")
+            conn.execute("BEGIN IMMEDIATE;")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY,
@@ -469,41 +470,43 @@ class AntraStore:
             raise JobNotFoundError(f"Job not found: {job_id}")
         return job
 
+    def finish_job(self, job_id: str, status: str, message: str = "") -> None:
+        if status not in ("completed", "partial", "failed"):
+            raise ValueError("Invalid terminal job status")
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET status = ?, message = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'resolving', 'downloading')",
+                (status, message, time.time(), job_id),
+            )
+
     def schedule_automatic_retry(
         self, job_id: str, delay: float, round_number: int, message: str = ""
     ) -> bool:
+        if type(round_number) is not int or not 1 <= round_number <= MAX_AUTOMATIC_RETRY_ROUNDS:
+            raise ValueError("Invalid automatic retry round")
         with self._connect() as conn:
-            cur = conn.execute("SELECT status FROM jobs WHERE id = ?;", (job_id,))
-            row = cur.fetchone()
-            if not row or row["status"] == "cancelled":
+            conn.execute("BEGIN IMMEDIATE;")
+            row = conn.execute(
+                "SELECT status, automatic_retry_rounds, submission_intent, upstream_job_id FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if (not row or row["status"] != "downloading" or row["submission_intent"]
+                    or not row["upstream_job_id"] or row["automatic_retry_rounds"] + 1 != round_number):
                 return False
-
+            tracks = conn.execute("SELECT status FROM tracks WHERE job_id = ?", (job_id,)).fetchall()
+            if not any(t["status"] == "failed" for t in tracks) or any(t["status"] not in ("completed", "skipped", "failed") for t in tracks):
+                return False
             now = time.time()
-            retry_after = now + max(0.0, float(delay))
             msg = message or f"Automatic retry pass {round_number} of {MAX_AUTOMATIC_RETRY_ROUNDS} scheduled."
             conn.execute(
                 """
-                UPDATE jobs SET
-                    status = 'queued',
-                    message = ?,
-                    updated_at = ?,
-                    chunk_start = 0,
-                    chunk_end = 0,
-                    submission_intent = 0,
-                    concurrency_retry_after = ?,
-                    retry_attempts = 0,
-                    automatic_retry_rounds = ?,
-                    upstream_job_id = NULL
-                WHERE id = ? AND status != 'cancelled';
+                UPDATE jobs SET status = 'queued', message = ?, updated_at = ?,
+                    chunk_start = 0, chunk_end = 0, submission_intent = 0,
+                    concurrency_retry_after = ?, retry_attempts = 0,
+                    automatic_retry_rounds = ?, upstream_job_id = NULL
+                WHERE id = ?;
                 """,
-                (msg, now, retry_after, round_number, job_id),
-            )
-            conn.execute(
-                """
-                UPDATE tracks SET status = 'queued', message = ''
-                WHERE job_id = ? AND status NOT IN ('completed', 'skipped');
-                """,
-                (job_id,),
+                (msg, now, now + max(0.0, float(delay)), round_number, job_id),
             )
             return True
 

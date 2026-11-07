@@ -358,7 +358,7 @@ class AntraWorker:
                 self.store.update_job(job_id, title=resolved["title"])
                 tracks = self.store.get_tracks(job_id)
             if tracks and all(track["status"] in ("completed", "skipped") for track in tracks):
-                self.store.update_job(job_id, status="completed" if all(track["status"] == "completed" for track in tracks) else "partial", message="")
+                self.store.finish_job(job_id, status="completed" if all(track["status"] == "completed" for track in tracks) else "partial", message="")
                 return
             upstream = job.get("upstream_job_id")
             if upstream:
@@ -369,6 +369,13 @@ class AntraWorker:
             else:
                 if self.store.is_job_cancelled(job_id):
                     return
+                if job.get("automatic_retry_rounds", 0) or any(t["status"] in ("completed", "skipped") for t in tracks):
+                    refreshed = self.client.resolve(job["url"])
+                    expected = [(t["title"], t["artist"]) for t in tracks]
+                    actual = [(t["title"], t["artist"]) for t in refreshed["tracks"]]
+                    if actual != expected:
+                        self.store.finish_job(job_id, "failed", "Playlist contents changed. Queue a new download; completed files were preserved.")
+                        return
                 self.store.update_job(job_id, submission_intent=1, chunk_start=0, chunk_end=len(tracks))
                 upstream, token = self.client.submit_job(job["url"], start_index=0, end_index=len(tracks))
                 self.store.update_job(job_id, upstream_job_id=upstream, submission_intent=0)
@@ -416,8 +423,8 @@ class AntraWorker:
                 return
 
             if failed == 0:
-                state = "completed" if completed == len(records) else "skipped"
-                self.store.update_job(job_id, status=state, message="", upstream_job_id=None)
+                state = "completed" if completed == len(records) else "partial"
+                self.store.finish_job(job_id, status=state, message="")
                 return
 
             current = self.store.get_internal_job(job_id)
@@ -427,16 +434,14 @@ class AntraWorker:
             rounds = int(current.get("automatic_retry_rounds", 0))
             if rounds < MAX_AUTOMATIC_RETRY_ROUNDS:
                 next_round = rounds + 1
-                delay = getattr(self, "_retry_pass_delay", None)
-                if delay is None:
-                    delay = min(60.0, 10.0 * next_round)
+                delay = min(60.0, 10.0 * next_round)
                 msg = f"Retrying {failed} failed track{'s' if failed != 1 else ''} (pass {next_round} of {MAX_AUTOMATIC_RETRY_ROUNDS})."
                 if self.store.schedule_automatic_retry(job_id, delay=delay, round_number=next_round, message=msg):
                     return
 
             state = "partial" if (completed or skipped) else "failed"
             final_msg = f"Completed with {failed} failed track{'s' if failed != 1 else ''} after {MAX_AUTOMATIC_RETRY_ROUNDS} retry passes. Manual retry is available."
-            self.store.update_job(job_id, status=state, message=final_msg, upstream_job_id=None)
+            self.store.finish_job(job_id, status=state, message=final_msg)
         except UncertainSubmissionError:
             self.store.update_job(job_id, status="uncertain", message="Submission was not confirmed. Automatic resubmission is disabled.")
         except DailyLimitError as error:
@@ -471,18 +476,6 @@ class AntraWorker:
         if record["status"] == "skipped":
             self._acknowledge(job_id, global_index, upstream_job_id)
             return
-        if record["status"] == "completed":
-            pub_path = record.get("publication_path") or record.get("filename")
-            if pub_path:
-                final = sanitize_track_path(pub_path, destination_root)
-                if final.exists() and not final.is_symlink():
-                    if not record.get("file_sha256") or file_digest(final) != record["file_sha256"]:
-                        raise ValueError("Existing file differs from the owned checkpoint")
-                    if self.store.is_job_cancelled(job_id):
-                        return
-                    self.store.update_track(job_id, global_index, status="completed", filename=pub_path, ack_pending=1)
-                    self._acknowledge(job_id, global_index, upstream_job_id)
-                    return
         temporary = None
         temporary_identity = None
         publication_directory = None
@@ -490,6 +483,10 @@ class AntraWorker:
         try:
             if not self.check_output_storage(self.store.get_job(job_id)["destination"])[0]:
                 raise ValueError("Music isolation is unavailable")
+            if record["status"] == "completed" and not record.get("publication_path"):
+                record["publication_path"] = record.get("filename")
+                if not record["publication_path"]:
+                    raise ValueError("Completed track has no owned file checkpoint")
             if record.get("publication_path"):
                 final = sanitize_track_path(record["publication_path"], destination_root)
                 ensure_track_parent(final, destination_root)

@@ -48,11 +48,13 @@ Open **Antra Music** from the administrator dashboard. Paste a supported HTTPS m
 
 Private output goes to `Music/Astro`; shared output goes to `Music/Family`. The family FileBrowser scope uses `$HOME/family_share/Music`, which must point only to `Music/Family`. All 115 pre-existing library files were moved into Family with original identities preserved. Never broaden this link during source rollback. Migration recovery state is private under `$HOME/.local/state/mobile-server/music-storage/`.
 
-The worker requests 24-bit FLAC, validates its encoded metadata, and tests decode integrity with the existing FFmpeg binary. It skips other bit depths and does not re-encode. On this phone, each track is published inside its own directory because emulated storage rejects atomic no-replace file renames. Do not replace this with an unchecked file overwrite.
+The worker requests the highest-quality FLAC available and accepts native 16-bit or 24-bit audio. It validates encoded metadata and tests decode integrity with the existing FFmpeg binary without re-encoding. On this phone, each track is published inside its own directory because emulated storage rejects atomic no-replace file renames. Do not replace this with an unchecked file overwrite.
 
 One upstream folder-mode job handles the full playlist; the website's 100-track ZIP batch limit does not require more accounts. Real daily quotas still apply. Unknown submissions are held for review, known jobs reconnect without resubmission, and quota waits resume after the reset. Credentials and Mozilla cookies remain private on the phone. The pinned Python dependency is `websockets==17.2`; the worker alone uses the existing pinned DNS shim.
 
-The 2026-11-06 release passed the Python and browser suites, live role checks, native private-storage checks, and synthetic 24-bit audio/publication checks on Android. A real user playlist download remains unverified until a link is supplied.
+After a confirmed provider job finishes with failures, the worker schedules up to three additional passes, with persistent delays of 10, 20, and 30 seconds. Each pass regenerates the full playlist upstream but downloads only missing or failed local tracks; completed files are verified against their saved checksums and reused. Each pass uses the same account and consumes one provider playlist request. Busy responses and daily quota waits retain their separate backoff without consuming another pass. A changed playlist stops retries to protect track identities. The **Retry** action starts a fresh retry budget while preserving completed files.
+
+The real 186-track user playlist delivered 148 verified FLAC files before retries were added; 38 provider failures remained. Provider recovery and additional passes depend on upstream availability.
 
 ### On-Demand Utility
 
