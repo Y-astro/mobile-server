@@ -148,11 +148,21 @@ http://:8000 {
 		}
 		handle {
 			reverse_proxy 127.0.0.1:4569 {
-				header_down Cache-Control "public, max-age=31536000, immutable"
+				header_down Cache-Control "no-store"
+				@thumbnailImage {
+					status 200 206
+					header Content-Type image/*
+				}
+				handle_response @thumbnailImage {
+					header >Cache-Control "public, max-age=31536000, immutable"
+					copy_response
+				}
 				flush_interval 20ms
 				transport http {
+					dial_timeout 5s
+					response_header_timeout 15s
+					read_timeout 30s
 					keepalive 90s
-					response_header_timeout 300s
 					read_buffer 131072
 					write_buffer 131072
 				}
@@ -340,11 +350,21 @@ https://:8443 {
 		}
 		handle {
 			reverse_proxy 127.0.0.1:4569 {
-				header_down Cache-Control "public, max-age=31536000, immutable"
+				header_down Cache-Control "no-store"
+				@thumbnailImage {
+					status 200 206
+					header Content-Type image/*
+				}
+				handle_response @thumbnailImage {
+					header >Cache-Control "public, max-age=31536000, immutable"
+					copy_response
+				}
 				flush_interval 20ms
 				transport http {
+					dial_timeout 5s
+					response_header_timeout 15s
+					read_timeout 30s
 					keepalive 90s
-					response_header_timeout 300s
 					read_buffer 131072
 					write_buffer 131072
 				}
@@ -463,11 +483,21 @@ http://:4567 {
 		}
 		handle {
 			reverse_proxy 127.0.0.1:4569 {
-				header_down Cache-Control "public, max-age=31536000, immutable"
+				header_down Cache-Control "no-store"
+				@thumbnailImage {
+					status 200 206
+					header Content-Type image/*
+				}
+				handle_response @thumbnailImage {
+					header >Cache-Control "public, max-age=31536000, immutable"
+					copy_response
+				}
 				flush_interval 20ms
 				transport http {
+					dial_timeout 5s
+					response_header_timeout 15s
+					read_timeout 30s
 					keepalive 90s
-					response_header_timeout 300s
 					read_buffer 131072
 					write_buffer 131072
 				}

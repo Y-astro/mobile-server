@@ -84,6 +84,17 @@ class TestCaddyfileEquivalence(unittest.TestCase):
         with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
             cls.fixture_text = f.read()
 
+    def test_thumbnail_route_parity_and_cache_guards(self):
+        """Verify thumbnail routes have 2xx-only immutable cache and bounded timeout on both portal and 4567."""
+        for text, label in [(self.candidate_text, 'candidate'), (self.fixture_text, 'fixture')]:
+            self.assertIn('status 200 206', text, f'{label} missing image status guard')
+            self.assertIn('header Content-Type image/*', text, f'{label} missing image MIME guard')
+            self.assertIn('header_down Cache-Control "no-store"', text, f'{label} missing error cache policy')
+            self.assertIn('handle_response @thumbnailImage', text, f'{label} missing handle_response guard')
+            self.assertIn('response_header_timeout 15s', text, f'{label} missing bounded thumbnail timeout')
+            self.assertIn('handle /suwayomi*', text)
+            self.assertIn('response_header_timeout 300s', text)
+
     def test_unmodified_blocks_byte_identical(self):
         """Wealthfolio 8444 and Native client 4567 blocks must remain byte-identical."""
         wf_marker = "https://192.168.1.8:8444"
