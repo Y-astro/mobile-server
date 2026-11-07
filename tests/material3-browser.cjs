@@ -599,6 +599,7 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
     // Check 5 family service cards
     const familyCards = await familyPage.locator('.family-services-grid .m3-card').count();
     assert.equal(familyCards, 5, 'Family page must render exactly 5 service cards');
+    assert.equal(await familyPage.getByRole('link', { name: 'Open Music', exact: true }).getAttribute('href'), '/music/', 'Family music must use the portal-authenticated player');
     const familyText = await familyPage.locator('.family-services-grid').textContent();
     assert(!familyText.includes('undefined'), 'Family grid must not contain literal undefined text');
 
