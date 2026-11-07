@@ -1,4 +1,6 @@
 """Tests for wallpaper data models, offline preparation tools, and HTTP API integration."""
+import copy
+import errno
 import hashlib
 import importlib.util
 import io
@@ -31,6 +33,8 @@ from tools.prepare_wallpapers import (
     build_library,
     verify_library,
     publish_library,
+    publish_palettes,
+    atomic_exchange_dirs,
     generate_palettes_for_library,
     sha256_file,
     compute_display_dimensions,
@@ -844,6 +848,376 @@ class WallpaperHTTPIntegrationTests(unittest.TestCase):
         st, _, hdrs = self.request("GET", "/unknown.css")
         self.assertEqual(st, 302)
         self.assertEqual(hdrs.get("location"), "/login")
+
+
+class WallpaperPublishPalettesTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.target_dir = self.root / "wallpapers"
+        self.candidate_dir = self.root / "candidate"
+        self.old_m_sha, self.old_tm_sha = self._create_synthetic_library(self.target_dir)
+        self.cand_m_sha, self.cand_tm_sha = self._create_candidate_metadata(self.candidate_dir, self.target_dir)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _create_synthetic_library(self, lib_dir: Path, count: int = 2) -> Tuple[str, str]:
+        lib_dir.mkdir(parents=True, exist_ok=True)
+        for sub in ("originals", "display", "thumbnails"):
+            (lib_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        wallpapers = []
+        transport_files = []
+
+        for i in range(count):
+            name = f"{i:02d}. test.png"
+            orig_bytes = f"synthetic-original-payload-{i}".encode("utf-8")
+            disp_bytes = f"synthetic-display-payload-{i}".encode("utf-8")
+            thumb_bytes = f"synthetic-thumb-payload-{i}".encode("utf-8")
+
+            orig_sha = hashlib.sha256(orig_bytes).hexdigest()
+            disp_sha = hashlib.sha256(disp_bytes).hexdigest()
+            thumb_sha = hashlib.sha256(thumb_bytes).hexdigest()
+            w_id = orig_sha
+
+            (lib_dir / "originals" / name).write_bytes(orig_bytes)
+            (lib_dir / "display" / f"{w_id}.webp").write_bytes(disp_bytes)
+            (lib_dir / "thumbnails" / f"{w_id}.webp").write_bytes(thumb_bytes)
+
+            wallpapers.append({
+                "id": w_id,
+                "name": name,
+                "width": 1920,
+                "height": 1080,
+                "original": {"path": f"originals/{name}", "sha256": orig_sha, "bytes": len(orig_bytes)},
+                "display": {"path": f"display/{w_id}.webp", "sha256": disp_sha, "bytes": len(disp_bytes), "width": 1920, "height": 1080},
+                "thumbnail": {"path": f"thumbnails/{w_id}.webp", "sha256": thumb_sha, "bytes": len(thumb_bytes), "width": 320, "height": 180},
+            })
+
+            transport_files.extend([
+                {"path": f"originals/{name}", "sha256": orig_sha, "bytes": len(orig_bytes)},
+                {"path": f"display/{w_id}.webp", "sha256": disp_sha, "bytes": len(disp_bytes)},
+                {"path": f"thumbnails/{w_id}.webp", "sha256": thumb_sha, "bytes": len(thumb_bytes)},
+            ])
+
+        manifest = {"version": 1, "default_id": wallpapers[0]["id"], "wallpapers": wallpapers}
+        m_bytes = json.dumps(manifest, indent=2).encode("utf-8")
+        (lib_dir / "manifest.json").write_bytes(m_bytes)
+
+        transport_files.append({"path": "manifest.json", "sha256": hashlib.sha256(m_bytes).hexdigest(), "bytes": len(m_bytes)})
+        transport_files.sort(key=lambda x: x["path"])
+
+        tm = {
+            "version": 1,
+            "payload_entries": len(transport_files),
+            "total_actual_files": len(transport_files) + 1,
+            "total_payload_bytes": sum(f["bytes"] for f in transport_files),
+            "files": transport_files,
+        }
+        tm_bytes = json.dumps(tm, indent=2).encode("utf-8")
+        (lib_dir / "transport-manifest.json").write_bytes(tm_bytes)
+        return sha256_file(lib_dir / "manifest.json"), sha256_file(lib_dir / "transport-manifest.json")
+
+    def _create_candidate_metadata(self, cand_dir: Path, target_dir: Path, mutate_m_fn=None, mutate_tm_fn=None) -> Tuple[str, str]:
+        cand_dir.mkdir(parents=True, exist_ok=True)
+        with open(target_dir / "manifest.json", "r", encoding="utf-8") as f:
+            m = json.load(f)
+        with open(target_dir / "transport-manifest.json", "r", encoding="utf-8") as f:
+            tm = json.load(f)
+
+        for w in m["wallpapers"]:
+            w["palette"] = {role: "#1a2b3c" for role in M3_PALETTE_ROLES}
+
+        if mutate_m_fn:
+            mutate_m_fn(m)
+
+        m_bytes = json.dumps(m, indent=2).encode("utf-8")
+        (cand_dir / "manifest.json").write_bytes(m_bytes)
+        m_sha = hashlib.sha256(m_bytes).hexdigest()
+
+        for f in tm["files"]:
+            if f["path"] == "manifest.json":
+                f["sha256"] = m_sha
+                f["bytes"] = len(m_bytes)
+        tm["total_payload_bytes"] = sum(f["bytes"] for f in tm["files"])
+
+        if mutate_tm_fn:
+            mutate_tm_fn(tm)
+
+        tm_bytes = json.dumps(tm, indent=2).encode("utf-8")
+        (cand_dir / "transport-manifest.json").write_bytes(tm_bytes)
+        return m_sha, sha256_file(cand_dir / "transport-manifest.json")
+
+    def test_successful_atomic_exchange_retains_payload_hashes_and_backup(self):
+        orig_files = {}
+        for root, _, files in os.walk(self.target_dir):
+            for fn in files:
+                rel = str(Path(root).relative_to(self.target_dir) / fn)
+                if rel not in ("manifest.json", "transport-manifest.json"):
+                    fp = Path(root) / fn
+                    orig_files[rel] = (fp.stat().st_size, sha256_file(fp))
+
+        ok, msg, backup_path = publish_palettes(
+            self.candidate_dir,
+            self.target_dir,
+            self.old_m_sha,
+            self.old_tm_sha,
+        )
+        self.assertTrue(ok, msg)
+        self.assertIsNotNone(backup_path)
+        self.assertTrue(backup_path.is_dir())
+
+        # Backup retains old metadata and passes verify_library
+        bk_ok, bk_msg = verify_library(backup_path)
+        self.assertTrue(bk_ok, bk_msg)
+        self.assertEqual(sha256_file(backup_path / "manifest.json"), self.old_m_sha)
+        self.assertEqual(sha256_file(backup_path / "transport-manifest.json"), self.old_tm_sha)
+
+        # Target has new metadata and passes verify_library
+        tgt_ok, tgt_msg = verify_library(self.target_dir)
+        self.assertTrue(tgt_ok, tgt_msg)
+        self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.cand_m_sha)
+        self.assertEqual(sha256_file(self.target_dir / "transport-manifest.json"), self.cand_tm_sha)
+
+        # All payload hashes and sizes remain identical
+        for rel, (size, sha) in orig_files.items():
+            curr_fp = self.target_dir / rel
+            self.assertTrue(curr_fp.is_file(), f"Missing {rel} in published target")
+            self.assertEqual(curr_fp.stat().st_size, size, f"Size changed for {rel}")
+            self.assertEqual(sha256_file(curr_fp), sha, f"Hash changed for {rel}")
+
+    def test_idempotent_double_invocation(self):
+        ok1, msg1, backup1 = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
+        self.assertTrue(ok1, msg1)
+        self.assertIsNotNone(backup1)
+
+        ok2, msg2, backup2 = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
+        self.assertTrue(ok2, msg2)
+        self.assertIn("already up to date", msg2)
+        self.assertIsNone(backup2)
+
+    def test_wrong_old_manifest_hash_rejected(self):
+        wrong_m_sha = "0" * 64
+        ok, msg, backup = publish_palettes(self.candidate_dir, self.target_dir, wrong_m_sha, self.old_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("Target manifest SHA256", msg)
+        self.assertIsNone(backup)
+        self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
+
+    def test_wrong_old_transport_hash_rejected(self):
+        wrong_tm_sha = "1" * 64
+        ok, msg, backup = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, wrong_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("Target transport manifest SHA256", msg)
+        self.assertIsNone(backup)
+        self.assertEqual(sha256_file(self.target_dir / "transport-manifest.json"), self.old_tm_sha)
+
+    def test_candidate_nonpalette_mutation_rejected(self):
+        mutations = [
+            lambda m: m["wallpapers"][0].__setitem__("name", "mutated.png"),
+            lambda m: m["wallpapers"][0].__setitem__("width", 9999),
+            lambda m: m["wallpapers"][0].__setitem__("extra_field", "bad"),
+            lambda m: m["wallpapers"].append(copy.deepcopy(m["wallpapers"][0])),
+            lambda m: m.__setitem__("default_id", "f" * 64),
+        ]
+        for mutate in mutations:
+            cand_mut = self.root / f"cand_mut_{abs(hash(mutate))}"
+            cand_mut.mkdir()
+            c_m_sha, c_tm_sha = self._create_candidate_metadata(cand_mut, self.target_dir, mutate_m_fn=mutate)
+            ok, msg, backup = publish_palettes(cand_mut, self.target_dir, self.old_m_sha, self.old_tm_sha)
+            self.assertFalse(ok, f"Expected mutation to fail: {msg}")
+            self.assertTrue(
+                "non-palette mutations" in msg or "count mismatch" in msg or "default_id mismatch" in msg,
+                f"Unexpected rejection message: {msg}",
+            )
+            self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
+
+    def test_malformed_palette_rejected(self):
+        def drop_role(m):
+            del m["wallpapers"][0]["palette"]["primary"]
+
+        def bad_hex(m):
+            m["wallpapers"][0]["palette"]["surface"] = "rgb(0,0,0)"
+
+        def extra_role(m):
+            m["wallpapers"][0]["palette"]["bogus_role"] = "#123456"
+
+        for mutate in (drop_role, bad_hex, extra_role):
+            cand_mut = self.root / f"cand_pal_mut_{abs(hash(mutate))}"
+            cand_mut.mkdir()
+            self._create_candidate_metadata(cand_mut, self.target_dir, mutate_m_fn=mutate)
+            ok, msg, backup = publish_palettes(cand_mut, self.target_dir, self.old_m_sha, self.old_tm_sha)
+            self.assertFalse(ok, f"Expected malformed palette to fail: {msg}")
+            self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
+
+    def test_altered_image_record_in_transport_rejected(self):
+        def alter_image_record(tm):
+            for f in tm["files"]:
+                if f["path"] != "manifest.json":
+                    f["sha256"] = "e" * 64
+                    break
+
+        cand_mut = self.root / "cand_alt_img"
+        cand_mut.mkdir()
+        self._create_candidate_metadata(cand_mut, self.target_dir, mutate_tm_fn=alter_image_record)
+        ok, msg, backup = publish_palettes(cand_mut, self.target_dir, self.old_m_sha, self.old_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("Candidate transport record altered for payload file", msg)
+        self.assertEqual(sha256_file(self.target_dir / "transport-manifest.json"), self.old_tm_sha)
+
+    def test_symlink_target_and_candidate_rejected(self):
+        # Target is symlink
+        target_link = self.root / "target_symlink"
+        target_link.symlink_to(self.target_dir, target_is_directory=True)
+        ok, msg, _ = publish_palettes(self.candidate_dir, target_link, self.old_m_sha, self.old_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("symlink", msg.lower())
+
+        # Candidate is symlink
+        cand_link = self.root / "cand_symlink"
+        cand_link.symlink_to(self.candidate_dir, target_is_directory=True)
+        ok, msg, _ = publish_palettes(cand_link, self.target_dir, self.old_m_sha, self.old_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("symlink", msg.lower())
+
+        # Candidate manifest is symlink
+        cand_bad = self.root / "cand_sym_file"
+        cand_bad.mkdir()
+        shutil.copy2(self.candidate_dir / "transport-manifest.json", cand_bad / "transport-manifest.json")
+        (cand_bad / "manifest.json").symlink_to(self.candidate_dir / "manifest.json")
+        ok, msg, _ = publish_palettes(cand_bad, self.target_dir, self.old_m_sha, self.old_tm_sha)
+        self.assertFalse(ok)
+        self.assertIn("symlink", msg.lower())
+
+    def test_unsupported_exchange_preserves_original(self):
+        with patch("tools.prepare_wallpapers.atomic_exchange_dirs", side_effect=OSError(errno.ENOSYS, "renameat2 unsupported")):
+            ok, msg, backup = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
+            self.assertFalse(ok)
+            self.assertIn("Atomic directory exchange", msg)
+            self.assertIsNone(backup)
+            # Target untouched
+            ok_v, msg_v = verify_library(self.target_dir)
+            self.assertTrue(ok_v, msg_v)
+            self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
+
+    def test_post_exchange_failure_rolls_back_preserving_original(self):
+        real_verify = verify_library
+        call_count = [0]
+
+        def fail_post_verify(path):
+            call_count[0] += 1
+            if call_count[0] == 3:
+                return False, "Simulated post-exchange corruption"
+            return real_verify(path)
+
+        with patch("tools.prepare_wallpapers.verify_library", side_effect=fail_post_verify):
+            ok, msg, backup = publish_palettes(self.candidate_dir, self.target_dir, self.old_m_sha, self.old_tm_sha)
+            self.assertFalse(ok)
+            self.assertIn("Post-exchange verification failed", msg)
+            self.assertIn("rolled back target to original state", msg)
+
+        # Target restored to old state and passes verify
+        tgt_ok, tgt_msg = verify_library(self.target_dir)
+        self.assertTrue(tgt_ok, tgt_msg)
+        self.assertEqual(sha256_file(self.target_dir / "manifest.json"), self.old_m_sha)
+        self.assertEqual(sha256_file(self.target_dir / "transport-manifest.json"), self.old_tm_sha)
+
+    def test_publish_without_pillow_prerequisite(self):
+        target2 = self.root / "wallpapers_no_pil"
+        old_m, old_tm = self._create_synthetic_library(target2)
+        cand2 = self.root / "cand_no_pil"
+        c_m, c_tm = self._create_candidate_metadata(cand2, target2)
+
+        with patch.dict(sys.modules, {"PIL": None, "PIL.Image": None, "PIL.ImageOps": None}):
+            ok, msg, backup = publish_palettes(cand2, target2, old_m, old_tm)
+            self.assertTrue(ok, msg)
+            self.assertIsNotNone(backup)
+            ok_v, _ = verify_library(target2)
+            self.assertTrue(ok_v)
+
+    def test_pre_activation_drift_refused(self):
+        target3 = self.root / "wallpapers_drift"
+        old_m, old_tm = self._create_synthetic_library(target3)
+        cand3 = self.root / "cand_drift"
+        c_m, c_tm = self._create_candidate_metadata(cand3, target3)
+
+        real_link = os.link
+
+        def drift_target(src, dst):
+            (target3 / "manifest.json").write_text('{"drifted": true}', encoding="utf-8")
+            return real_link(src, dst)
+
+        with patch("os.link", side_effect=drift_target):
+            ok, msg, backup = publish_palettes(cand3, target3, old_m, old_tm)
+            self.assertFalse(ok)
+            self.assertIn("Pre-activation drift detected", msg)
+
+    def test_cli_publish_palettes(self):
+        import subprocess
+        tool_py = str(Path(__file__).resolve().parents[1] / "tools" / "prepare_wallpapers.py")
+
+        target_cli = self.root / "wallpapers_cli"
+        old_m, old_tm = self._create_synthetic_library(target_cli)
+        cand_cli = self.root / "cand_cli"
+        c_m, c_tm = self._create_candidate_metadata(cand_cli, target_cli)
+
+        cmd = [
+            sys.executable, tool_py, "publish-palettes",
+            str(cand_cli), str(target_cli),
+            "--old-manifest-sha", old_m,
+            "--old-transport-sha", old_tm,
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("PUBLISH-PALETTES OK", res.stdout)
+        self.assertIn("BACKUP PATH:", res.stdout)
+
+        # Idempotent re-run via CLI
+        res2 = subprocess.run(cmd, capture_output=True, text=True)
+        self.assertEqual(res2.returncode, 0, res2.stderr)
+        self.assertIn("already up to date", res2.stdout)
+
+    def test_real_candidate_against_real_library_copy(self):
+        cand_dir = Path("/home/astro/repos/mobile-server/.superpowers/sdd/wallpaper-palette-candidate")
+        real_src = Path("/home/astro/server-audit/2026-11-05/cloud-glass-data/.work/wallpapers-library")
+        if not cand_dir.is_dir() or not real_src.is_dir():
+            self.skipTest("Real candidate or real library source not present on host")
+
+        test_target = self.root / "real_library_target"
+        test_target.mkdir()
+        for sub in ("originals", "display", "thumbnails"):
+            (test_target / sub).mkdir()
+            for f in (real_src / sub).iterdir():
+                try:
+                    os.link(f, test_target / sub / f.name)
+                except OSError:
+                    shutil.copy2(f, test_target / sub / f.name)
+        shutil.copy2(real_src / "manifest.json", test_target / "manifest.json")
+        shutil.copy2(real_src / "transport-manifest.json", test_target / "transport-manifest.json")
+
+        old_m_sha = "47509cfdfcf804ec85b48383b755af8e7a78c0ccc43c971f76d12aeae74bb23a"
+        old_tm_sha = "be8ac6180ad71fc284f673a5858771d4d55864cf899a2911ffcb2d77367d1bb0"
+        cand_m_sha = "9be929cad6824d6e668ea7d17fb2977a180bff451309478ada73df3b0c61fca5"
+        cand_tm_sha = "3e13df8b1a7e43304acbaa4c1ff9af5b8622142ffbb351371dbd311c0301b426"
+
+        self.assertEqual(sha256_file(test_target / "manifest.json"), old_m_sha)
+        self.assertEqual(sha256_file(test_target / "transport-manifest.json"), old_tm_sha)
+
+        ok, msg, backup_path = publish_palettes(cand_dir, test_target, old_m_sha, old_tm_sha)
+        self.assertTrue(ok, msg)
+        self.assertIsNotNone(backup_path)
+        self.assertTrue(backup_path.is_dir())
+
+        bk_ok, bk_msg = verify_library(backup_path)
+        self.assertTrue(bk_ok, bk_msg)
+        self.assertEqual(sha256_file(backup_path / "manifest.json"), old_m_sha)
+        self.assertEqual(sha256_file(backup_path / "transport-manifest.json"), old_tm_sha)
+
+        tgt_ok, tgt_msg = verify_library(test_target)
+        self.assertTrue(tgt_ok, tgt_msg)
+        self.assertEqual(sha256_file(test_target / "manifest.json"), cand_m_sha)
+        self.assertEqual(sha256_file(test_target / "transport-manifest.json"), cand_tm_sha)
 
 
 if __name__ == "__main__":
