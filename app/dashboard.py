@@ -858,6 +858,38 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.end_headers()
             return
 
+        if self.path.split("?", 1)[0] == "/api/music-auth-check":
+            fwd_uri = self.headers.get("X-Forwarded-Uri", "")
+            if not user or not USER_STORE.exists(user):
+                if "/api/" in fwd_uri or "/rest/" in fwd_uri:
+                    self.send_response(401)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Cache-Control", "no-store, private")
+                    self.end_headers()
+                    self.wfile.write(b'{"status":"error","message":"Unauthorized"}')
+                else:
+                    self.send_response(302)
+                    self.send_header("Location", "/login")
+                    self.send_header("Cache-Control", "no-store, private")
+                    self.end_headers()
+                return
+
+            if is_admin(user):
+                music_user = "astro-web"
+                music_role = "admin"
+            else:
+                music_user = "family-music"
+                music_role = "family"
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, private")
+            self.send_header("X-Forwarded-User", user)
+            self.send_header("X-Music-User", music_user)
+            self.send_header("X-Music-Role", music_role)
+            self.end_headers()
+            return
+
         if self.path.split("?", 1)[0] in ("/api/auth-check", "/api/auth-check-admin"):
             fwd_uri = self.headers.get("X-Forwarded-Uri", "")
             if not user:

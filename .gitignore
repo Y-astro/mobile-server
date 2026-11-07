@@ -16,3 +16,4 @@ backups/
 artifacts/
 bin/mobile-gateway
 bin/tor-exit-node
+.sdd/

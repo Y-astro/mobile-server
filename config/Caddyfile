@@ -16,6 +16,8 @@
 
 (portal_body) {
 	encode zstd gzip
+	request_header -X-Music-User
+	request_header -Remote-User
 
     @portalPages path / /login /api/login /api/logout
     header @portalPages {
@@ -155,8 +157,43 @@
 
 	redir /music /music/ 308
 
+	handle /music/rest/* {
+		reverse_proxy 127.0.0.1:4533 {
+			header_up -X-Music-User
+			header_up -Remote-User
+		}
+	}
+
+	@musicNativeAuth {
+		method POST
+		path /music/auth/login
+	}
+	handle @musicNativeAuth {
+		reverse_proxy 127.0.0.1:4533 {
+			header_up -X-Music-User
+			header_up -Remote-User
+		}
+	}
+
+	@musicNativeBearer {
+		header x-nd-authorization *
+		not header Cookie *session_token*
+	}
+	handle @musicNativeBearer {
+		reverse_proxy 127.0.0.1:4533 {
+			header_up -X-Music-User
+			header_up -Remote-User
+		}
+	}
+
 	handle /music/* {
-		reverse_proxy 127.0.0.1:4533
+		forward_auth 127.0.0.1:8001 {
+			uri /api/music-auth-check
+			copy_headers X-Music-User
+		}
+		reverse_proxy 127.0.0.1:4533 {
+			header_up -Remote-User
+		}
 	}
 
 	redir /suwayomi /suwayomi/ 308
