@@ -19,6 +19,7 @@ export interface CoverMemoryStoreOptions {
     maxStoreBytes?: number;
     maxImageBytes?: number;
     backgroundConcurrency?: number;
+    fetchTimeoutMs?: number;
 }
 
 export class CoverMemoryStore {
@@ -28,20 +29,25 @@ export class CoverMemoryStore {
     public static readonly DEFAULT_MAX_IMAGE_BYTES = 16 * 1024 * 1024;
     // At most 2 concurrent low-priority background transfers
     public static readonly DEFAULT_BACKGROUND_CONCURRENCY = 2;
+    // 15 seconds fetch timeout per background cover
+    public static readonly DEFAULT_FETCH_TIMEOUT_MS = 15000;
 
     private readonly maxStoreBytes: number;
     private readonly maxImageBytes: number;
     private readonly backgroundConcurrency: number;
+    private readonly fetchTimeoutMs: number;
 
     private readonly entries = new Map<string, CoverMemoryEntry>();
     private currentBytes: number = 0;
     private accessCounter: number = 0;
+    private generation: number = 0;
 
     private backgroundQueue: string[] = [];
     private queuedSet = new Set<string>();
+    private readonly inFlightSet = new Set<string>();
     private activeBackgroundTransfers: number = 0;
     private activeForegroundTransfers: number = 0;
-    private abortControllers = new Map<string, AbortController>();
+    private readonly abortControllers = new Map<string, AbortController>();
 
     private fetcher?: (url: string, signal: AbortSignal) => Promise<Blob>;
 
@@ -49,6 +55,7 @@ export class CoverMemoryStore {
         this.maxStoreBytes = options.maxStoreBytes ?? CoverMemoryStore.DEFAULT_MAX_STORE_BYTES;
         this.maxImageBytes = options.maxImageBytes ?? CoverMemoryStore.DEFAULT_MAX_IMAGE_BYTES;
         this.backgroundConcurrency = options.backgroundConcurrency ?? CoverMemoryStore.DEFAULT_BACKGROUND_CONCURRENCY;
+        this.fetchTimeoutMs = options.fetchTimeoutMs ?? CoverMemoryStore.DEFAULT_FETCH_TIMEOUT_MS;
     }
 
     public setFetcher(fetcher: (url: string, signal: AbortSignal) => Promise<Blob>): void {
@@ -57,7 +64,8 @@ export class CoverMemoryStore {
 
     /**
      * Checks if a URL is an allowed in-library manga thumbnail for the configured server.
-     * Prevents cross-origin credential leaks and chapter-page/external-domain caching.
+     * Prevents cross-origin credential leaks and non-thumbnail/external caching.
+     * Supports subpaths, e.g. baseUrl 'http://localhost:8080/suwayomi/' and '/suwayomi/api/v1/manga/162/thumbnail'.
      */
     public static isAllowedCoverUrl(url: string, configuredBaseUrl?: string): boolean {
         if (!url || typeof url !== 'string') {
@@ -65,18 +73,35 @@ export class CoverMemoryStore {
         }
 
         try {
-            const parsed = configuredBaseUrl
-                ? new URL(url, configuredBaseUrl)
-                : new URL(url, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+            const fallbackOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8080';
+            const baseParsed = configuredBaseUrl
+                ? new URL(configuredBaseUrl, fallbackOrigin)
+                : new URL(fallbackOrigin);
 
-            if (configuredBaseUrl) {
-                const baseParsed = new URL(configuredBaseUrl, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
-                if (parsed.origin !== baseParsed.origin) {
-                    return false;
-                }
+            const parsed = new URL(url, baseParsed.href);
+
+            // Origin check: must match configured server origin strictly
+            if (parsed.origin !== baseParsed.origin) {
+                return false;
             }
 
-            const pathname = parsed.pathname;
+            // Protocol check: only http or https
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                return false;
+            }
+
+            // Path check: relative to base URL pathname
+            let pathname = parsed.pathname;
+            const basePath = baseParsed.pathname.replace(/\/+$/, '');
+            if (basePath.length > 0 && pathname.startsWith(basePath)) {
+                pathname = pathname.slice(basePath.length);
+            }
+
+            // Ensure leading slash for regex
+            if (!pathname.startsWith('/')) {
+                pathname = `/${pathname}`;
+            }
+
             return /^(?:\/api\/v1)?\/manga\/\d+\/thumbnail\/?$/.test(pathname);
         } catch {
             return false;
@@ -104,9 +129,12 @@ export class CoverMemoryStore {
             return null;
         }
 
-        // Never cache HTML responses (e.g. auth redirect, error page)
-        if (blob.type && blob.type.toLowerCase().includes('text/html')) {
-            return null;
+        // Never admit HTML or non-image content (e.g. auth redirect or error page)
+        if (blob.type) {
+            const lowerType = blob.type.toLowerCase();
+            if (lowerType.includes('text/html') || !lowerType.startsWith('image/')) {
+                return null;
+            }
         }
 
         const existing = this.entries.get(url);
@@ -141,11 +169,11 @@ export class CoverMemoryStore {
 
     private evictOldest(): void {
         let oldestUrl: string | undefined;
-        let oldestTime = Infinity;
+        let oldestOrder = Infinity;
 
         for (const [url, entry] of this.entries.entries()) {
-            if (entry.lastAccessed < oldestTime) {
-                oldestTime = entry.lastAccessed;
+            if (entry.lastAccessed < oldestOrder) {
+                oldestOrder = entry.lastAccessed;
                 oldestUrl = url;
             }
         }
@@ -170,6 +198,10 @@ export class CoverMemoryStore {
         return true;
     }
 
+    /**
+     * Reconcile current library titles:
+     * Evicts stored covers and cancels in-flight/queued requests for manga not in active list.
+     */
     public reconcile(currentLibraryUrls: string[]): void {
         const activeSet = new Set(currentLibraryUrls);
         const toEvict: string[] = [];
@@ -184,15 +216,32 @@ export class CoverMemoryStore {
             this.evict(url);
         }
 
+        // Cancel in-flight requests that are no longer in library
+        for (const [url, controller] of this.abortControllers.entries()) {
+            if (!activeSet.has(url)) {
+                controller.abort(new Error('Removed from library during fetch'));
+                this.abortControllers.delete(url);
+                this.inFlightSet.delete(url);
+            }
+        }
+
+        // Filter background queue
         this.backgroundQueue = this.backgroundQueue.filter((url) => activeSet.has(url));
         this.queuedSet = new Set(this.backgroundQueue);
     }
 
+    /**
+     * Clear all stored object URLs and abort pending requests on logout, account switch, or server change.
+     * Uses generation guard to ensure late-resolving promises cannot store old bytes or corrupt active count.
+     */
     public clear(): void {
+        this.generation++;
+
         for (const controller of this.abortControllers.values()) {
-            controller.abort();
+            controller.abort(new Error('Store cleared'));
         }
         this.abortControllers.clear();
+        this.inFlightSet.clear();
 
         for (const entry of this.entries.values()) {
             if (typeof URL !== 'undefined' && URL.revokeObjectURL && entry.objectUrl.startsWith('blob:')) {
@@ -209,6 +258,19 @@ export class CoverMemoryStore {
 
     public onForegroundStart(): void {
         this.activeForegroundTransfers++;
+        // Preemptively abort in-flight background transfers to free socket capacity for foreground
+        if (this.abortControllers.size > 0) {
+            for (const [url, controller] of this.abortControllers.entries()) {
+                controller.abort(new Error('Preempted by foreground image request'));
+                // Put back in queue to retry when foreground is idle
+                if (!this.queuedSet.has(url) && !this.entries.has(url)) {
+                    this.backgroundQueue.unshift(url);
+                    this.queuedSet.add(url);
+                }
+            }
+            this.abortControllers.clear();
+            this.inFlightSet.clear();
+        }
     }
 
     public onForegroundEnd(): void {
@@ -220,7 +282,7 @@ export class CoverMemoryStore {
 
     public enqueue(urls: string[]): void {
         for (const url of urls) {
-            if (!this.entries.has(url) && !this.queuedSet.has(url)) {
+            if (!this.entries.has(url) && !this.queuedSet.has(url) && !this.inFlightSet.has(url)) {
                 this.backgroundQueue.push(url);
                 this.queuedSet.add(url);
             }
@@ -245,25 +307,45 @@ export class CoverMemoryStore {
             const url = this.backgroundQueue.shift()!;
             this.queuedSet.delete(url);
 
-            if (this.entries.has(url)) {
+            if (this.entries.has(url) || this.inFlightSet.has(url)) {
                 continue;
             }
 
+            this.inFlightSet.add(url);
             this.activeBackgroundTransfers++;
+            const transferGen = this.generation;
             const controller = new AbortController();
             this.abortControllers.set(url, controller);
 
+            // Bounded timeout so missing/hung image cannot block a slot indefinitely
+            const timeoutId = setTimeout(() => {
+                controller.abort(new Error('Background fetch timed out'));
+            }, this.fetchTimeoutMs);
+
             this.fetcher(url, controller.signal)
                 .then((blob) => {
+                    clearTimeout(timeoutId);
+                    if (this.generation !== transferGen) {
+                        return;
+                    }
                     this.abortControllers.delete(url);
+                    this.inFlightSet.delete(url);
                     this.put(url, blob);
                 })
                 .catch(() => {
+                    clearTimeout(timeoutId);
+                    if (this.generation !== transferGen) {
+                        return;
+                    }
                     this.abortControllers.delete(url);
+                    this.inFlightSet.delete(url);
                 })
                 .finally(() => {
-                    this.activeBackgroundTransfers--;
-                    this.pump();
+                    clearTimeout(timeoutId);
+                    if (this.generation === transferGen) {
+                        this.activeBackgroundTransfers = Math.max(0, this.activeBackgroundTransfers - 1);
+                        this.pump();
+                    }
                 });
         }
     }
@@ -277,6 +359,7 @@ export class CoverMemoryStore {
         activeBackgroundTransfers: number;
         activeForegroundTransfers: number;
         isPaused: boolean;
+        generation: number;
     } {
         return {
             entryCount: this.entries.size,
@@ -287,6 +370,7 @@ export class CoverMemoryStore {
             activeBackgroundTransfers: this.activeBackgroundTransfers,
             activeForegroundTransfers: this.activeForegroundTransfers,
             isPaused: this.isPaused(),
+            generation: this.generation,
         };
     }
 }
