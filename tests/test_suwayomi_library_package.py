@@ -52,7 +52,7 @@ class LibraryPackageTests(unittest.TestCase):
             self.assertEqual(untouched(old), untouched(new))
             for owner in module.OWNERS:
                 self.assertEqual(new.read(owner + '.class'), CLASS + b'new')
-            self.assertEqual(len(result['class_sha256']), 3)
+            self.assertEqual(len(result['class_sha256']), len(module.OWNERS))
 
     def test_rejects_drift_missing_owner_and_wrong_bytecode(self):
         self.pins['base_jar_sha256'] = '0' * 64

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replace three reviewed GraphQL class owners; preserve the current custom JAR."""
+"""Replace reviewed GraphQL class owners; preserve the current custom JAR."""
 import argparse
 import copy
 import hashlib
@@ -17,6 +17,12 @@ OWNERS = (
     'suwayomi/tachidesk/graphql/types/MangaType',
     'suwayomi/tachidesk/graphql/dataLoaders/ChapterFlagCountForMangaDataLoader',
     'suwayomi/tachidesk/graphql/dataLoaders/MangaChapterStats',
+    'suwayomi/tachidesk/graphql/dataLoaders/LastReadChapterForMangaDataLoader',
+    'suwayomi/tachidesk/graphql/dataLoaders/LatestReadChapterForMangaDataLoader',
+    'suwayomi/tachidesk/graphql/dataLoaders/LatestFetchedChapterForMangaDataLoader',
+    'suwayomi/tachidesk/graphql/dataLoaders/LatestUploadedChapterForMangaDataLoader',
+    'suwayomi/tachidesk/graphql/dataLoaders/FirstUnreadChapterForMangaDataLoader',
+    'suwayomi/tachidesk/graphql/dataLoaders/HighestNumberedChapterForMangaDataLoader',
 )
 METADATA = 'META-INF/mobile-server-library-query.json'
 

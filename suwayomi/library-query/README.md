@@ -1,4 +1,4 @@
-# Count-only library queries
+# Library query row loading
 
 The website requests `mangas.nodes.chapters.totalCount`. The original resolver loads
 and constructs every chapter before returning that count. This patch uses the
@@ -10,10 +10,12 @@ selection set. No persistent cache, schema change, or database migration is adde
 ## Source and build
 
 `source-pin.json` identifies the upstream commit, original source hashes, current
-custom base JAR, and three replaceable class owners. Apply `library-count.patch`
+custom base JAR, and nine replaceable class owners. Apply `library-count.patch`
 to a clean checkout of that upstream commit after checking those source hashes.
 Do not modify a shared build checkout. The patch changes only `MangaType.kt` and
-`ChapterDataLoader.kt`.
+`ChapterDataLoader.kt`. Six chapter selectors also use SQL `DISTINCT ON (manga)`
+to return the first matching row per manga, retaining their existing predicates
+and within-manga ordering. Both H2 and PostgreSQL support this operation.
 
 Build the patched project using its pinned Kotlin 2.4.10 compiler and JVM target
 21. Alternatively, compile those two files against the pinned custom JAR and its
@@ -25,9 +27,11 @@ Compile `tests/LibraryCountProof.kt` against that same dependency classpath. Run
 classes first on the classpath and `-Xmx384m`. It creates only a fictional,
 in-memory H2 database. The original build must fail with
 `Count-only selection loaded full chapter rows`; the patched build must pass all
-17 cases. They cover empty and all-read manga, batched counts, existing flags,
+17 GraphQL cases plus six selector parity cases. They cover empty and all-read manga, batched counts, existing flags,
 aliases, fragments, conditional fields, mixed count/full selections, pagination,
-fresh requests, and mutation cache invalidation. The H2 fixture explicitly permits
+fresh requests, and mutation cache invalidation. Selector checks compare with
+the original full-row algorithm, including tied dates/orders, missing manga,
+empty batches, read/unread filters, and non-positive chapter numbers. The H2 fixture explicitly permits
 upstream unlimited VARCHAR lengths, matching the existing column model.
 
 Package only the reviewed owners:

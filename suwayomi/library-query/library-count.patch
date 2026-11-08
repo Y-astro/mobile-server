@@ -1,13 +1,13 @@
 --- a/server/src/main/kotlin/suwayomi/tachidesk/graphql/types/MangaType.kt
 +++ b/server/src/main/kotlin/suwayomi/tachidesk/graphql/types/MangaType.kt
-@@ -12,6 +12,7 @@
- import graphql.schema.DataFetchingEnvironment
- import org.jetbrains.exposed.v1.core.ResultRow
- import suwayomi.tachidesk.graphql.dataLoaders.MangaChapterStats
-+import suwayomi.tachidesk.graphql.types.ChapterNodeList.Companion.toNodeList
- import suwayomi.tachidesk.graphql.server.primitives.Cursor
- import suwayomi.tachidesk.graphql.server.primitives.Edge
+@@ -17,6 +17,7 @@
  import suwayomi.tachidesk.graphql.server.primitives.Node
+ import suwayomi.tachidesk.graphql.server.primitives.NodeList
+ import suwayomi.tachidesk.graphql.server.primitives.PageInfo
++import suwayomi.tachidesk.graphql.types.ChapterNodeList.Companion.toNodeList
+ import suwayomi.tachidesk.manga.impl.MangaList
+ import suwayomi.tachidesk.manga.model.dataclass.MangaDataClass
+ import suwayomi.tachidesk.manga.model.dataclass.toGenreList
 @@ -153,8 +154,19 @@
      fun highestNumberedChapter(dataFetchingEnvironment: DataFetchingEnvironment): CompletableFuture<ChapterType?> =
          dataFetchingEnvironment.getValueFromDataLoader("HighestNumberedChapterForMangaDataLoader", id)
@@ -73,3 +73,69 @@
                          )
                      }
                  }
+@@ -175,8 +181,9 @@
+                     val lastReadChaptersByMangaId =
+                         ChapterTable
+                             .selectAll()
++                            .withDistinctOn(ChapterTable.manga)
+                             .where { (ChapterTable.manga inList ids) }
+-                            .orderBy(ChapterTable.lastReadAt to SortOrder.DESC)
++                            .orderBy(ChapterTable.manga to SortOrder.ASC, ChapterTable.lastReadAt to SortOrder.DESC)
+                             .groupBy { it[ChapterTable.manga].value }
+                     ids.map { id -> lastReadChaptersByMangaId[id]?.let { chapters -> ChapterType(chapters.first()) } }
+                 }
+@@ -195,8 +202,9 @@
+                     val latestReadChaptersByMangaId =
+                         ChapterTable
+                             .selectAll()
++                            .withDistinctOn(ChapterTable.manga)
+                             .where { (ChapterTable.manga inList ids) and (ChapterTable.isRead eq true) }
+-                            .orderBy(ChapterTable.sourceOrder to SortOrder.DESC)
++                            .orderBy(ChapterTable.manga to SortOrder.ASC, ChapterTable.sourceOrder to SortOrder.DESC)
+                             .groupBy { it[ChapterTable.manga].value }
+                     ids.map { id -> latestReadChaptersByMangaId[id]?.let { chapters -> ChapterType(chapters.first()) } }
+                 }
+@@ -215,8 +223,9 @@
+                     val latestFetchedChaptersByMangaId =
+                         ChapterTable
+                             .selectAll()
++                            .withDistinctOn(ChapterTable.manga)
+                             .where { (ChapterTable.manga inList ids) }
+-                            .orderBy(ChapterTable.fetchedAt to SortOrder.DESC, ChapterTable.sourceOrder to SortOrder.DESC)
++                            .orderBy(ChapterTable.manga to SortOrder.ASC, ChapterTable.fetchedAt to SortOrder.DESC, ChapterTable.sourceOrder to SortOrder.DESC)
+                             .groupBy { it[ChapterTable.manga].value }
+                     ids.map { id -> latestFetchedChaptersByMangaId[id]?.let { chapters -> ChapterType(chapters.first()) } }
+                 }
+@@ -235,8 +244,9 @@
+                     val latestUploadedChaptersByMangaId =
+                         ChapterTable
+                             .selectAll()
++                            .withDistinctOn(ChapterTable.manga)
+                             .where { (ChapterTable.manga inList ids) }
+-                            .orderBy(ChapterTable.date_upload to SortOrder.DESC, ChapterTable.sourceOrder to SortOrder.DESC)
++                            .orderBy(ChapterTable.manga to SortOrder.ASC, ChapterTable.date_upload to SortOrder.DESC, ChapterTable.sourceOrder to SortOrder.DESC)
+                             .groupBy { it[ChapterTable.manga].value }
+                     ids.map { id -> latestUploadedChaptersByMangaId[id]?.let { chapters -> ChapterType(chapters.first()) } }
+                 }
+@@ -255,8 +265,9 @@
+                     val firstUnreadChaptersByMangaId =
+                         ChapterTable
+                             .selectAll()
++                            .withDistinctOn(ChapterTable.manga)
+                             .where { (ChapterTable.manga inList ids) and (ChapterTable.isRead eq false) }
+-                            .orderBy(ChapterTable.sourceOrder to SortOrder.ASC)
++                            .orderBy(ChapterTable.manga to SortOrder.ASC, ChapterTable.sourceOrder to SortOrder.ASC)
+                             .groupBy { it[ChapterTable.manga].value }
+                     ids.map { id -> firstUnreadChaptersByMangaId[id]?.let { chapters -> ChapterType(chapters.first()) } }
+                 }
+@@ -275,8 +286,9 @@
+                     val highestNumberedChaptersByMangaId =
+                         ChapterTable
+                             .selectAll()
++                            .withDistinctOn(ChapterTable.manga)
+                             .where { (ChapterTable.manga inList ids) and (ChapterTable.chapter_number greater 0f) }
+-                            .orderBy(ChapterTable.chapter_number to SortOrder.DESC_NULLS_LAST)
++                            .orderBy(ChapterTable.manga to SortOrder.ASC, ChapterTable.chapter_number to SortOrder.DESC_NULLS_LAST)
+                             .groupBy { it[ChapterTable.manga].value }
+                     ids.map { id ->
+                         highestNumberedChaptersByMangaId[id]

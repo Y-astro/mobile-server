@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 
+import com.expediagroup.graphql.dataloader.KotlinDataLoader
 import graphql.ExecutionInput
 import graphql.GraphQL
 import graphql.GraphQLContext
@@ -12,6 +13,14 @@ import graphql.schema.idl.SchemaParser
 import kotlinx.serialization.json.JsonObject
 import org.dataloader.DataLoaderFactory
 import org.dataloader.DataLoaderRegistry
+import org.jetbrains.exposed.v1.core.Expression
+import org.jetbrains.exposed.v1.core.Op
+import org.jetbrains.exposed.v1.core.SortOrder
+import org.jetbrains.exposed.v1.core.and
+import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.greater
+import org.jetbrains.exposed.v1.core.inList
+import org.jetbrains.exposed.v1.jdbc.update
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.SchemaUtils
 import org.jetbrains.exposed.v1.jdbc.insert
@@ -22,6 +31,14 @@ import suwayomi.tachidesk.graphql.dataLoaders.ChaptersForMangaDataLoader
 import suwayomi.tachidesk.graphql.server.primitives.GraphQLCursor
 import suwayomi.tachidesk.graphql.types.ChapterNodeList
 import suwayomi.tachidesk.graphql.types.MangaType
+import suwayomi.tachidesk.graphql.types.ChapterType
+import suwayomi.tachidesk.graphql.dataLoaders.LastReadChapterForMangaDataLoader
+import suwayomi.tachidesk.graphql.dataLoaders.LatestReadChapterForMangaDataLoader
+import suwayomi.tachidesk.graphql.dataLoaders.LatestFetchedChapterForMangaDataLoader
+import suwayomi.tachidesk.graphql.dataLoaders.LatestUploadedChapterForMangaDataLoader
+import suwayomi.tachidesk.graphql.dataLoaders.FirstUnreadChapterForMangaDataLoader
+import suwayomi.tachidesk.graphql.dataLoaders.HighestNumberedChapterForMangaDataLoader
+
 import suwayomi.tachidesk.manga.model.table.ChapterTable
 import suwayomi.tachidesk.manga.model.table.MangaTable
 import suwayomi.tachidesk.server.ServerConfig
@@ -150,5 +167,40 @@ fun main() {
     val mutation = run(graph, "mutation{a:add(id:2,number:1){chapters{totalCount}} b:add(id:2,number:2){chapters{totalCount}}}")
     check(mutation.objectAt("a").objectAt("chapters")["totalCount"] == 1)
     check(mutation.objectAt("b").objectAt("chapters")["totalCount"] == 2)
-    println("Library count proof: $cases GraphQL/H2 cases passed")
+    // Compare each bounded selector with the original full-row algorithm, including ties.
+    transaction {
+        val rows = ChapterTable.selectAll().orderBy(ChapterTable.id to SortOrder.ASC).toList()
+        rows.forEachIndexed { index, row ->
+            ChapterTable.update({ ChapterTable.id eq row[ChapterTable.id] }) {
+                it[sourceOrder] = index % 3
+                it[lastReadAt] = (index % 2).toLong() * 100
+                it[fetchedAt] = (index % 3).toLong() * 100
+                it[date_upload] = (index % 4).toLong() * 100
+                it[chapter_number] = when (index % 5) { 0 -> -1f; 1 -> 0f; else -> (index % 3 + 1).toFloat() }
+            }
+        }
+    }
+    data class Selector(val loader: KotlinDataLoader<Int, ChapterType>, val filter: Op<Boolean>, val order: List<Pair<Expression<*>, SortOrder>>)
+    val selectors = listOf(
+        Selector(LastReadChapterForMangaDataLoader(), Op.TRUE, listOf(ChapterTable.lastReadAt to SortOrder.DESC)),
+        Selector(LatestReadChapterForMangaDataLoader(), ChapterTable.isRead eq true, listOf(ChapterTable.sourceOrder to SortOrder.DESC)),
+        Selector(LatestFetchedChapterForMangaDataLoader(), Op.TRUE, listOf(ChapterTable.fetchedAt to SortOrder.DESC, ChapterTable.sourceOrder to SortOrder.DESC)),
+        Selector(LatestUploadedChapterForMangaDataLoader(), Op.TRUE, listOf(ChapterTable.date_upload to SortOrder.DESC, ChapterTable.sourceOrder to SortOrder.DESC)),
+        Selector(FirstUnreadChapterForMangaDataLoader(), ChapterTable.isRead eq false, listOf(ChapterTable.sourceOrder to SortOrder.ASC)),
+        Selector(HighestNumberedChapterForMangaDataLoader(), ChapterTable.chapter_number greater 0f, listOf(ChapterTable.chapter_number to SortOrder.DESC_NULLS_LAST)),
+    )
+    val ids = listOf(3, 2, 1, 4, 9999)
+    for (selector in selectors) {
+        val expected = transaction {
+            val groups = ChapterTable.selectAll().where { (ChapterTable.manga inList ids) and selector.filter }
+                .orderBy(*selector.order.toTypedArray()).groupBy { it[ChapterTable.manga].value }
+            ids.map { id -> groups[id]?.firstOrNull()?.get(ChapterTable.id)?.value }
+        }
+        val loader = selector.loader.getDataLoader(GraphQLContext.getDefault())
+        val future = loader.loadMany(ids)
+        loader.dispatchAndJoin()
+        check(future.join().map { it?.id } == expected) { "Selector differs: ${selector.loader.dataLoaderName}" }
+        check(selector.loader.getDataLoader(GraphQLContext.getDefault()).loadMany(emptyList()).join().isEmpty())
+    }
+    println("Library count proof: $cases GraphQL/H2 cases and ${selectors.size} selector parity cases passed")
 }

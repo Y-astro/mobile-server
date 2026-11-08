@@ -8,7 +8,13 @@
   "class_owners": [
     "suwayomi/tachidesk/graphql/types/MangaType",
     "suwayomi/tachidesk/graphql/dataLoaders/ChapterFlagCountForMangaDataLoader",
-    "suwayomi/tachidesk/graphql/dataLoaders/MangaChapterStats"
+    "suwayomi/tachidesk/graphql/dataLoaders/MangaChapterStats",
+    "suwayomi/tachidesk/graphql/dataLoaders/LastReadChapterForMangaDataLoader",
+    "suwayomi/tachidesk/graphql/dataLoaders/LatestReadChapterForMangaDataLoader",
+    "suwayomi/tachidesk/graphql/dataLoaders/LatestFetchedChapterForMangaDataLoader",
+    "suwayomi/tachidesk/graphql/dataLoaders/LatestUploadedChapterForMangaDataLoader",
+    "suwayomi/tachidesk/graphql/dataLoaders/FirstUnreadChapterForMangaDataLoader",
+    "suwayomi/tachidesk/graphql/dataLoaders/HighestNumberedChapterForMangaDataLoader"
   ],
   "kotlin_version": "2.4.10",
   "jvm_target": 21
