@@ -30,6 +30,17 @@ VALID_JPEG_BYTES = (
 
 
 class TestSuwayomiCoverPublication(unittest.TestCase):
+    def test_android_platform_atomic_noreplace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, target = Path(directory) / "source", Path(directory) / "target"
+            source.write_bytes(b"first")
+            with patch("tools.publish_suwayomi_covers.sys.platform", "android"):
+                self.assertTrue(_rename_noreplace(source, target))
+                source.write_bytes(b"second")
+                self.assertFalse(_rename_noreplace(source, target))
+            self.assertEqual(target.read_bytes(), b"first")
+            self.assertEqual(source.read_bytes(), b"second")
+
     def setUp(self):
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.base_dir = Path(self.tmp_dir.name)

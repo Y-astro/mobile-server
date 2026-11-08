@@ -48,7 +48,7 @@ def _rename_noreplace(src: Path, dst: Path, dir_fd: int = AT_FDCWD) -> bool:
     Returns False if dst already exists (errno.EEXIST).
     Raises OSError on any other failure or if renameat2 is unavailable.
     """
-    if sys.platform != "linux":
+    if sys.platform not in ("linux", "android"):
         raise OSError(errno.ENOSYS, "Atomic publication requires Linux/Android")
     src_bytes = os.fsencode(src)
     dst_bytes = os.fsencode(dst)
