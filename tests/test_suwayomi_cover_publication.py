@@ -52,6 +52,7 @@ class TestSuwayomiCoverPublication(unittest.TestCase):
             "canonical_url": f"https://static.mfcdn.nl/test/{manga_id}.jpg",
             "filename": f"images/{manga_id}.jpg",
             "bytes": len(data),
+            "format": "JPEG", "width": 10, "height": 10,
             "sha256": sha256,
         }
 
@@ -162,6 +163,7 @@ class TestSuwayomiCoverPublication(unittest.TestCase):
             "canonical_url": "https://static.mfcdn.nl/test/108.jpg",
             "filename": "images/108.jpg",
             "bytes": len(VALID_JPEG_BYTES),
+            "format": "JPEG", "width": 10, "height": 10,
             "sha256": hashlib.sha256(VALID_JPEG_BYTES).hexdigest(),
         }
         self._write_manifest([entry, entry2])
@@ -248,6 +250,101 @@ class TestSuwayomiCoverPublication(unittest.TestCase):
             # Ensure temp file was cleaned up
             temp_files = [f for f in os.listdir(self.target_dir) if f.startswith(".tmp_pub")]
             self.assertEqual(temp_files, [])
+
+
+    def test_verified_bytes_are_not_reread_after_validation(self):
+        entry = self._create_staged_cover(107)
+        self._write_manifest([entry])
+        def mutate_after_verify(*args):
+            result = verify_manifest_and_staged_files(*args)
+            (self.images_dir / "107.jpg").write_bytes(b"changed after verification")
+            return result
+        with patch("tools.publish_suwayomi_covers.verify_manifest_and_staged_files", side_effect=mutate_after_verify):
+            result = publish_covers(self.staging_dir, self.target_dir, apply=True)
+        self.assertEqual(result["published"], 1)
+        self.assertEqual((self.target_dir / "107.jpg").read_bytes(), VALID_JPEG_BYTES)
+
+    def test_parent_symlink_and_extra_file_rejected(self):
+        self._write_manifest([self._create_staged_cover(107)])
+        extra = self.images_dir / "unexpected.jpg"
+        extra.write_bytes(VALID_JPEG_BYTES)
+        self.assertFalse(verify_manifest_and_staged_files(self.staging_dir)[0])
+        extra.unlink()
+        real = self.base_dir / "moved-images"
+        self.images_dir.rename(real)
+        self.images_dir.symlink_to(real, target_is_directory=True)
+        self.assertFalse(verify_manifest_and_staged_files(self.staging_dir)[0])
+
+    def test_boolean_id_and_lookalike_cdn_rejected(self):
+        entry = self._create_staged_cover(107)
+        for key, value in [("manga_id", True), ("manga_id", 2**31),
+                           ("canonical_url", "https://static.mfcdn.nl.evil.test/x.jpg"),
+                           ("canonical_url", "https://s.mfcdn.nl/x.jpg")]:
+            with self.subTest(key=key, value=value):
+                self._write_manifest([{**entry, key: value}])
+                self.assertFalse(verify_manifest_and_staged_files(self.staging_dir)[0])
+
+    def test_real_raced_file_preserved_and_complete_temp_only(self):
+        self._write_manifest([self._create_staged_cover(107)])
+        def create_racer(src, dst, dir_fd):
+            with os.fdopen(os.open(src, os.O_RDONLY, dir_fd=dir_fd), "rb") as image:
+                self.assertEqual(image.read(), VALID_JPEG_BYTES)
+            self.assertFalse((self.target_dir / dst).exists())
+            (self.target_dir / dst).write_bytes(b"concurrent Java cache")
+            return _rename_noreplace(src, dst, dir_fd)
+        with patch("tools.publish_suwayomi_covers._rename_noreplace", side_effect=create_racer):
+            result = publish_covers(self.staging_dir, self.target_dir, apply=True)
+        self.assertEqual(result["skipped_race"], 1)
+        self.assertEqual((self.target_dir / "107.jpg").read_bytes(), b"concurrent Java cache")
+        self.assertEqual([p for p in self.target_dir.iterdir() if p.name.startswith(".tmp_pub")], [])
+
+    def test_interrupted_file_fsync_has_no_final_path(self):
+        self._write_manifest([self._create_staged_cover(107)])
+        with patch("tools.publish_suwayomi_covers.os.fsync", side_effect=OSError(errno.EIO, "injected write failure")):
+            result = publish_covers(self.staging_dir, self.target_dir, apply=True)
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertEqual(list(self.target_dir.iterdir()), [])
+
+    def test_unowned_temp_collision_is_not_deleted(self):
+        self._write_manifest([self._create_staged_cover(107)])
+        name = f".tmp_pub_{os.getpid()}_107_fixed.jpg"
+        collision = self.target_dir / name
+        collision.write_bytes(b"preserve this existing file")
+        class FixedUuid:
+            hex = "fixed"
+        with patch("tools.publish_suwayomi_covers.uuid.uuid4", return_value=FixedUuid()):
+            result = publish_covers(self.staging_dir, self.target_dir, apply=True)
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertEqual(collision.read_bytes(), b"preserve this existing file")
+
+
+    def test_unsupported_atomic_rename_fails_closed(self):
+        self._write_manifest([self._create_staged_cover(107)])
+        with patch("tools.publish_suwayomi_covers._get_libc", return_value=None):
+            result = publish_covers(self.staging_dir, self.target_dir, apply=True)
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertEqual(list(self.target_dir.iterdir()), [])
+
+    def test_broken_existing_symlink_is_preserved(self):
+        self._write_manifest([self._create_staged_cover(107)])
+        target = self.target_dir / "107.jpg"
+        target.symlink_to(self.base_dir / "absent")
+        result = publish_covers(self.staging_dir, self.target_dir, apply=True)
+        self.assertEqual(result["already_cached"], 1)
+        self.assertTrue(target.is_symlink())
+
+    def test_target_rebind_cannot_redirect_publication(self):
+        self._write_manifest([self._create_staged_cover(107)])
+        old = self.base_dir / "original-cache"
+        def rebind(src, dst, dir_fd):
+            self.target_dir.rename(old)
+            self.target_dir.mkdir()
+            return _rename_noreplace(src, dst, dir_fd)
+        with patch("tools.publish_suwayomi_covers._rename_noreplace", side_effect=rebind):
+            result = publish_covers(self.staging_dir, self.target_dir, apply=True)
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertEqual(list(self.target_dir.iterdir()), [])
+        self.assertEqual((old / "107.jpg").read_bytes(), VALID_JPEG_BYTES)
 
 
 if __name__ == "__main__":

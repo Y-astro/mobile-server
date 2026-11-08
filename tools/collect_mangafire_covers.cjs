@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const crypto = require('crypto');
-const { spawnSync, execFileSync } = require('child_process');
+const { spawnSync } = require('child_process');
 
 let chromium;
 try {
@@ -33,34 +33,29 @@ try {
 const SSH_TARGET = 'u0_a505@100.75.159.53';
 const SSH_PORT = '8022';
 
-function parseArgs() {
-  const args = process.argv.slice(2);
-  const opts = {
-    limit: 2,
-    stagingDir: path.resolve(process.cwd(), '.work/mangafire-covers'),
-    dryRun: false,
-    titles: null,
+function parseArgs(args = process.argv.slice(2)) {
+  const opts = {limit: 2, stagingDir: path.resolve('.work/mangafire-covers'), dryRun: false, titles: null};
+  const positive = value => {
+    if (!/^[0-9]+$/.test(value || '') || !Number.isSafeInteger(Number(value)) || Number(value) < 1 || Number(value) >= 2 ** 31) {
+      throw new Error('Expected a positive integer');
+    }
+    return Number(value);
   };
-
   for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--limit' && i + 1 < args.length) {
-      opts.limit = parseInt(args[++i], 10);
-    } else if (a === '--staging-dir' && i + 1 < args.length) {
-      opts.stagingDir = path.resolve(args[++i]);
-    } else if (a === '--dry-run') {
-      opts.dryRun = true;
-    } else if (a === '--titles' && i + 1 < args.length) {
-      opts.titles = args[++i].split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
-    } else if (a === '-h' || a === '--help') {
-      console.log('Usage: node tools/collect_mangafire_covers.cjs [options]');
-      console.log('  --limit <N>         Max covers to stage (default: 2)');
-      console.log('  --staging-dir <dir> Destination staging dir (default: .work/mangafire-covers)');
-      console.log('  --dry-run           Check library status without launching browser');
-      console.log('  --titles <id,id>    Specific manga IDs to collect');
-      process.exit(0);
+    switch (args[i]) {
+      case '--limit': opts.limit = positive(args[++i]); break;
+      case '--staging-dir':
+        if (!args[i + 1] || args[i + 1].startsWith('--')) throw new Error('Missing staging directory');
+        opts.stagingDir = path.resolve(args[++i]); break;
+      case '--dry-run': opts.dryRun = true; break;
+      case '--titles': opts.titles = (args[++i] || '').split(',').map(positive); break;
+      case '--help': case '-h':
+        console.log('Usage: node tools/collect_mangafire_covers.cjs [--limit 1..128] [--titles id,id] [--staging-dir NEW_DIR] [--dry-run]');
+        process.exit(0); break;
+      default: throw new Error('Unknown collector argument');
     }
   }
+  if (opts.limit > 128) throw new Error('At most 128 covers per batch');
   return opts;
 }
 
@@ -71,14 +66,15 @@ from pathlib import Path
 
 req = urllib.request.Request(
     'http://127.0.0.1:4567/suwayomi/api/graphql',
-    data=json.dumps({'query': 'query { mangas { nodes { id title url inLibrary source { id name } } } }'}).encode(),
+    data=json.dumps({'query': 'query { mangas(condition: {inLibrary: true}) { nodes { id url source { id name } } } }'}).encode(),
     headers={'Content-Type': 'application/json'}
 )
 with urllib.request.urlopen(req, timeout=10) as resp:
     data = json.load(resp)
 
-mangas = data.get('data', {}).get('mangas', {}).get('nodes', [])
-mf = [m for m in mangas if (m.get('source') or {}).get('id') == '6084907896154116083' and m.get('inLibrary')]
+assert not data.get('errors'), 'GraphQL request failed'
+mangas = data['data']['mangas']['nodes']
+mf = [m for m in mangas if str((m.get('source') or {}).get('id')) == '6084907896154116083']
 
 td = Path.home() / 'suwayomi/data/downloads/thumbnails'
 cached_files = set(os.listdir(td)) if td.exists() and td.is_dir() else set()
@@ -93,7 +89,7 @@ for m in mf:
     if has_thumb:
         cached.append(m['id'])
     else:
-        missing.append({'id': m['id'], 'title': m['title'], 'url': m['url']})
+        missing.append({'id': m['id'], 'url': m['url']})
 
 out = {
     'total_mf': total_mf,
@@ -111,7 +107,7 @@ print(json.dumps(out))
   );
 
   if (res.status !== 0) {
-    throw new Error(`Failed to query phone GraphQL: ${res.stderr || res.stdout}`);
+    throw new Error(`Phone GraphQL query failed (exit ${res.status})`);
   }
 
   return JSON.parse(res.stdout.trim());
@@ -121,44 +117,52 @@ function parseHidFromUrl(url) {
   // Stored URLs:
   // e.g. "/manga/paranoid-magee.3pljr" -> hid: "3pljr", slug: "paranoid-magee"
   // e.g. "/title/3pljr-paranoid-magee" -> hid: "3pljr", slug: "paranoid-magee"
-  const clean = url.replace(/^\/+/, '');
-  if (clean.startsWith('manga/')) {
-    const rest = clean.slice('manga/'.length);
-    const lastDot = rest.lastIndexOf('.');
-    if (lastDot !== -1) {
-      const slug = rest.slice(0, lastDot);
-      const hid = rest.slice(lastDot + 1);
-      return { hid, slug, publicUrl: `https://mangafire.to/title/${hid}-${slug}` };
-    }
-  } else if (clean.startsWith('title/')) {
-    const rest = clean.slice('title/'.length);
-    const firstDash = rest.indexOf('-');
-    if (firstDash !== -1) {
-      const hid = rest.slice(0, firstDash);
-      const slug = rest.slice(firstDash + 1);
-      return { hid, slug, publicUrl: `https://mangafire.to/title/${rest}` };
-    }
-  }
-  return { hid: null, slug: null, publicUrl: `https://mangafire.to/${clean}` };
+  if (typeof url !== 'string' || url.length > 512) return {hid: null};
+  let match = /^\/manga\/([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]{1,64})$/.exec(url);
+  if (match) return {hid: match[2], slug: match[1], publicUrl: `https://mangafire.to/title/${match[2]}-${match[1]}`};
+  match = /^\/title\/([a-zA-Z0-9]{1,64})-([a-zA-Z0-9_-]+)$/.exec(url);
+  return match ? {hid: match[1], slug: match[2], publicUrl: `https://mangafire.to${url}`} : {hid: null};
 }
 
-function downloadImageBytes(url) {
+function validateCanonicalUrl(value) {
+  const u = new URL(value);
+  if (u.protocol !== 'https:' || u.host !== 'static.mfcdn.nl' || u.username || u.password || u.search || u.hash ||
+      !/^\/[a-zA-Z0-9/_-]+(?:@[1-9][0-9]{0,3})?\.jpe?g$/.test(u.pathname) || u.href.length > 2048) {
+    throw new Error('Invalid canonical JPEG URL');
+  }
+  return u.href;
+}
+
+function downloadImageBytes(value) {
+  const url = validateCanonicalUrl(value);
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64)' } }, res => {
-      if (res.statusCode !== 200) {
-        return reject(new Error(`Image fetch failed with status ${res.statusCode} from ${url}`));
+    let timer, settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      error ? reject(error) : resolve(value);
+    };
+    const request = https.get(url, res => {
+      const contentType = (res.headers['content-type'] || '').split(';')[0].toLowerCase();
+      if (res.statusCode !== 200 || !['image/jpeg', 'image/jpg'].includes(contentType)) {
+        res.destroy();
+        return finish(new Error('CDN did not return HTTP200 JPEG'));
       }
-      const chunks = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => {
-        const buf = Buffer.concat(chunks);
-        resolve({
-          statusCode: res.statusCode,
-          contentType: res.headers['content-type'],
-          bytes: buf,
-        });
+      const chunks = []; let size = 0;
+      res.on('data', chunk => {
+        size += chunk.length;
+        if (size > 4 * 1024 * 1024) {
+          request.destroy(new Error('Image exceeds 4MiB limit'));
+          return;
+        }
+        chunks.push(chunk);
       });
-    }).on('error', reject);
+      res.on('end', () => finish(null, {bytes: Buffer.concat(chunks), contentType}));
+      res.on('error', error => finish(error));
+    });
+    request.on('error', error => finish(error));
+    timer = setTimeout(() => request.destroy(new Error('Image download deadline exceeded')), 20000);
   });
 }
 
@@ -180,6 +184,9 @@ try:
     fmt = img2.format
     if w < 50 or h < 50 or w > 4000 or h > 4000:
         sys.exit(2)
+    if fmt != 'JPEG':
+        sys.exit(4)
+    img2.load()
     print(json.dumps({'format': fmt, 'width': w, 'height': h}))
 except Exception as e:
     sys.exit(3)
@@ -189,6 +196,7 @@ except Exception as e:
     input: imgBuffer,
     encoding: 'utf8',
     maxBuffer: 1024 * 1024,
+    timeout: 10000,
   });
 
   if (res.status !== 0) {
@@ -200,170 +208,77 @@ except Exception as e:
 
 async function main() {
   const opts = parseArgs();
-
-  console.log('=== MANGAFIRE COVER RECOVERY COLLECTOR ===');
-  console.log('Reading library state from phone...');
   const phoneState = fetchMissingTitlesFromPhone();
-
-  console.log(`MangaFire in-library total: ${phoneState.total_mf}`);
-  console.log(`Already cached on phone:   ${phoneState.cached_count}`);
-  console.log(`Missing thumbnails:        ${phoneState.missing_count}`);
-
-  if (opts.dryRun) {
-    console.log('\nDRY-RUN mode requested. Top missing titles:');
-    phoneState.missing.slice(0, 10).forEach(m => {
-      console.log(`  [ID ${m.id}] ${m.title} (${m.url})`);
-    });
-    return;
-  }
-
-  let candidates = phoneState.missing;
-  if (opts.titles && opts.titles.length > 0) {
-    candidates = candidates.filter(m => opts.titles.includes(m.id));
-  } else if (opts.limit && opts.limit > 0) {
-    candidates = candidates.slice(0, opts.limit);
-  }
-
-  if (candidates.length === 0) {
-    console.log('No eligible missing covers to collect.');
-    return;
-  }
-
-  console.log(`\nCollecting covers for ${candidates.length} candidate titles...`);
-
+  console.log(JSON.stringify({library: phoneState.total_mf, cached: phoneState.cached_count, missing: phoneState.missing_count}));
+  if (opts.dryRun) return;
+  const candidates = phoneState.missing.filter(m => !opts.titles || opts.titles.includes(m.id)).slice(0, opts.limit);
+  if (!candidates.length) { console.log('No missing covers'); return; }
   // Setup staging directory with private permissions
-  fs.mkdirSync(opts.stagingDir, { recursive: true, mode: 0o700 });
-  const imagesDir = path.join(opts.stagingDir, 'images');
-  fs.mkdirSync(imagesDir, { recursive: true, mode: 0o700 });
-
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 800 },
-    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  });
-
-  const manifestEntries = [];
-
+  fs.mkdirSync(path.dirname(opts.stagingDir), {recursive: true, mode: 0o700});
+  if (fs.realpathSync(path.dirname(opts.stagingDir)) !== path.dirname(opts.stagingDir)) throw new Error('Staging parent symlink rejected');
+  fs.mkdirSync(opts.stagingDir, {mode: 0o700});
+  fs.mkdirSync(path.join(opts.stagingDir, 'images'), {mode: 0o700});
+  const browser = await chromium.launch({headless: true});
+  const context = await browser.newContext({viewport: {width: 1280, height: 800}});
+  const manifestEntries = [], failures = [];
+  let blocked = false;
   try {
     for (const cand of candidates) {
       const mangaId = cand.id;
-      const { hid, publicUrl } = parseHidFromUrl(cand.url);
-
-      if (!hid) {
-        console.warn(`[WARN] Skipping ID ${mangaId}: could not parse hid from url ${cand.url}`);
-        continue;
-      }
-
-      console.log(`\nProcessing [ID ${mangaId}] ${cand.title} (hid: ${hid})...`);
+      const {hid, publicUrl} = parseHidFromUrl(cand.url);
+      if (!Number.isInteger(mangaId) || mangaId < 1 || mangaId >= 2 ** 31 || !hid) throw new Error('Invalid source manga identity');
       const page = await context.newPage();
-
-      // Block heavy media/fonts/images to save bandwidth during metadata acquisition
-      await page.route('**/*', route => {
-        const type = route.request().resourceType();
-        if (['image', 'media', 'font'].includes(type)) {
-          return route.abort();
-        }
-        return route.continue();
-      });
-
-      let titleApiData = null;
-      page.on('response', async res => {
-        const u = res.url();
-        if (u.includes(`/api/titles/${hid}?vrf=`)) {
-          try {
-            titleApiData = await res.json();
-          } catch (e) {}
-        }
-      });
-
       try {
-        await page.goto(publicUrl, { waitUntil: 'networkidle', timeout: 25000 });
-      } catch (err) {
-        console.warn(`  Navigation completed with notice: ${err.message}`);
-      }
-
-      // Check for challenge markers
-      const pageTitle = await page.title().catch(() => '');
-      if (pageTitle.toLowerCase().includes('just a moment') || pageTitle.toLowerCase().includes('attention required')) {
-        console.error(`[ABORT] Access challenge / Cloudflare Turnstile detected on ${publicUrl}. Aborting batch.`);
+        // Block heavy media/fonts/images to save bandwidth during metadata acquisition
+        await page.route('**/*', route => ['image', 'media', 'font'].includes(route.request().resourceType()) ? route.abort() : route.continue());
+        const response = page.waitForResponse(res => {
+          const u = new URL(res.url());
+          return u.origin === 'https://mangafire.to' && u.pathname === `/api/titles/${hid}`;
+        }, {timeout: 15000}).catch(() => null);
+        await page.goto(publicUrl, {waitUntil: 'domcontentloaded', timeout: 15000});
+        const api = await response;
+        // Check for challenge markers
+        const title = (await page.title()).toLowerCase();
+        const humanCheck = await page.locator('iframe[src*="challenges.cloudflare.com"]').count();
+        if (title.includes('just a moment') || title.includes('attention required') || humanCheck || api?.status() === 403) {
+          blocked = true;
+          break;
+        }
+        if (!api || api.status() !== 200) throw new Error('Current title metadata unavailable');
+        const text = await api.text();
+        if (text.length > 2 * 1024 * 1024) throw new Error('Metadata exceeds size limit');
+        const titleApiData = JSON.parse(text);
+        if (titleApiData.data?.hid !== hid || !titleApiData.data.poster) throw new Error('Metadata title identity mismatch');
+        const posterObj = titleApiData.data.poster;
+        const canonicalUrl = validateCanonicalUrl(posterObj.large || posterObj.medium || posterObj.small);
+        // Direct HTTPS fetch of image bytes
+        const imgRes = await downloadImageBytes(canonicalUrl);
+        // Pillow decode & dimension verification
+        const pilMeta = verifyImageWithPillow(imgRes.bytes);
+        // Write private staged image
+        const outFilename = `images/${mangaId}.jpg`;
+        fs.writeFileSync(path.join(opts.stagingDir, outFilename), imgRes.bytes, {mode: 0o600, flag: 'wx'});
+        manifestEntries.push({manga_id: mangaId, hid, canonical_url: canonicalUrl, filename: outFilename,
+          sha256: crypto.createHash('sha256').update(imgRes.bytes).digest('hex'), bytes: imgRes.bytes.length,
+          width: pilMeta.width, height: pilMeta.height, format: pilMeta.format});
+        console.log(`Staged ${manifestEntries.length}/${candidates.length}`);
+      } catch (error) {
+        failures.push({manga_id: mangaId, error: error.message.split('\n')[0]});
+        console.log(`Skipped one unavailable cover (${failures.length} failures)`);
+      } finally {
         await page.close();
-        break;
       }
-
-      if (!titleApiData || !titleApiData.data || !titleApiData.data.poster) {
-        console.warn(`  Failed to capture /api/titles/${hid} metadata response.`);
-        await page.close();
-        continue;
-      }
-
-      const posterObj = titleApiData.data.poster;
-      const canonicalUrl = posterObj.large || posterObj.medium || posterObj.small;
-      if (!canonicalUrl || !canonicalUrl.startsWith('https://static.mfcdn.')) {
-        console.warn(`  Invalid canonical cover URL: ${canonicalUrl}`);
-        await page.close();
-        continue;
-      }
-
-      console.log(`  Canonical cover: ${canonicalUrl}`);
-
-      // Direct HTTPS fetch of image bytes
-      const imgRes = await downloadImageBytes(canonicalUrl);
-      console.log(`  Downloaded: ${imgRes.bytes.length} bytes, content-type: ${imgRes.contentType}`);
-
-      // Pillow decode & dimension verification
-      const pilMeta = verifyImageWithPillow(imgRes.bytes);
-      console.log(`  Pillow check: format=${pilMeta.format}, size=${pilMeta.width}x${pilMeta.height}`);
-
-      // Write private staged image
-      const outFilename = `images/${mangaId}.jpg`;
-      const outPath = path.join(opts.stagingDir, outFilename);
-      fs.writeFileSync(outPath, imgRes.bytes, { mode: 0o600 });
-
-      const sha256 = crypto.createHash('sha256').update(imgRes.bytes).digest('hex');
-
-      manifestEntries.push({
-        manga_id: mangaId,
-        hid: hid,
-        canonical_url: canonicalUrl,
-        filename: outFilename,
-        sha256: sha256,
-        bytes: imgRes.bytes.length,
-        width: pilMeta.width,
-        height: pilMeta.height,
-        format: pilMeta.format,
-      });
-
-      await page.close();
+      await new Promise(resolve => setTimeout(resolve, 600));
     }
   } finally {
     await browser.close();
+    const manifest = {schema_version: 1, created_at: new Date().toISOString(), source_name: 'MangaFire',
+      source_id: '6084907896154116083', entries: manifestEntries};
+    fs.writeFileSync(path.join(opts.stagingDir, 'manifest.json'), JSON.stringify(manifest, null, 2), {mode: 0o600, flag: 'wx'});
   }
-
-  if (manifestEntries.length === 0) {
-    console.error('No covers were successfully collected.');
-    process.exit(1);
-  }
-
-  const manifest = {
-    schema_version: 1,
-    created_at: new Date().toISOString(),
-    source_name: 'MangaFire',
-    source_id: '6084907896154116083',
-    entries: manifestEntries,
-  };
-
-  const manifestPath = path.join(opts.stagingDir, 'manifest.json');
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), { mode: 0o600 });
-
-  console.log('\n=== COLLECTION SUMMARY ===');
-  console.log(`Staged covers count: ${manifestEntries.length}`);
-  console.log(`Manifest path:       ${manifestPath}`);
-  manifestEntries.forEach(e => {
-    console.log(`  - Manga ID ${e.manga_id} (${e.hid}): ${e.bytes} bytes, SHA256: ${e.sha256}`);
-  });
+  console.log(JSON.stringify({requested: candidates.length, staged: manifestEntries.length, failures, blocked}));
+  if (!manifestEntries.length || failures.length || blocked) process.exitCode = 2;
 }
 
-main().catch(err => {
-  console.error('Fatal collector error:', err);
-  process.exit(1);
-});
+module.exports = {parseArgs, parseHidFromUrl, validateCanonicalUrl};
+if (require.main === module) main().catch(error => { console.error('Collector failed:', error.message); process.exitCode = 1; });
