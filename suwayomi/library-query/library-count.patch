@@ -1,0 +1,75 @@
+--- a/server/src/main/kotlin/suwayomi/tachidesk/graphql/types/MangaType.kt
++++ b/server/src/main/kotlin/suwayomi/tachidesk/graphql/types/MangaType.kt
+@@ -12,6 +12,7 @@
+ import graphql.schema.DataFetchingEnvironment
+ import org.jetbrains.exposed.v1.core.ResultRow
+ import suwayomi.tachidesk.graphql.dataLoaders.MangaChapterStats
++import suwayomi.tachidesk.graphql.types.ChapterNodeList.Companion.toNodeList
+ import suwayomi.tachidesk.graphql.server.primitives.Cursor
+ import suwayomi.tachidesk.graphql.server.primitives.Edge
+ import suwayomi.tachidesk.graphql.server.primitives.Node
+@@ -153,8 +154,19 @@
+     fun highestNumberedChapter(dataFetchingEnvironment: DataFetchingEnvironment): CompletableFuture<ChapterType?> =
+         dataFetchingEnvironment.getValueFromDataLoader("HighestNumberedChapterForMangaDataLoader", id)
+ 
+-    fun chapters(dataFetchingEnvironment: DataFetchingEnvironment): CompletableFuture<ChapterNodeList> =
+-        dataFetchingEnvironment.getValueFromDataLoader<Int, ChapterNodeList>("ChaptersForMangaDataLoader", id)
++    fun chapters(dataFetchingEnvironment: DataFetchingEnvironment): CompletableFuture<ChapterNodeList> {
++        // Count-only library queries must not materialize every chapter row.
++        val countOnly = dataFetchingEnvironment.selectionSet.immediateFields.all {
++            it.name == "totalCount" || it.name == "__typename"
++        }
++        return if (countOnly) {
++            dataFetchingEnvironment.getValueFromDataLoader<Int, MangaChapterStats>("ChapterFlagCountForMangaDataLoader", id).thenApply {
++                emptyList<ChapterType>().toNodeList().copy(totalCount = it.totalCount)
++            }
++        } else {
++            dataFetchingEnvironment.getValueFromDataLoader<Int, ChapterNodeList>("ChaptersForMangaDataLoader", id)
++        }
++    }
+ 
+     fun age(): Long? {
+         if (lastFetchedAt == null) return null
+--- a/server/src/main/kotlin/suwayomi/tachidesk/graphql/dataLoaders/ChapterDataLoader.kt
++++ b/server/src/main/kotlin/suwayomi/tachidesk/graphql/dataLoaders/ChapterDataLoader.kt
+@@ -75,6 +75,7 @@
+     val unreadCount: Int,
+     val downloadCount: Int,
+     val bookmarkCount: Int,
++    val totalCount: Int,
+ )
+ 
+ class ChapterFlagCountForMangaDataLoader : KotlinDataLoader<Int, MangaChapterStats> {
+@@ -104,6 +105,8 @@
+                             .Else(intLiteral(0))
+                             .sum()
+ 
++                    val totalCount = ChapterTable.id.count()
++
+                     val statsByMangaId =
+                         ChapterTable
+                             .select(
+@@ -111,6 +114,7 @@
+                                 unreadCount,
+                                 downloadCount,
+                                 bookmarkCount,
++                                totalCount,
+                             ).where {
+                                 ChapterTable.manga inList ids
+                             }.groupBy(ChapterTable.manga)
+@@ -122,6 +126,7 @@
+                                         unreadCount = it[unreadCount] ?: 0,
+                                         downloadCount = it[downloadCount] ?: 0,
+                                         bookmarkCount = it[bookmarkCount] ?: 0,
++                                        totalCount = it[totalCount].toInt(),
+                                     )
+                             }
+ 
+@@ -130,6 +135,7 @@
+                             unreadCount = 0,
+                             downloadCount = 0,
+                             bookmarkCount = 0,
++                            totalCount = 0,
+                         )
+                     }
+                 }

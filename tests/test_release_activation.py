@@ -2117,6 +2117,42 @@ class TestReleaseActivation(unittest.TestCase):
             with self.subTest(profile=prof), self.assertRaises(ra.ActivationError):
                 ra.map_changed_destinations(entries, profile=prof)
 
+    def test_suwayomi_jar_accepts_reviewed_sidebar_catalog_and_rejects_drift(self):
+        from app import service_catalog
+        _, _, live, _ = self._build_jar_fixture()
+        catalog = live / "home/.local/lib/mobile-server/service_catalog.py"
+        source = (REPO_ROOT / "app/service_catalog.py").read_bytes()
+        catalog.write_bytes(source)
+        driver = FakeLifecycleDriver()
+        driver.services_cfg = service_catalog.runtime_services(str(live / "home"), str(live / "usr"))
+        ra.require_reviewed_jar_lifecycle(live, os.getuid(), driver)
+        driver.services_cfg.pop("navidrome")
+        with self.assertRaisesRegex(ra.ActivationError, "exact 18"):
+            ra.require_reviewed_jar_lifecycle(live, os.getuid(), driver)
+        catalog.write_bytes(source + b"\n")
+        with self.assertRaisesRegex(ra.ActivationError, "catalog hash mismatch"):
+            ra.require_reviewed_jar_lifecycle(live, os.getuid(), driver)
+
+    def test_suwayomi_jar_sidebar_catalog_health_failure_recovers(self):
+        from app import service_catalog
+        bundle, preconds, live, tx_dir = self._build_jar_fixture()
+        source = (REPO_ROOT / "app/service_catalog.py").read_bytes()
+        (live / "home/.local/lib/mobile-server/service_catalog.py").write_bytes(source)
+        (bundle / "app/service_catalog.py").write_bytes(source)
+        for entry in preconds["files"]:
+            if entry["path"] == ra.SERVICE_CATALOG_REMOTE:
+                entry.update(sha256=hashlib.sha256(source).hexdigest(), bytes=len(source))
+        driver = FakeLifecycleDriver(service_catalog.runtime_services(str(live / "home"), str(live / "usr")))
+        driver.running_processes["suwayomi"] = [(1001, "prior-backend")]
+        driver.fail_candidate_health.add("suwayomi")
+        jar = live / "home/suwayomi/bin/Suwayomi-Server.jar"
+        original = jar.read_bytes()
+        with self.assertRaises(ra.HealthCheckError):
+            ra.apply(bundle, preconds, tx_dir, live, driver=driver, health_timeout=0.1, profile="suwayomi-jar")
+        self.assertEqual(jar.read_bytes(), original)
+        self.assertEqual(ra.load_activation_journal(tx_dir)["state"], ra.STATE_ROLLED_BACK)
+        self.assertEqual(ra.recover(tx_dir, live, driver=driver)["state"], ra.STATE_ROLLED_BACK)
+
     def test_suwayomi_jar_requires_current_16_runtime_and_fork_free_launcher(self):
         """Refuses legacy forking launcher, legacy 15 catalog, or non-foreground scheduler."""
         bundle, preconds, live, tx_dir = self._build_jar_fixture()

@@ -1,0 +1,15 @@
+{
+  "upstream_commit": "40bc5da57820324ed0ae724cbbc020cc4673b594",
+  "base_jar_sha256": "3dd150705d07486e4f890711a2d01a1a67a35d71a0fdc444cf7d5661473c221e",
+  "source_sha256": {
+    "graphql/types/MangaType.kt": "d137363f16b6995f3d0d33fce6d9670ed801cd8d3966bbe80d1e950427d55877",
+    "graphql/dataLoaders/ChapterDataLoader.kt": "c78865d6fce906aaa594e344564b02994f82b11a7d1cd98b56aecbdbe5c5436e"
+  },
+  "class_owners": [
+    "suwayomi/tachidesk/graphql/types/MangaType",
+    "suwayomi/tachidesk/graphql/dataLoaders/ChapterFlagCountForMangaDataLoader",
+    "suwayomi/tachidesk/graphql/dataLoaders/MangaChapterStats"
+  ],
+  "kotlin_version": "2.4.10",
+  "jvm_target": 21
+}

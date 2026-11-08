@@ -217,6 +217,7 @@ SUWAYOMI_FORK_FREE_LAUNCHER_SHA256 = "510d7d887255832fedf2d81e681ddcdc3082bf1ae5
 SUWAYOMI_FORK_FREE_CATALOG_SHA256 = "9c9163f9c2e1fceaf0d9dd2989d869ce76d1566b1aa66e5f78e0cb90a7d77159"
 ANTRA_SERVICE_CATALOG_SHA256 = "05b7591955d71c7b6ab7c4b3d9f5ce9026d6e09109287f52be6f56534c031ab9"
 NAVIDROME_SERVICE_CATALOG_SHA256 = "69b88b8b8e458a70fdc72cd222d40361a7df11ff14656a45c3b0d04ff2433d2e"
+SIDEBAR_SERVICE_CATALOG_SHA256 = "0142fe3337d0beb52ad71cd3a07f87f7b6b2c1a2fc1efc50bf06120e6f7d2bf0"
 SUWAYOMI_ACCEPTED_JAR_SHA256 = "9b7bf58329eccb3dcfb7246360f6818f7391b8804330a9e0491006049678bedc"
 SUWAYOMI_JAR_MODE = 0o644
 
@@ -894,8 +895,9 @@ def validate_activation_journal(
         tx_entries = tx_journal.get("entries", [])
         assets = act_journal.get("recovery_assets", {})
         cat_sha = assets.get("service_catalog.py")
-        if cat_sha not in (SUWAYOMI_FORK_FREE_CATALOG_SHA256, ANTRA_SERVICE_CATALOG_SHA256):
-            raise ActivationError("JAR recovery requires the reviewed preserved 16- or 17-service catalog")
+        if cat_sha not in (SUWAYOMI_FORK_FREE_CATALOG_SHA256, ANTRA_SERVICE_CATALOG_SHA256,
+                           NAVIDROME_SERVICE_CATALOG_SHA256, SIDEBAR_SERVICE_CATALOG_SHA256):
+            raise ActivationError("JAR recovery requires a reviewed preserved 16-, 17-, or 18-service catalog")
         for remote, digest in ((SUWAYOMI_LAUNCHER_REMOTE, SUWAYOMI_FORK_FREE_LAUNCHER_SHA256),
                                (SERVICE_CATALOG_REMOTE, cat_sha)):
             entry = next((e for e in tx_entries if e.get("remote") == remote), None)
@@ -1532,7 +1534,7 @@ def require_reviewed_jar_lifecycle(ns_root: Path, uid: int, driver=None) -> None
         raise ActivationError("Live launcher hash mismatch; refusing suwayomi-jar on unreviewed/legacy launcher")
 
     cat_sha = compute_file_sha256(catalog_path).lower()
-    if cat_sha not in (SUWAYOMI_FORK_FREE_CATALOG_SHA256.lower(), ANTRA_SERVICE_CATALOG_SHA256.lower(), NAVIDROME_SERVICE_CATALOG_SHA256.lower()):
+    if cat_sha not in (SUWAYOMI_FORK_FREE_CATALOG_SHA256.lower(), ANTRA_SERVICE_CATALOG_SHA256.lower(), NAVIDROME_SERVICE_CATALOG_SHA256.lower(), SIDEBAR_SERVICE_CATALOG_SHA256.lower()):
         raise ActivationError("Live catalog hash mismatch; refusing suwayomi-jar on unreviewed/legacy catalog")
 
     if driver is not None:
@@ -1541,7 +1543,7 @@ def require_reviewed_jar_lifecycle(ns_root: Path, uid: int, driver=None) -> None
             raise ActivationError(f"suwayomi-jar requires exact 16 managed services, found {len(services)}")
         if cat_sha == ANTRA_SERVICE_CATALOG_SHA256.lower() and len(services) != 17:
             raise ActivationError(f"suwayomi-jar requires exact 17 managed services, found {len(services)}")
-        if cat_sha == NAVIDROME_SERVICE_CATALOG_SHA256.lower() and len(services) != 18:
+        if cat_sha in (NAVIDROME_SERVICE_CATALOG_SHA256.lower(), SIDEBAR_SERVICE_CATALOG_SHA256.lower()) and len(services) != 18:
             raise ActivationError(f"suwayomi-jar requires exact 18 managed services, found {len(services)}")
         if len(services) not in (16, 17, 18):
             raise ActivationError(f"suwayomi-jar requires exact 16, 17, or 18 managed services, found {len(services)}")
