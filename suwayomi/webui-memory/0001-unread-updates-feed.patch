@@ -1,0 +1,30 @@
+diff --git a/src/lib/requests/RequestManager.ts b/src/lib/requests/RequestManager.ts
+index 7b8485b..9bdd467 100644
+--- a/src/lib/requests/RequestManager.ts
++++ b/src/lib/requests/RequestManager.ts
+@@ -3506,6 +3506,7 @@ export class RequestManager {
+     public useGetRecentlyUpdatedChapters(
+         initialPages: number = 1,
+         options?: QueryHookOptions<GetChaptersUpdatesQuery, GetChaptersUpdatesQueryVariables>,
++        filter?: GetChaptersUpdatesQueryVariables['filter'],
+     ): AbortableApolloUseQueryResponse<GetChaptersUpdatesQuery, GetChaptersUpdatesQueryVariables> {
+         const PAGE_SIZE = 150;
+         const CACHE_KEY = 'useGetRecentlyUpdatedChapters';
+@@ -3516,7 +3517,7 @@ export class RequestManager {
+         const result = this.useGetChapters<GetChaptersUpdatesQuery, GetChaptersUpdatesQueryVariables>(
+             GET_CHAPTERS_UPDATES,
+             {
+-                filter: { inLibrary: { equalTo: true } },
++                filter: filter ?? { inLibrary: { equalTo: true }, isRead: { equalTo: false } },
+                 order: [
+                     { by: ChapterOrderBy.FetchedAt, byType: SortOrder.Desc },
+                     { by: ChapterOrderBy.SourceOrder, byType: SortOrder.Desc },
+@@ -3545,7 +3546,7 @@ export class RequestManager {
+                 this.cache.cacheResponse(CACHE_KEY, undefined, fetchMoreOptions.variables?.offset);
+                 return result.fetchMore({
+                     ...fetchMoreOptions,
+-                    variables: { first: PAGE_SIZE, ...fetchMoreOptions.variables },
++                    variables: { first: PAGE_SIZE, ...(filter ? { filter } : {}), ...fetchMoreOptions.variables },
+                 });
+             },
+         } as typeof result;
