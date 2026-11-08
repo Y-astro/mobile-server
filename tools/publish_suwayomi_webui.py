@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
-"""Bounded publication tool for Suwayomi WebUI.
+"""Publish one verified custom WebUI, with atomic exchange and drift-safe rollback.
 
-Implements safe, atomic frontend publication and rollback:
-- Validates WebUI.provenance.json and WebUI.zip contents before any mutation.
-- Refuses path traversal, absolute paths, symlinks, duplicates, size abuse, and digest mismatch.
-- Updates ONLY server.webUIFlavor to CUSTOM in server.conf, preserving all other bytes.
-- Preserves prior hashed assets from the existing live WebUI for in-flight tabs.
-- Uses atomic directory exchange (renameat2 RENAME_EXCHANGE) or staged backup.
-- Durable journal with rollback and recovery capability.
-- Uses TermuxLifecycleDriver lock across stop/swap/start/health to prevent races.
-- Verifies live output manifest and healthy backend before success.
+Only the WebUI tree and the server.webUIFlavor value may change. Native atomic
+exchange is required; backend JAR, DNS shim, service intent and other processes
+are protected. Configuration backups remain private. Recovery derives current
+state from hashes, including interruption immediately after an exchange.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -19,31 +13,26 @@ import ctypes
 import errno
 import hashlib
 import json
-import logging
 import os
 import platform
 import re
 import shutil
+import stat
 import sys
 import tempfile
+import time
 import zipfile
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-
-logger = logging.getLogger("publish_suwayomi_webui")
+from pathlib import Path, PurePosixPath
 
 RENAME_EXCHANGE = 2
 AT_FDCWD = -100
-
+HEALTH_TIMEOUT = 45
 MAX_ZIP_ENTRIES = 2000
-MAX_UNCOMPRESSED_TOTAL_BYTES = 50 * 1024 * 1024  # 50 MiB limit for safety
+MAX_UNCOMPRESSED_TOTAL_BYTES = 50 * 1024 * 1024
 MAX_ENTRY_SIZE = 20 * 1024 * 1024
 
-
-class PublicationError(Exception):
-    """Base error for WebUI publication failures."""
-
+class PublicationError(RuntimeError):
+    pass
 
 def _get_libc():
     try:
@@ -54,8 +43,8 @@ def _get_libc():
 
 def test_rename_exchange_support(test_dir: Path) -> bool:
     """Feature-test renameat2 RENAME_EXCHANGE support before mutation."""
-    d1 = test_dir / ".test_exchange_a"
-    d2 = test_dir / ".test_exchange_b"
+    d1 = Path(tempfile.mkdtemp(prefix="exchange-a-", dir=test_dir))
+    d2 = Path(tempfile.mkdtemp(prefix="exchange-b-", dir=test_dir))
     try:
         d1.mkdir(exist_ok=True)
         d2.mkdir(exist_ok=True)
@@ -112,6 +101,8 @@ def _rename_exchange(src: Path, dst: Path) -> None:
     if sys_renameat2 is None:
         raise OSError(errno.ENOSYS, f"SYS_renameat2 syscall unknown for architecture {machine}")
 
+    syscall.argtypes = [ctypes.c_long, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    syscall.restype = ctypes.c_long
     ret = syscall(sys_renameat2, dir_fd, src_bytes, dir_fd, dst_bytes, RENAME_EXCHANGE)
     if ret == 0:
         return
@@ -120,524 +111,347 @@ def _rename_exchange(src: Path, dst: Path) -> None:
 
 
 def compute_file_sha256(path: Path) -> str:
-    hasher = hashlib.sha256()
-    with open(path, "rb") as f:
-        while chunk := f.read(65536):
-            hasher.update(chunk)
-    return hasher.hexdigest()
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise PublicationError('Expected a regular file')
+    with path.open('rb') as handle:
+        return hashlib.file_digest(handle, 'sha256').hexdigest()
 
 
-def compute_tree_manifest(directory: Path) -> Dict[str, str]:
-    manifest: Dict[str, str] = {}
-    if not directory.exists():
-        return manifest
-    for root, _, files in os.walk(directory):
-        for f in sorted(files):
-            full_path = Path(root) / f
-            rel = str(full_path.relative_to(directory)).replace(os.sep, "/")
-            manifest[rel] = compute_file_sha256(full_path)
-    return manifest
+def safe_path(path: Path) -> None:
+    if not path.is_absolute() or '..' in path.parts:
+        raise PublicationError('Expected an absolute non-traversing path')
+    for part in (path, *path.parents):
+        if part.is_symlink():
+            raise PublicationError('Symlink in publication path')
+    if path.exists() and path.stat().st_uid != os.getuid():
+        raise PublicationError('Unexpected file owner')
 
 
-def validate_provenance_and_zip(
-    zip_path: Path,
-    prov_path: Path,
-    expected_zip_sha256: Optional[str] = None,
-) -> Dict[str, Any]:
-    if not zip_path.is_file() or not prov_path.is_file():
-        raise PublicationError(f"Missing archive or provenance file: {zip_path}, {prov_path}")
+def compute_tree_manifest(directory: Path) -> dict[str, str]:
+    safe_path(directory)
+    if not directory.is_dir():
+        raise PublicationError('Missing WebUI directory')
+    result = {}
+    for root, dirs, files in os.walk(directory):
+        for name in dirs + files:
+            p = Path(root)/name
+            safe_path(p)
+            if name in files:
+                if not stat.S_ISREG(p.lstat().st_mode):
+                    raise PublicationError('Non-regular WebUI entry')
+                result[p.relative_to(directory).as_posix()] = compute_file_sha256(p)
+    return result
 
-    actual_zip_sha = compute_file_sha256(zip_path)
-    if expected_zip_sha256 and actual_zip_sha != expected_zip_sha256:
-        raise PublicationError(
-            f"Archive digest mismatch: expected {expected_zip_sha256}, got {actual_zip_sha}"
-        )
 
-    try:
-        prov = json.loads(prov_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise PublicationError(f"Failed to parse provenance JSON: {e}") from e
+def validate_manifest(value: object) -> dict[str, str]:
+    if not isinstance(value, dict) or not value:
+        raise PublicationError('Missing full file manifest')
+    for name, digest in value.items():
+        if (not isinstance(name, str) or not name or '\\' in name or
+            PurePosixPath(name).is_absolute() or PurePosixPath(name).as_posix() != name or
+            any(part in ('', '.', '..') for part in name.split('/')) or
+            not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)):
+            raise PublicationError('Invalid manifest path or digest')
+    return value
 
-    if not isinstance(prov, dict):
-        raise PublicationError("Provenance payload is not a JSON object")
 
-    prov_zip_sha = prov.get("archive_sha256")
-    if prov_zip_sha and prov_zip_sha != actual_zip_sha:
-        raise PublicationError(
-            f"Provenance archive_sha256 {prov_zip_sha} does not match archive file {actual_zip_sha}"
-        )
-
-    files_manifest = prov.get("files")
-    if not isinstance(files_manifest, dict) or not files_manifest:
-        raise PublicationError("Provenance missing non-empty 'files' mapping")
-
-    # Inspect ZIP without uncompressing
-    try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            infolist = zf.infolist()
-            if len(infolist) > MAX_ZIP_ENTRIES:
-                raise PublicationError(f"Archive entry count {len(infolist)} exceeds {MAX_ZIP_ENTRIES}")
-
-            seen_paths: Set[str] = set()
-            total_uncompressed = 0
-
-            for info in infolist:
-                # Disallow absolute paths and traversal
-                clean_name = info.filename.replace("\\", "/")
-                if clean_name.startswith("/") or clean_name.startswith("../") or "/../" in clean_name:
-                    raise PublicationError(f"Malicious or illegal path in archive: {info.filename}")
-
-                # Reject symlinks in external attributes
-                # Unix mode stored in upper 16 bits of external_attr
-                unix_mode = info.external_attr >> 16
-                if unix_mode and (unix_mode & 0o170000 == 0o120000):
-                    raise PublicationError(f"Archive contains prohibited symlink entry: {info.filename}")
-
-                if clean_name in seen_paths:
-                    raise PublicationError(f"Duplicate path in archive: {clean_name}")
-                seen_paths.add(clean_name)
-
-                if info.file_size > MAX_ENTRY_SIZE:
-                    raise PublicationError(f"Entry {clean_name} size {info.file_size} exceeds {MAX_ENTRY_SIZE}")
-                total_uncompressed += info.file_size
-                if total_uncompressed > MAX_UNCOMPRESSED_TOTAL_BYTES:
-                    raise PublicationError(f"Total uncompressed size exceeds limit: {total_uncompressed}")
-
-                if not info.is_dir():
-                    norm_rel = clean_name.lstrip("./")
-                    if norm_rel not in files_manifest:
-                        raise PublicationError(f"Archive contains unmanifested file: {norm_rel}")
-
-            for manifest_rel in files_manifest:
-                if manifest_rel not in seen_paths and f"./{manifest_rel}" not in seen_paths:
-                    raise PublicationError(f"Manifest entry missing from archive: {manifest_rel}")
-
-    except zipfile.BadZipFile as e:
-        raise PublicationError(f"Invalid ZIP file: {e}") from e
-
+def validate_provenance_and_zip(zip_path: Path, prov_path: Path,
+                                expected_zip_sha256: str, expected_provenance_sha256: str) -> dict:
+    for path, expected in ((zip_path, expected_zip_sha256), (prov_path, expected_provenance_sha256)):
+        safe_path(path)
+        if not path.is_file() or not expected or compute_file_sha256(path) != expected:
+            raise PublicationError('Archive or provenance digest mismatch')
+    prov = json.loads(prov_path.read_bytes())
+    if prov.get('archive_sha256') != expected_zip_sha256:
+        raise PublicationError('Provenance does not bind archive')
+    manifest = validate_manifest(prov.get('files'))
+    if 'index.html' not in manifest or 'revision' not in manifest:
+        raise PublicationError('Missing WebUI entry points')
+    with zipfile.ZipFile(zip_path) as archive:
+        entries = archive.infolist()
+        names = [entry.filename for entry in entries]
+        if (len(entries) > MAX_ZIP_ENTRIES or len(set(names)) != len(names) or
+            set(names) != set(manifest) or
+            sum(entry.file_size for entry in entries) > MAX_UNCOMPRESSED_TOTAL_BYTES):
+            raise PublicationError('Archive entry set or total size invalid')
+        for entry in entries:
+            mode = stat.S_IFMT(entry.external_attr >> 16)
+            if (entry.is_dir() or mode not in (0, stat.S_IFREG) or
+                entry.file_size > MAX_ENTRY_SIZE or
+                hashlib.sha256(archive.read(entry)).hexdigest() != manifest[entry.filename]):
+                raise PublicationError('Invalid archive entry or file digest')
     return prov
 
 
-def extract_and_verify_candidate(
-    zip_path: Path,
-    expected_manifest: Dict[str, str],
-    target_extract_dir: Path,
-) -> Dict[str, str]:
-    if target_extract_dir.exists():
-        shutil.rmtree(target_extract_dir)
-    target_extract_dir.mkdir(parents=True)
-
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            norm_name = info.filename.replace("\\", "/").lstrip("./")
-            dest = target_extract_dir / norm_name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            with zf.open(info) as src, open(dest, "wb") as dst:
-                shutil.copyfileobj(src, dst)
-
-    actual_manifest = compute_tree_manifest(target_extract_dir)
-    for rel, exp_sha in expected_manifest.items():
-        act_sha = actual_manifest.get(rel)
-        if not act_sha:
-            raise PublicationError(f"Extracted candidate missing {rel}")
-        if act_sha != exp_sha:
-            raise PublicationError(f"Extracted digest mismatch on {rel}: expected {exp_sha}, got {act_sha}")
-
-    for act_rel in actual_manifest:
-        if act_rel not in expected_manifest:
-            raise PublicationError(f"Extracted candidate contains unexpected file {act_rel}")
-
-    return actual_manifest
+def atomic_write(path: Path, content: bytes, mode: int) -> None:
+    safe_path(path)
+    fd, temporary = tempfile.mkstemp(prefix='.webui-write-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            os.fchmod(handle.fileno(), mode)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        sync_directory(path.parent)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
-def preserve_prior_assets(
-    live_webui_dir: Path,
-    candidate_dir: Path,
-    candidate_manifest: Dict[str, str],
-) -> Dict[str, str]:
-    """Preserve prior hashed lazy assets from live into candidate if absent.
-    
-    In-flight tabs rely on existing chunk URLs (e.g. assets/*.js, *.css).
-    Never overwrite index.html, sw.js, or any file present in candidate.
-    """
-    final_manifest = dict(candidate_manifest)
-    if not live_webui_dir.exists():
-        return final_manifest
-
-    prior_manifest = compute_tree_manifest(live_webui_dir)
-    for rel, sha in prior_manifest.items():
-        if rel in candidate_manifest:
-            continue
-        # Protected entry points that must NEVER be retained from old tree
-        if rel in ("index.html", "sw.js", "service-worker.js", "manifest.json", "favicon.ico"):
-            continue
-        # Only copy hashed/static asset chunks (e.g. assets/*)
-        if rel.startswith("assets/") or rel.startswith("static/") or re.search(r"-[a-f0-9]{8,}\.", rel):
-            src_file = live_webui_dir / rel
-            dst_file = candidate_dir / rel
-            dst_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_file, dst_file)
-            final_manifest[rel] = sha
-
-    return final_manifest
+def sync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
-def modify_server_conf_flavor_custom(conf_content: str) -> Tuple[str, bool]:
-    """Change ONLY server.webUIFlavor to CUSTOM in server.conf.
-    
-    Preserves all other lines, comments, formatting, and bytes.
-    Never prints or logs configuration contents.
-    """
-    pattern = re.compile(r'^(?P<prefix>\s*server\.webUIFlavor\s*=\s*)(?P<val>("[^"]*"|\S+))(?P<suffix>.*)$', re.MULTILINE)
-    m = pattern.search(conf_content)
-    if not m:
-        # If not present, append minimal configuration line
-        new_content = conf_content + ("\n" if not conf_content.endswith("\n") else "") + 'server.webUIFlavor = "CUSTOM"\n'
-        return new_content, True
-
-    prefix = m.group("prefix")
-    old_val = m.group("val")
-    suffix = m.group("suffix")
-
-    if old_val == '"CUSTOM"' or old_val == "CUSTOM":
-        return conf_content, False
-
-    new_line = f'{prefix}"CUSTOM"{suffix}'
-    start, end = m.span()
-    new_content = conf_content[:start] + new_line + conf_content[end:]
-    return new_content, True
+def modify_server_conf_flavor_custom(content: str) -> tuple[str, bool]:
+    pattern = re.compile(r'(^[ \t]*server\.webUIFlavor[ \t]*=[ \t]*)("[^"]*"|[^\s#]+)', re.MULTILINE)
+    matches = list(pattern.finditer(content))
+    if len(matches) != 1 or matches[0][2].strip('"') not in ('WebUI', 'WEBUI', 'CUSTOM'):
+        raise PublicationError('Expected exactly one supported WebUI flavor setting')
+    match = matches[0]
+    changed = content[:match.start(2)]+'"CUSTOM"'+content[match.end(2):]
+    return changed, changed != content
 
 
-@dataclass
-class PublicationJournal:
-    action: str
-    live_webui_dir: str
-    backup_webui_dir: str
-    candidate_webui_dir: str
-    conf_path: str
-    conf_backup_path: str
-    prior_tree_hashes: Dict[str, str]
-    expected_final_hashes: Dict[str, str]
-    prior_conf_sha: str
-    target_conf_sha: str
-    exchange_method: str
-    status: str
-
-    def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.__dict__, indent=2), encoding="utf-8")
-        tmp.replace(path)
-
-    @classmethod
-    def load(cls, path: Path) -> Optional[PublicationJournal]:
-        if not path.is_file():
-            return None
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return cls(**data)
+def preserve_prior_assets(live: Path, candidate: Path, manifest: dict[str, str]) -> dict[str, str]:
+    result = dict(manifest)
+    for name, digest in compute_tree_manifest(live).items():
+        if name not in result and (name.startswith(('assets/', 'static/')) or re.fullmatch(r'workbox-[\w-]+\.js', name)):
+            target = candidate/name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(target, (live/name).read_bytes(), 0o644)
+            result[name] = digest
+    return result
 
 
 class WebUIPublisher:
-    def __init__(
-        self,
-        home_dir: Path,
-        driver: Any = None,
-        staging_dir: Optional[Path] = None,
-    ):
-        self.home_dir = home_dir.resolve()
-        self.live_webui_dir = self.home_dir / "suwayomi" / "data" / "webUI"
-        self.conf_path = self.home_dir / "suwayomi" / "data" / "server.conf"
-        self.staging_dir = (staging_dir or (self.home_dir / "suwayomi" / "data" / ".webui_staging")).resolve()
-        self.journal_path = self.staging_dir / "publication_journal.json"
+    def __init__(self, home_dir: Path, driver=None):
+        self.home_dir = Path(os.path.abspath(home_dir))
+        safe_path(self.home_dir)
+        data = self.home_dir/'suwayomi/data'
+        self.live_webui_dir = data/'webUI'
+        self.conf_path = data/'server.conf'
+        self.staging_dir = data/'.webui_staging'
+        self.candidate = self.staging_dir/'candidate_webui'
+        self.conf_backup = self.staging_dir/'server.conf.backup'
+        self.journal_path = self.staging_dir/'publication_journal.json'
         self.driver = driver
 
     def _ensure_driver(self):
         if self.driver is None:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
             from scripts.termux_activation import TermuxLifecycleDriver
             self.driver = TermuxLifecycleDriver()
         return self.driver
 
-    def check_service_intent(self) -> None:
+    def _intent(self):
         driver = self._ensure_driver()
-        # Check paused
-        is_paused_fn = getattr(driver, "is_paused", None)
-        if callable(is_paused_fn) and is_paused_fn():
-            raise PublicationError("Refusing publication: system is in paused state")
+        disabled = self.home_dir/'.config/services_disabled/suwayomi'
+        if driver.is_paused() or disabled.exists() or disabled.is_symlink():
+            raise PublicationError('Suwayomi disabled or server paused')
+        services = driver.services()
+        if 'suwayomi' not in services:
+            raise PublicationError('Missing Suwayomi service')
+        return services
 
-        # Check disabled services
-        disabled_dir = getattr(driver, "disabled_dir", self.home_dir / ".config" / "services_disabled")
-        if (disabled_dir / "suwayomi").exists() or (disabled_dir / "suwayomi.disabled").exists():
-            raise PublicationError("Refusing publication: suwayomi is disabled")
+    def _protected(self):
+        files = ['suwayomi/bin/Suwayomi-Server.jar', 'suwayomi/libdns_fix.so']
+        result = {'files': {}, 'flags': {}}
+        for name in files:
+            path = self.home_dir/name
+            safe_path(path)
+            result['files'][name] = compute_file_sha256(path)
+        flags = self.home_dir/'.config/services_disabled'
+        safe_path(flags)
+        for path in flags.iterdir():
+            info = path.lstat()
+            result['flags'][path.name] = [info.st_ino, info.st_mtime_ns, info.st_mode,
+                os.readlink(path) if path.is_symlink() else compute_file_sha256(path)]
+        return result
 
-        # Check registered services
-        services = driver.services() if callable(getattr(driver, "services", None)) else {}
-        if services and "suwayomi" not in services:
-            raise PublicationError("Refusing publication: suwayomi service not defined in catalog")
+    def _save(self, journal):
+        atomic_write(self.journal_path, (json.dumps(journal, sort_keys=True)+'\n').encode(), 0o600)
 
-    def publish(
-        self,
-        zip_path: Path,
-        prov_path: Path,
-        expected_zip_sha256: Optional[str] = None,
-        expected_prior_tree_sha: Optional[Dict[str, str]] = None,
-        expected_prior_conf_sha: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Execute full validated publication."""
-        # 1. Scope and safe path validation
-        for p in (self.live_webui_dir, self.conf_path, self.staging_dir):
-            if p.is_symlink():
-                raise PublicationError(f"Prohibited symlink encountered at {p}")
-
-        # Ensure staging dir under same filesystem as live_webui_dir parent
-        self.staging_dir.mkdir(parents=True, exist_ok=True)
-
-        # 2. Refuse if suwayomi paused or disabled
-        self.check_service_intent()
-
-        # 3. Validate ZIP and Provenance strictly BEFORE any mutations
-        prov = validate_provenance_and_zip(zip_path, prov_path, expected_zip_sha256)
-        files_manifest = prov["files"]
-
-        # 4. Validate prior live tree and conf if expectations provided
-        prior_tree_hashes = compute_tree_manifest(self.live_webui_dir)
-        if expected_prior_tree_sha is not None:
-            if prior_tree_hashes != expected_prior_tree_sha:
-                raise PublicationError("Prior live WebUI tree hashes do not match expected manifest (drift detected)")
-
-        if not self.conf_path.is_file():
-            raise PublicationError(f"server.conf not found at {self.conf_path}")
-
-        prior_conf_bytes = self.conf_path.read_bytes()
-        prior_conf_sha = hashlib.sha256(prior_conf_bytes).hexdigest()
-        if expected_prior_conf_sha is not None and prior_conf_sha != expected_prior_conf_sha:
-            raise PublicationError(f"server.conf hash {prior_conf_sha} != expected {expected_prior_conf_sha} (drift detected)")
-
-        # 5. Extract candidate into staging and verify
-        candidate_extract_dir = self.staging_dir / "candidate_webui"
-        extracted_manifest = extract_and_verify_candidate(zip_path, files_manifest, candidate_extract_dir)
-
-        # 6. Preserve old hashed assets
-        final_manifest = preserve_prior_assets(self.live_webui_dir, candidate_extract_dir, extracted_manifest)
-
-        # 7. Compute server.conf modification
-        prior_conf_str = prior_conf_bytes.decode("utf-8")
-        new_conf_str, conf_changed = modify_server_conf_flavor_custom(prior_conf_str)
-        target_conf_bytes = new_conf_str.encode("utf-8")
-        target_conf_sha = hashlib.sha256(target_conf_bytes).hexdigest()
-
-        # 8. Feature test atomic exchange before stopping service
-        can_exchange = test_rename_exchange_support(self.staging_dir)
-        exchange_method = "renameat2_exchange" if can_exchange else "two_step_staged"
-
-        # Prepare backup paths in staging
-        backup_webui_dir = self.staging_dir / "backup_webui"
-        conf_backup_file = self.staging_dir / "server.conf.backup"
-        conf_backup_file.write_bytes(prior_conf_bytes)
-
-        if backup_webui_dir.exists():
-            shutil.rmtree(backup_webui_dir)
-
-        # 9. Record durable journal before mutation
-        journal = PublicationJournal(
-            action="publish",
-            live_webui_dir=str(self.live_webui_dir),
-            backup_webui_dir=str(backup_webui_dir),
-            candidate_webui_dir=str(candidate_extract_dir),
-            conf_path=str(self.conf_path),
-            conf_backup_path=str(conf_backup_file),
-            prior_tree_hashes=prior_tree_hashes,
-            expected_final_hashes=final_manifest,
-            prior_conf_sha=prior_conf_sha,
-            target_conf_sha=target_conf_sha,
-            exchange_method=exchange_method,
-            status="prepared",
-        )
-        journal.save(self.journal_path)
-
+    def _stop(self):
         driver = self._ensure_driver()
+        records = driver.matching_processes('suwayomi')
+        if records:
+            driver.terminate(records)
+        if driver.matching_processes('suwayomi'):
+            raise PublicationError('Suwayomi survived verified shutdown')
 
-        # 10. Lock services across stop, swap, start, health
-        lock_ctx = getattr(driver, "lock", None)
-        lock_mgr = lock_ctx("services", timeout=10) if callable(lock_ctx) else None
+    def _start(self, services):
+        driver = self._ensure_driver()
+        driver.launch('suwayomi', services['suwayomi'])
+        deadline = time.monotonic()+HEALTH_TIMEOUT
+        while not driver.healthy('suwayomi', services['suwayomi']):
+            if time.monotonic() >= deadline:
+                raise PublicationError('Suwayomi unhealthy after restart')
+            time.sleep(0.25)
 
-        class _DummyLock:
-            def __enter__(self): return self
-            def __exit__(self, *args): pass
+    def _check_journal(self, journal):
+        if journal.get('version') != 1 or journal.get('status') not in (
+            'prepared', 'applying', 'committed', 'rolling_back', 'rolled_back', 'recovery_required'):
+            raise PublicationError('Invalid publication journal')
+        safe_path(self.staging_dir)
+        if stat.S_IMODE(self.staging_dir.stat().st_mode) != 0o700 or stat.S_IMODE(self.conf_backup.stat().st_mode) != 0o600:
+            raise PublicationError('Private staging permissions changed')
+        if stat.S_IMODE(self.conf_path.stat().st_mode) != journal.get('conf_mode'):
+            raise PublicationError('Configuration permissions drift')
+        for name in ('prior_tree', 'target_tree'):
+            validate_manifest(journal.get(name))
+        if journal['prior_tree'] == journal['target_tree']:
+            raise PublicationError('Ambiguous tree states')
+        for path in (self.conf_path, self.conf_backup, self.candidate, self.journal_path):
+            safe_path(path)
+        if compute_file_sha256(self.conf_backup) != journal['prior_conf_sha']:
+            raise PublicationError('Configuration backup drift')
+        if self._protected() != journal['protected']:
+            raise PublicationError('Protected runtime or disabled flags drifted')
+        current_conf = compute_file_sha256(self.conf_path)
+        if current_conf not in (journal['prior_conf_sha'], journal['target_conf_sha']):
+            raise PublicationError('Configuration drift; recovery refused')
+        current = compute_tree_manifest(self.live_webui_dir)
+        other = compute_tree_manifest(self.candidate)
+        if not ((current == journal['prior_tree'] and other == journal['target_tree']) or
+                (current == journal['target_tree'] and other == journal['prior_tree'])):
+            raise PublicationError('WebUI drift; recovery refused')
+        return current
 
-        mgr = lock_mgr if lock_mgr is not None else _DummyLock()
+    def _restore(self, journal, services):
+        current = self._check_journal(journal)
+        journal['status'] = 'rolling_back'
+        self._save(journal)
+        driver = self._ensure_driver()
+        changed = current != journal['prior_tree'] or compute_file_sha256(self.conf_path) != journal['prior_conf_sha']
+        if changed:
+            self._stop()
+            if current != journal['prior_tree']:
+                _rename_exchange(self.live_webui_dir, self.candidate)
+                sync_directory(self.live_webui_dir.parent)
+                sync_directory(self.staging_dir)
+            # Restore old UI before its old validation mode, including after interruption.
+            atomic_write(self.conf_path, self.conf_backup.read_bytes(), journal['conf_mode'])
+        if changed or not driver.healthy('suwayomi', services['suwayomi']):
+            self._start(services)
+        self._check_journal(journal)
+        if compute_tree_manifest(self.live_webui_dir) != journal['prior_tree'] or compute_file_sha256(self.conf_path) != journal['prior_conf_sha']:
+            raise PublicationError('Rollback verification failed')
+        journal['status'] = 'rolled_back'
+        self._save(journal)
 
-        with mgr:
-            # Snapshot unrelated process identities before stop
-            before_procs = {}
-            if callable(getattr(driver, "matching_processes", None)):
-                for sid in ("antra", "navidrome", "caddy", "suwayomi_scheduler"):
-                    try:
-                        before_procs[sid] = driver.matching_processes(sid)
-                    except Exception:
-                        pass
-
-            journal.status = "stopping"
-            journal.save(self.journal_path)
-
-            # Terminate only suwayomi
-            suwayomi_procs = driver.matching_processes("suwayomi") if callable(getattr(driver, "matching_processes", None)) else []
-            if suwayomi_procs and callable(getattr(driver, "terminate", None)):
-                driver.terminate(suwayomi_procs)
-
-            journal.status = "swapping"
-            journal.save(self.journal_path)
-
+    def publish(self, zip_path: Path, prov_path: Path, *, expected_zip_sha256: str,
+                expected_provenance_sha256: str, expected_prior_tree_sha: dict[str, str],
+                expected_prior_conf_sha: str) -> dict:
+        prov = validate_provenance_and_zip(zip_path, prov_path, expected_zip_sha256, expected_provenance_sha256)
+        validate_manifest(expected_prior_tree_sha)
+        driver = self._ensure_driver()
+        with driver.lock('services', timeout=10):
+            services = self._intent()
+            for path in (self.live_webui_dir, self.conf_path, self.staging_dir):
+                safe_path(path)
+            if self.staging_dir.exists():
+                raise PublicationError('Publication staging already exists; inspect or recover it')
+            prior = compute_tree_manifest(self.live_webui_dir)
+            if prior != expected_prior_tree_sha or compute_file_sha256(self.conf_path) != expected_prior_conf_sha:
+                raise PublicationError('Prior WebUI or configuration drift')
+            before = {sid: driver.matching_processes(sid) for sid in services if sid != 'suwayomi'}
+            protected = self._protected()
+            content = self.conf_path.read_bytes()
+            conf_mode = stat.S_IMODE(self.conf_path.stat().st_mode)
+            target = modify_server_conf_flavor_custom(content.decode('utf-8'))[0].encode('utf-8')
+            self.staging_dir.mkdir(mode=0o700)
+            self.candidate.mkdir()
+            if self.staging_dir.stat().st_dev != self.live_webui_dir.stat().st_dev or not test_rename_exchange_support(self.staging_dir):
+                raise PublicationError('Atomic directory exchange unavailable')
+            with zipfile.ZipFile(zip_path) as archive:
+                for name in prov['files']:
+                    path = self.candidate/name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_write(path, archive.read(name), 0o644)
+            if compute_tree_manifest(self.candidate) != prov['files']:
+                raise PublicationError('Extracted manifest mismatch')
+            final = preserve_prior_assets(self.live_webui_dir, self.candidate, prov['files'])
+            if compute_tree_manifest(self.candidate) != final or prior == final:
+                raise PublicationError('Candidate manifest invalid or unchanged')
+            for directory, _, _ in os.walk(self.candidate, topdown=False):
+                sync_directory(Path(directory))
+            atomic_write(self.conf_backup, content, 0o600)
+            journal = {'version': 1, 'status': 'prepared', 'prior_tree': prior, 'target_tree': final,
+                'prior_conf_sha': expected_prior_conf_sha, 'target_conf_sha': hashlib.sha256(target).hexdigest(),
+                'conf_mode': conf_mode, 'protected': protected, 'archive_sha256': expected_zip_sha256,
+                'provenance_sha256': expected_provenance_sha256}
+            self._save(journal)
+            self._check_journal(journal)
             try:
-                # Perform directory swap
-                if exchange_method == "renameat2_exchange":
-                    if not self.live_webui_dir.exists():
-                        self.live_webui_dir.mkdir(parents=True)
-                    _rename_exchange(candidate_extract_dir, self.live_webui_dir)
-                    # Now candidate_extract_dir holds the prior live tree! Move it to backup
-                    candidate_extract_dir.replace(backup_webui_dir)
-                else:
-                    if self.live_webui_dir.exists():
-                        self.live_webui_dir.replace(backup_webui_dir)
-                    candidate_extract_dir.replace(self.live_webui_dir)
-
-                # Update server.conf atomically
-                if conf_changed:
-                    tmp_conf = self.conf_path.with_suffix(".tmp")
-                    tmp_conf.write_bytes(target_conf_bytes)
-                    tmp_conf.replace(self.conf_path)
-
-                journal.status = "starting"
-                journal.save(self.journal_path)
-
-                # Launch suwayomi
-                services = driver.services() if callable(getattr(driver, "services", None)) else {}
-                suwayomi_cfg = services.get("suwayomi", {})
-                if callable(getattr(driver, "launch", None)):
-                    driver.launch("suwayomi", suwayomi_cfg)
-
-                # Health check
-                is_healthy = False
-                if callable(getattr(driver, "healthy", None)):
-                    is_healthy = driver.healthy("suwayomi", suwayomi_cfg)
-                else:
-                    is_healthy = True
-
-                if not is_healthy:
-                    raise PublicationError("Suwayomi backend reported unhealthy after publication")
-
-                # Verify live manifest
-                live_manifest = compute_tree_manifest(self.live_webui_dir)
-                if live_manifest != final_manifest:
-                    raise PublicationError("Live tree manifest does not match expected final manifest")
-
-                # Check unrelated process identities did not mutate
-                if callable(getattr(driver, "matching_processes", None)):
-                    for sid, procs in before_procs.items():
-                        current = driver.matching_processes(sid)
-                        if procs != current:
-                            logger.warning(f"Process identity change detected for {sid}: was {procs}, now {current}")
-
-                journal.status = "committed"
-                journal.save(self.journal_path)
-
-            except Exception as e:
-                logger.error(f"Publication failed: {e}. Initiating rollback...")
-                self._execute_rollback(journal, driver)
+                journal['status'] = 'applying'
+                self._save(journal)
+                self._stop()
+                self._check_journal(journal)
+                # CUSTOM first: an interrupted publication can still serve the complete old UI.
+                atomic_write(self.conf_path, target, conf_mode)
+                _rename_exchange(self.candidate, self.live_webui_dir)
+                sync_directory(self.live_webui_dir.parent)
+                sync_directory(self.staging_dir)
+                self._start(services)
+                if self._check_journal(journal) != final or compute_file_sha256(self.conf_path) != journal['target_conf_sha']:
+                    raise PublicationError('Published output verification failed')
+                if any(driver.matching_processes(sid) != records for sid, records in before.items()):
+                    raise PublicationError('Unrelated service identity changed')
+                journal['status'] = 'committed'
+                self._save(journal)
+            except Exception:
+                try:
+                    self._restore(journal, services)
+                except Exception as error:
+                    journal['status'] = 'recovery_required'
+                    self._save(journal)
+                    raise PublicationError('Publication failed; explicit recovery required') from error
                 raise
+            return {'status': 'success', 'manifest_count': len(final), 'conf_sha256': journal['target_conf_sha'],
+                'exchange_method': 'renameat2_exchange', 'journal': str(self.journal_path)}
 
-        return {
-            "status": "success",
-            "manifest_count": len(final_manifest),
-            "conf_sha256": target_conf_sha,
-            "exchange_method": exchange_method,
-        }
-
-    def _execute_rollback(self, journal: PublicationJournal, driver: Any) -> None:
-        """Roll back live directory and server.conf to prior state."""
-        journal.status = "rolling_back"
-        journal.save(self.journal_path)
-
-        # Terminate any running suwayomi
-        suwayomi_procs = driver.matching_processes("suwayomi") if callable(getattr(driver, "matching_processes", None)) else []
-        if suwayomi_procs and callable(getattr(driver, "terminate", None)):
-            driver.terminate(suwayomi_procs)
-
-        backup_webui = Path(journal.backup_webui_dir)
-        live_webui = Path(journal.live_webui_dir)
-        conf_backup = Path(journal.conf_backup_path)
-        conf_live = Path(journal.conf_path)
-
-        # Restore config
-        if conf_backup.is_file():
-            conf_backup.replace(conf_live)
-
-        # Restore webui tree
-        if backup_webui.exists():
-            if live_webui.exists():
-                shutil.rmtree(live_webui)
-            backup_webui.replace(live_webui)
-
-        # Restart backend
-        services = driver.services() if callable(getattr(driver, "services", None)) else {}
-        suwayomi_cfg = services.get("suwayomi", {})
-        if callable(getattr(driver, "launch", None)):
-            driver.launch("suwayomi", suwayomi_cfg)
-
-        journal.status = "rolled_back"
-        journal.save(self.journal_path)
-
-    def recover(self) -> Dict[str, Any]:
-        """Interrupted state recovery using durable journal."""
-        if not self.journal_path.is_file():
-            return {"status": "no_journal_found"}
-
-        journal = PublicationJournal.load(self.journal_path)
-        if not journal:
-            raise PublicationError("Invalid journal format")
-
-        if journal.status in ("committed", "rolled_back"):
-            return {"status": "already_consistent", "journal_status": journal.status}
-
+    def recover(self) -> dict:
+        if not self.journal_path.exists():
+            return {'status': 'no_journal_found'}
         driver = self._ensure_driver()
-        lock_ctx = getattr(driver, "lock", None)
-        lock_mgr = lock_ctx("services", timeout=10) if callable(lock_ctx) else None
-
-        class _DummyLock:
-            def __enter__(self): return self
-            def __exit__(self, *args): pass
-
-        prev_status = journal.status
-        with (lock_mgr or _DummyLock()):
-            self._execute_rollback(journal, driver)
-
-        return {"status": "recovered", "previous_status": prev_status}
+        with driver.lock('services', timeout=10):
+            services = self._intent()
+            safe_path(self.journal_path)
+            journal = json.loads(self.journal_path.read_bytes())
+            current = self._check_journal(journal)
+            if journal['status'] == 'rolled_back':
+                if current != journal['prior_tree'] or compute_file_sha256(self.conf_path) != journal['prior_conf_sha']:
+                    raise PublicationError('Rolled-back state drift')
+                return {'status': 'already_consistent', 'journal_status': 'rolled_back'}
+            self._restore(journal, services)
+            return {'status': 'recovered'}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Suwayomi WebUI publication tool")
-    parser.add_argument("--home-dir", type=Path, default=Path(os.environ.get("HOME", "/data/data/com.termux/files/home")))
-    parser.add_argument("--zip", type=Path, required=True, help="Path to WebUI.zip")
-    parser.add_argument("--provenance", type=Path, required=True, help="Path to WebUI.provenance.json")
-    parser.add_argument("--expected-sha256", type=str, default=None, help="Expected SHA256 of WebUI.zip")
-    parser.add_argument("--recover", action="store_true", help="Recover from interrupted state")
-
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--home-dir', type=Path, default=Path('/data/data/com.termux/files/home'))
+    parser.add_argument('--recover', action='store_true')
+    for option in ('zip', 'provenance', 'preconditions'):
+        parser.add_argument('--'+option, type=Path)
+    parser.add_argument('--expected-sha256')
+    parser.add_argument('--expected-provenance-sha256')
     args = parser.parse_args()
-
-    publisher = WebUIPublisher(home_dir=args.home_dir)
+    publisher = WebUIPublisher(args.home_dir)
     if args.recover:
-        res = publisher.recover()
-        print(json.dumps(res))
-        return
+        result = publisher.recover()
+    else:
+        if not all((args.zip, args.provenance, args.preconditions, args.expected_sha256, args.expected_provenance_sha256)):
+            parser.error('Publication requires archive, provenance, both digests and reviewed preconditions')
+        pre = json.loads(args.preconditions.read_bytes())
+        result = publisher.publish(args.zip, args.provenance, expected_zip_sha256=args.expected_sha256,
+            expected_provenance_sha256=args.expected_provenance_sha256,
+            expected_prior_tree_sha=pre['tree'], expected_prior_conf_sha=pre['conf_sha256'])
+    print(json.dumps(result))
 
-    res = publisher.publish(
-        zip_path=args.zip,
-        prov_path=args.provenance,
-        expected_zip_sha256=args.expected_sha256,
-    )
-    print(json.dumps(res))
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

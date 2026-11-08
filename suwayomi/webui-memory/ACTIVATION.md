@@ -1,29 +1,11 @@
-# Suwayomi WebUI Activation & Publication Memory
+# Suwayomi custom WebUI activation
 
-## Architecture and Constraints
+The backend copies `data/webUI` into its serving directory at startup. The native `CUSTOM` WebUI flavor prevents upstream validation from replacing the maintained UI. Publication changes only that setting and the complete UI directory; it preserves the backend JAR, DNS shim, disabled flags, portal files and unrelated services.
 
-1. **Backend Integration**:
-   - Upstream Suwayomi Server (`40bc5da57820324ed0ae724cbbc020cc4673b594`) copies `data/webUI` to `PREFIX/tmp/Tachidesk/webUI-serve` on startup.
-   - Setting `server.webUIFlavor = "CUSTOM"` in `server.conf` activates the local WebUI directory and skips remote upstream hash checks/overwrites.
-   - Preserves proven backend JAR, intentional DNS shims, Caddy routing, and concurrent AGY / `web/admin.html` drift.
+`tools/publish_suwayomi_webui.py` requires separately reviewed archive and provenance SHA-256 digests plus the complete prior tree and configuration digest. It validates every archive file before service signals, retains older lazy assets, requires native atomic directory exchange, and holds the existing services lock across exact backend shutdown, publication and health checks. There is no two-rename fallback. Configuration bytes and mode are preserved except the flavor value. Backups and journals use private permissions.
 
-2. **Artifact Interface**:
-   - Input: `WebUI.zip` and `WebUI.provenance.json` produced by reviewed build.
-   - Provenance specifies `archive_sha256` and strict mapping `files: { relative_path: sha256 }`.
-   - Tool verifies archive digest, entry counts, uncompressed size limits, and forbids path traversal (`..`), absolute paths, symlinks, duplicate entries, and unmanifested files.
+The private transaction remains at `suwayomi/data/.webui_staging`. A second publication refuses to overwrite it. `--recover` restores the prior release, including after a successful publication. It derives interrupted exchange state from both directory manifests and refuses recovery if configuration, files, protected runtime or disabled-service intent drifted. Neither normal publication nor recovery guesses over concurrent edits. Process interruption immediately after exchange and ordinary failed-health rollback are covered by real temporary filesystem tests with an injected lifecycle driver.
 
-3. **Asset Preservation**:
-   - In-flight tabs holding older HTML chunks require existing hashed lazy assets (e.g. `assets/*.js`, `assets/*.css`).
-   - Publication preserves prior hashed assets into the candidate directory if not present in the new manifest.
-   - Preserved assets are included in the expected final manifest verification.
+Publication arguments: `--zip`, `--provenance`, `--expected-sha256`, `--expected-provenance-sha256`, and `--preconditions`. Preconditions JSON contains `tree` (relative paths to SHA-256) and `conf_sha256`. `--home-dir` defaults to the Termux home. Recovery requires only `--recover` and the intended home. Never print or commit the real server configuration or backup.
 
-4. **Lifecycle & Concurrency Control**:
-   - Reuses `TermuxLifecycleDriver` lock on `"services"` (`timeout=10`) across stop, swap, start, and health-check steps.
-   - Refuses mutation if Suwayomi is paused or disabled.
-   - Tracks unrelated process identities (`caddy`, `antra`, `navidrome`, `suwayomi_scheduler`) and mutates none.
-
-5. **Atomic Swap & Durable Journaling**:
-   - Feature-tests `renameat2(RENAME_EXCHANGE)` before stopping services; falls back to staged atomic moves if unsupported.
-   - Records durable `publication_journal.json` in staging before mutations.
-   - Automatic rollback on health or manifest verification failure restores previous tree and configuration, then restarts backend.
-   - Explicit `--recover` operation safely recovers from interrupted states without arbitrary overwrites.
+Root acceptance still requires native phone tests, artifact/source verification, real activation, routed browser behavior without response overrides, comparable timing, and detached service health. Filesystem durability does not guarantee survival of failing storage hardware.
