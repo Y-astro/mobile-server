@@ -1,9 +1,8 @@
 diff --git a/src/features/library/hooks/useLibraryCoverPreload.ts b/src/features/library/hooks/useLibraryCoverPreload.ts
 new file mode 100644
-index 0000000..8a0ddc0
 --- /dev/null
 +++ b/src/features/library/hooks/useLibraryCoverPreload.ts
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,58 @@
 +/*
 + * Copyright (C) Contributors to the Suwayomi project
 + *
@@ -12,10 +11,11 @@ index 0000000..8a0ddc0
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/.
 + */
 +
-+import { useEffect, useRef } from 'react';
++import { useEffect } from 'react';
 +import gql from 'graphql-tag';
 +import { requestManager } from '@/lib/requests/RequestManager.ts';
 +import { coverMemoryStore, CoverMemoryStore } from '@/features/library/services/CoverMemoryStore.ts';
++import type { MangaThumbnailInfo } from '@/features/manga/Manga.types.ts';
 +import { Mangas } from '@/features/manga/services/Mangas.ts';
 +
 +export const GET_LIBRARY_COVER_METADATA = gql`
@@ -34,19 +34,11 @@ index 0000000..8a0ddc0
 +
 +export interface LibraryCoverMetadataQuery {
 +    mangas: {
-+        nodes: Array<{
-+            id: number;
-+            thumbnailUrl?: string | null;
-+            thumbnailUrlLastFetched?: number | null;
-+            sourceId?: string | null;
-+            inLibrary?: boolean | null;
-+        }>;
++        nodes: Array<MangaThumbnailInfo & { id: number; inLibrary: boolean }>;
 +    };
 +}
 +
 +export function useLibraryCoverPreload(isForegroundReady: boolean = true) {
-+    const hasPreloadedRef = useRef(false);
-+
 +    const { data } = requestManager.useGetMangas<LibraryCoverMetadataQuery, { condition: { inLibrary: boolean } }>(
 +        GET_LIBRARY_COVER_METADATA,
 +        { condition: { inLibrary: true } },
@@ -61,23 +53,19 @@ index 0000000..8a0ddc0
 +        const nodes = data.mangas.nodes;
 +        const validUrls = nodes
 +            .filter((m) => m?.inLibrary && m?.thumbnailUrl)
-+            .map((m) => Mangas.getThumbnailUrl(m as any))
++            .map((m) => Mangas.getThumbnailUrl(m))
 +            .filter((url: string) => CoverMemoryStore.isAllowedCoverUrl(url, requestManager.getBaseUrl()));
 +
 +        coverMemoryStore.reconcile(validUrls);
 +
-+        if (!hasPreloadedRef.current || validUrls.length > 0) {
-+            hasPreloadedRef.current = true;
-+            coverMemoryStore.enqueue(validUrls);
-+        }
++        coverMemoryStore.enqueue(validUrls);
 +    }, [data]);
 +}
 diff --git a/src/features/library/services/CoverMemoryStore.ts b/src/features/library/services/CoverMemoryStore.ts
 new file mode 100644
-index 0000000..88cb5c9
 --- /dev/null
 +++ b/src/features/library/services/CoverMemoryStore.ts
-@@ -0,0 +1,378 @@
+@@ -0,0 +1,365 @@
 +/*
 + * Copyright (C) Contributors to the Suwayomi project
 + *
@@ -124,8 +112,7 @@ index 0000000..88cb5c9
 +
 +    private backgroundQueue: string[] = [];
 +    private queuedSet = new Set<string>();
-+    private readonly inFlightSet = new Set<string>();
-+    private activeBackgroundTransfers: number = 0;
++    private activeUrls: Set<string> | undefined;
 +    private activeForegroundTransfers: number = 0;
 +    private readonly abortControllers = new Map<string, AbortController>();
 +
@@ -161,7 +148,7 @@ index 0000000..88cb5c9
 +            const parsed = new URL(url, baseParsed.href);
 +
 +            // Origin check: must match configured server origin strictly
-+            if (parsed.origin !== baseParsed.origin) {
++            if (parsed.origin !== baseParsed.origin || parsed.username || parsed.password) {
 +                return false;
 +            }
 +
@@ -173,7 +160,8 @@ index 0000000..88cb5c9
 +            // Path check: relative to base URL pathname
 +            let pathname = parsed.pathname;
 +            const basePath = baseParsed.pathname.replace(/\/+$/, '');
-+            if (basePath.length > 0 && pathname.startsWith(basePath)) {
++            if (basePath.length > 0) {
++                if (!pathname.startsWith(`${basePath}/`)) return false;
 +                pathname = pathname.slice(basePath.length);
 +            }
 +
@@ -205,7 +193,7 @@ index 0000000..88cb5c9
 +    }
 +
 +    public put(url: string, blob: Blob, objectUrl?: string): string | null {
-+        if (!blob || blob.size > this.maxImageBytes) {
++        if (!blob || !blob.size || blob.size > this.maxImageBytes || !blob.type.toLowerCase().startsWith('image/')) {
 +            return null;
 +        }
 +
@@ -284,6 +272,7 @@ index 0000000..88cb5c9
 +     */
 +    public reconcile(currentLibraryUrls: string[]): void {
 +        const activeSet = new Set(currentLibraryUrls);
++        this.activeUrls = activeSet;
 +        const toEvict: string[] = [];
 +
 +        for (const url of this.entries.keys()) {
@@ -300,8 +289,7 @@ index 0000000..88cb5c9
 +        for (const [url, controller] of this.abortControllers.entries()) {
 +            if (!activeSet.has(url)) {
 +                controller.abort(new Error('Removed from library during fetch'));
-+                this.abortControllers.delete(url);
-+                this.inFlightSet.delete(url);
++                // The transfer finalizer owns its slot until cancellation settles.
 +            }
 +        }
 +
@@ -321,7 +309,6 @@ index 0000000..88cb5c9
 +            controller.abort(new Error('Store cleared'));
 +        }
 +        this.abortControllers.clear();
-+        this.inFlightSet.clear();
 +
 +        for (const entry of this.entries.values()) {
 +            if (typeof URL !== 'undefined' && URL.revokeObjectURL && entry.objectUrl.startsWith('blob:')) {
@@ -333,24 +320,27 @@ index 0000000..88cb5c9
 +        this.currentBytes = 0;
 +        this.backgroundQueue = [];
 +        this.queuedSet.clear();
-+        this.activeBackgroundTransfers = 0;
++        this.activeUrls = undefined;
++        this.activeForegroundTransfers = 0;
 +    }
 +
-+    public onForegroundStart(): void {
++    public onForegroundStart(): () => void {
 +        this.activeForegroundTransfers++;
++        const generation = this.generation;
++        let finished = false;
 +        // Preemptively abort in-flight background transfers to free socket capacity for foreground
-+        if (this.abortControllers.size > 0) {
-+            for (const [url, controller] of this.abortControllers.entries()) {
-+                controller.abort(new Error('Preempted by foreground image request'));
-+                // Put back in queue to retry when foreground is idle
-+                if (!this.queuedSet.has(url) && !this.entries.has(url)) {
-+                    this.backgroundQueue.unshift(url);
-+                    this.queuedSet.add(url);
-+                }
++        for (const [url, controller] of this.abortControllers) {
++            // Put back in queue to retry when foreground is idle
++            if (!this.queuedSet.has(url) && !this.entries.has(url)) {
++                this.backgroundQueue.unshift(url);
++                this.queuedSet.add(url);
 +            }
-+            this.abortControllers.clear();
-+            this.inFlightSet.clear();
++            controller.abort(new Error('Preempted by foreground image request'));
 +        }
++        return () => {
++            if (!finished && this.generation === generation) this.onForegroundEnd();
++            finished = true;
++        };
 +    }
 +
 +    public onForegroundEnd(): void {
@@ -362,7 +352,7 @@ index 0000000..88cb5c9
 +
 +    public enqueue(urls: string[]): void {
 +        for (const url of urls) {
-+            if (!this.entries.has(url) && !this.queuedSet.has(url) && !this.inFlightSet.has(url)) {
++            if (!this.entries.has(url) && !this.queuedSet.has(url) && !this.abortControllers.has(url)) {
 +                this.backgroundQueue.push(url);
 +                this.queuedSet.add(url);
 +            }
@@ -380,52 +370,37 @@ index 0000000..88cb5c9
 +        }
 +
 +        while (
-+            this.activeBackgroundTransfers < this.backgroundConcurrency &&
++            this.abortControllers.size < this.backgroundConcurrency &&
 +            this.backgroundQueue.length > 0 &&
 +            !this.isPaused()
 +        ) {
 +            const url = this.backgroundQueue.shift()!;
 +            this.queuedSet.delete(url);
 +
-+            if (this.entries.has(url) || this.inFlightSet.has(url)) {
++            if (this.entries.has(url) || (this.activeUrls && !this.activeUrls.has(url))) {
 +                continue;
 +            }
 +
-+            this.inFlightSet.add(url);
-+            this.activeBackgroundTransfers++;
 +            const transferGen = this.generation;
 +            const controller = new AbortController();
 +            this.abortControllers.set(url, controller);
 +
 +            // Bounded timeout so missing/hung image cannot block a slot indefinitely
-+            const timeoutId = setTimeout(() => {
-+                controller.abort(new Error('Background fetch timed out'));
-+            }, this.fetchTimeoutMs);
-+
-+            this.fetcher(url, controller.signal)
++            let timeoutId: ReturnType<typeof setTimeout>;
++            const aborted = new Promise<never>((_, reject) => {
++                controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
++                timeoutId = setTimeout(() => controller.abort(new Error('Background fetch timed out')), this.fetchTimeoutMs);
++            });
++            Promise.race([Promise.resolve().then(() => this.fetcher!(url, controller.signal)), aborted])
 +                .then((blob) => {
-+                    clearTimeout(timeoutId);
-+                    if (this.generation !== transferGen) {
-+                        return;
-+                    }
-+                    this.abortControllers.delete(url);
-+                    this.inFlightSet.delete(url);
-+                    this.put(url, blob);
++                    if (this.generation === transferGen && !controller.signal.aborted &&
++                        (!this.activeUrls || this.activeUrls.has(url))) this.put(url, blob);
 +                })
-+                .catch(() => {
-+                    clearTimeout(timeoutId);
-+                    if (this.generation !== transferGen) {
-+                        return;
-+                    }
-+                    this.abortControllers.delete(url);
-+                    this.inFlightSet.delete(url);
-+                })
++                .catch(() => {})
 +                .finally(() => {
 +                    clearTimeout(timeoutId);
-+                    if (this.generation === transferGen) {
-+                        this.activeBackgroundTransfers = Math.max(0, this.activeBackgroundTransfers - 1);
-+                        this.pump();
-+                    }
++                    if (this.abortControllers.get(url) === controller) this.abortControllers.delete(url);
++                    if (this.generation === transferGen) this.pump();
 +                });
 +        }
 +    }
@@ -447,7 +422,7 @@ index 0000000..88cb5c9
 +            maxStoreBytes: this.maxStoreBytes,
 +            maxImageBytes: this.maxImageBytes,
 +            queueLength: this.backgroundQueue.length,
-+            activeBackgroundTransfers: this.activeBackgroundTransfers,
++            activeBackgroundTransfers: this.abortControllers.size,
 +            activeForegroundTransfers: this.activeForegroundTransfers,
 +            isPaused: this.isPaused(),
 +            generation: this.generation,
@@ -456,3 +431,151 @@ index 0000000..88cb5c9
 +}
 +
 +export const coverMemoryStore = new CoverMemoryStore();
+diff --git a/src/features/library/screens/Library.tsx b/src/features/library/screens/Library.tsx
+--- a/src/features/library/screens/Library.tsx
++++ b/src/features/library/screens/Library.tsx
+@@ -29,6 +29,7 @@
+ import { useSelectableCollection } from '@/base/collection/hooks/useSelectableCollection.ts';
+ import { SelectableCollectionSelectMode } from '@/base/collection/components/SelectableCollectionSelectMode.tsx';
+ import { useGetVisibleLibraryMangas } from '@/features/library/hooks/useGetVisibleLibraryMangas.ts';
++import { useLibraryCoverPreload } from '@/features/library/hooks/useLibraryCoverPreload.ts';
+ import { SelectionFAB } from '@/base/collection/components/SelectionFAB.tsx';
+ import { MangaActionMenuItems } from '@/features/manga/components/MangaActionMenuItems.tsx';
+ import { TabsMenu } from '@/base/components/tabs/TabsMenu.tsx';
+@@ -110,6 +111,8 @@
+         showFilteredOutMessage,
+         filterKey,
+     } = useGetVisibleLibraryMangas(categoryMangas, activeTab);
++
++    useLibraryCoverPreload(!areCategoriesLoading && !mangaLoading);
+ 
+     const getTabCount = (tab: (typeof tabs)[number]) => {
+         if (mangaLoading || tab !== activeTab || mangas.length === tab.mangas.totalCount) {
+diff --git a/src/lib/requests/RequestManager.ts b/src/lib/requests/RequestManager.ts
+--- a/src/lib/requests/RequestManager.ts
++++ b/src/lib/requests/RequestManager.ts
+@@ -21,6 +21,7 @@
+ import { d } from 'koration';
+ import type { IRestClient } from '@/lib/requests/client/RestClient.ts';
+ import { RestClient } from '@/lib/requests/client/RestClient.ts';
++import { coverMemoryStore, CoverMemoryStore } from '@/features/library/services/CoverMemoryStore.ts';
+ import { GraphQLClient } from '@/lib/requests/client/GraphQLClient.ts';
+ import { BaseClient } from '@/lib/requests/client/BaseClient.ts';
+ import type {
+@@ -492,6 +493,35 @@
+         BaseClient.setTokenRefreshCompleteCallback(() => {
+             this.processQueues();
+         });
++
++        coverMemoryStore.setFetcher(async (url, signal) => {
++            const response = await this.restClient.fetcher(url, {
++                checkResponseIsJson: false,
++                config: { signal, priority: 'low' },
++            });
++            const type = response.headers.get('content-type') ?? '';
++            const limit = CoverMemoryStore.DEFAULT_MAX_IMAGE_BYTES;
++            if (!type.toLowerCase().startsWith('image/') || Number(response.headers.get('content-length')) > limit) {
++                await response.body?.cancel();
++                throw new Error('Invalid cover response');
++            }
++            const reader = response.body?.getReader();
++            if (!reader) throw new Error('Empty cover response');
++            const chunks: Uint8Array<ArrayBuffer>[] = [];
++            let size = 0;
++            try {
++                while (true) {
++                    const { done, value } = await reader.read();
++                    if (done) break;
++                    size += value.byteLength;
++                    if (size > limit) throw new Error('Cover exceeds memory limit');
++                    chunks.push(value);
++                }
++                return new Blob(chunks, { type });
++            } finally {
++                await reader.cancel();
++            }
++        });
+     }
+ 
+     private detectHttp2(): boolean {
+@@ -523,6 +553,7 @@
+ 
+         this.cache.clear();
+         this.imageQueue.clear();
++        coverMemoryStore.clear();
+     }
+ 
+     public processQueues(): void {
+@@ -1142,11 +1173,42 @@
+         // not displayed, which then causes this issue once they get displayed
+         const shouldDecode = finalOptions.shouldDecode && navigator.userAgent.toLowerCase().includes('firefox');
+ 
+-        if (finalOptions.useFetchApi) {
+-            return this.fetchImageViaFetchApi(url, { ...finalOptions, shouldDecode });
++        if (CoverMemoryStore.isAllowedCoverUrl(url, this.getBaseUrl())) {
++            const entry = coverMemoryStore.get(url);
++            if (entry) {
++                // Each consumer owns a URL so eviction cannot revoke an image still being displayed.
++                const generation = coverMemoryStore.getStats().generation;
++                const objectUrl = URL.createObjectURL(entry.blob);
++                const image = new Image();
++                image.src = objectUrl;
++                try {
++                    await image.decode();
++                    if (coverMemoryStore.getStats().generation !== generation) throw new Error('Cover session changed');
++                    return {
++                        response: Promise.resolve(objectUrl),
++                        cleanup: () => URL.revokeObjectURL(objectUrl),
++                        abortRequest: () => {},
++                        fromCache: true,
++                    };
++                } catch {
++                    URL.revokeObjectURL(objectUrl);
++                    coverMemoryStore.evict(url);
++                    // Corrupt or unsupported cached images retain the normal fetch/retry path.
++                }
++            }
+         }
+ 
+-        return this.fetchImageViaTag(url, { ...finalOptions, shouldDecode });
++        const finishForeground = coverMemoryStore.onForegroundStart();
++        try {
++            const request = await (finalOptions.useFetchApi
++                ? this.fetchImageViaFetchApi(url, { ...finalOptions, shouldDecode })
++                : this.fetchImageViaTag(url, { ...finalOptions, shouldDecode }));
++            request.response.then(finishForeground, finishForeground);
++            return request;
++        } catch (error) {
++            finishForeground();
++            throw error;
++        }
+     }
+ 
+     private doRequest<Data, Variables extends OperationVariables = OperationVariables>(
+diff --git a/src/features/authentication/AuthManager.ts b/src/features/authentication/AuthManager.ts
+--- a/src/features/authentication/AuthManager.ts
++++ b/src/features/authentication/AuthManager.ts
+@@ -7,6 +7,7 @@
+  */
+ 
+ import { useMemo, useSyncExternalStore } from 'react';
++import { coverMemoryStore } from '@/features/library/services/CoverMemoryStore.ts';
+ import { AppStorage } from '@/lib/storage/AppStorage.ts';
+ 
+ let notifierValue = 0;
+@@ -129,6 +130,7 @@
+     }
+ 
+     static setTokens(accessToken: string, refreshToken: string): void {
++        coverMemoryStore.clear();
+         AuthManager.setAccessToken(accessToken);
+         AuthManager.setRefreshToken(refreshToken);
+     }
+@@ -144,6 +146,7 @@
+     }
+ 
+     static removeTokens(): void {
++        coverMemoryStore.clear();
+         AuthManager.removeAccessToken();
+         AuthManager.removeRefreshToken();
+     }

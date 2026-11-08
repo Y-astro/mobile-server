@@ -142,6 +142,7 @@ test('Reconciliation aborts in-flight requests and evicts removed manga', async 
     });
 
     store.enqueue([urlInFlightRemoved]);
+    await Promise.resolve();
     assert.strictEqual(store.getStats().activeBackgroundTransfers, 1);
 
     // Reconcile: active library only has urlNew
@@ -175,6 +176,7 @@ test('Clear on logout / server change revokes all URLs and prevents late puts', 
     assert.strictEqual(store.getStats().activeBackgroundTransfers, 1);
 
     // Clear triggered by logout / server switch
+    await Promise.resolve();
     store.clear();
 
     assert.strictEqual(store.has(url), false);
@@ -310,6 +312,7 @@ test('Foreground priority preempts in-flight background and resumes on idle', as
 
     const url = 'http://localhost:8080/api/v1/manga/bg/thumbnail';
     store.enqueue([url]);
+    await Promise.resolve();
     assert.strictEqual(store.getStats().activeBackgroundTransfers, 1);
 
     // Foreground request starts
@@ -328,4 +331,55 @@ test('Foreground priority preempts in-flight background and resumes on idle', as
     await new Promise((r) => setTimeout(r, 150));
     assert.strictEqual(store.has(url), true);
     assert.strictEqual(store.getStats().activeBackgroundTransfers, 0);
+});
+
+
+test('Cancelled late bodies cannot repopulate removed covers or stall the queue', async () => {
+    const store = new CoverMemoryStore({ backgroundConcurrency: 1, fetchTimeoutMs: 10 });
+    let resolveOld;
+    store.setFetcher((url) => url === 'old' ? new Promise(resolve => { resolveOld = resolve; })
+        : Promise.resolve(new MockBlob(['image'], { type: 'image/png' })));
+    store.reconcile(['old', 'new']);
+    store.enqueue(['old', 'new']);
+    await Promise.resolve();
+    store.reconcile(['new']);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    resolveOld(new MockBlob(['stale'], { type: 'image/png' }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(store.has('old'), false);
+    assert.equal(store.has('new'), true);
+    assert.equal(store.getStats().activeBackgroundTransfers, 0);
+});
+
+test('Old foreground completions cannot unpause a new session', () => {
+    const store = new CoverMemoryStore();
+    const oldFinished = store.onForegroundStart();
+    store.clear();
+    const newFinished = store.onForegroundStart();
+    oldFinished();
+    assert.equal(store.isPaused(), true);
+    newFinished();
+    newFinished();
+    assert.equal(store.getStats().activeForegroundTransfers, 0);
+});
+
+test('Configured subpath cannot cache a sibling or root thumbnail', () => {
+    for (const url of ['/api/v1/manga/1/thumbnail', '/suwayomix/api/v1/manga/1/thumbnail', 'https://user:password@example.com/suwayomi/api/v1/manga/1/thumbnail']) {
+        assert.equal(CoverMemoryStore.isAllowedCoverUrl(url, 'https://example.com/suwayomi'), false);
+    }
+    const store = new CoverMemoryStore();
+    assert.equal(store.put('x', new MockBlob([], { type: 'image/png' })), null);
+    assert.equal(store.put('x', new MockBlob(['x'])), null);
+});
+
+test('A fetcher ignoring timeout cannot hold the next cover hostage', async () => {
+    const store = new CoverMemoryStore({ backgroundConcurrency: 1, fetchTimeoutMs: 10 });
+    store.setFetcher(url => url === 'hang' ? new Promise(() => {})
+        : Promise.resolve(new MockBlob(['image'], { type: 'image/jpeg' })));
+    store.reconcile(['hang', 'next']);
+    store.enqueue(['hang', 'next']);
+    await new Promise(resolve => setTimeout(resolve, 25));
+    assert.equal(store.has('next'), true);
+    assert.equal(store.getStats().activeBackgroundTransfers, 0);
+    assert.equal(store.getStats().queueLength, 0);
 });

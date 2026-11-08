@@ -6,7 +6,6 @@
   "release_tag": "r3518",
   "official_archive_sha256": "c86e9851aa184fbd2f94c7d424438c63b9015c216e70daef76c9e204e157fea7",
   "custom_runtime_zip_sha256": "9ff567868091f90653d3e544c8558fb3a9d4dd9e26ce98b2d9d85980c9253a09",
-  "built_artifact_sha256": "106601574aa437347fb069104edebc219650631f2789e085168048d9d43fe463",
   "toolchain": {
     "node_version_requirement": ">=24.20.0",
     "package_manager": "pnpm@11.1.2",

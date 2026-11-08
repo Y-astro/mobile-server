@@ -6,10 +6,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import gql from 'graphql-tag';
 import { requestManager } from '@/lib/requests/RequestManager.ts';
 import { coverMemoryStore, CoverMemoryStore } from '@/features/library/services/CoverMemoryStore.ts';
+import type { MangaThumbnailInfo } from '@/features/manga/Manga.types.ts';
 import { Mangas } from '@/features/manga/services/Mangas.ts';
 
 export const GET_LIBRARY_COVER_METADATA = gql`
@@ -28,19 +29,11 @@ export const GET_LIBRARY_COVER_METADATA = gql`
 
 export interface LibraryCoverMetadataQuery {
     mangas: {
-        nodes: Array<{
-            id: number;
-            thumbnailUrl?: string | null;
-            thumbnailUrlLastFetched?: number | null;
-            sourceId?: string | null;
-            inLibrary?: boolean | null;
-        }>;
+        nodes: Array<MangaThumbnailInfo & { id: number; inLibrary: boolean }>;
     };
 }
 
 export function useLibraryCoverPreload(isForegroundReady: boolean = true) {
-    const hasPreloadedRef = useRef(false);
-
     const { data } = requestManager.useGetMangas<LibraryCoverMetadataQuery, { condition: { inLibrary: boolean } }>(
         GET_LIBRARY_COVER_METADATA,
         { condition: { inLibrary: true } },
@@ -55,14 +48,11 @@ export function useLibraryCoverPreload(isForegroundReady: boolean = true) {
         const nodes = data.mangas.nodes;
         const validUrls = nodes
             .filter((m) => m?.inLibrary && m?.thumbnailUrl)
-            .map((m) => Mangas.getThumbnailUrl(m as any))
+            .map((m) => Mangas.getThumbnailUrl(m))
             .filter((url: string) => CoverMemoryStore.isAllowedCoverUrl(url, requestManager.getBaseUrl()));
 
         coverMemoryStore.reconcile(validUrls);
 
-        if (!hasPreloadedRef.current || validUrls.length > 0) {
-            hasPreloadedRef.current = true;
-            coverMemoryStore.enqueue(validUrls);
-        }
+        coverMemoryStore.enqueue(validUrls);
     }, [data]);
 }

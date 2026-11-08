@@ -44,8 +44,7 @@ export class CoverMemoryStore {
 
     private backgroundQueue: string[] = [];
     private queuedSet = new Set<string>();
-    private readonly inFlightSet = new Set<string>();
-    private activeBackgroundTransfers: number = 0;
+    private activeUrls: Set<string> | undefined;
     private activeForegroundTransfers: number = 0;
     private readonly abortControllers = new Map<string, AbortController>();
 
@@ -81,7 +80,7 @@ export class CoverMemoryStore {
             const parsed = new URL(url, baseParsed.href);
 
             // Origin check: must match configured server origin strictly
-            if (parsed.origin !== baseParsed.origin) {
+            if (parsed.origin !== baseParsed.origin || parsed.username || parsed.password) {
                 return false;
             }
 
@@ -93,7 +92,8 @@ export class CoverMemoryStore {
             // Path check: relative to base URL pathname
             let pathname = parsed.pathname;
             const basePath = baseParsed.pathname.replace(/\/+$/, '');
-            if (basePath.length > 0 && pathname.startsWith(basePath)) {
+            if (basePath.length > 0) {
+                if (!pathname.startsWith(`${basePath}/`)) return false;
                 pathname = pathname.slice(basePath.length);
             }
 
@@ -125,7 +125,7 @@ export class CoverMemoryStore {
     }
 
     public put(url: string, blob: Blob, objectUrl?: string): string | null {
-        if (!blob || blob.size > this.maxImageBytes) {
+        if (!blob || !blob.size || blob.size > this.maxImageBytes || !blob.type.toLowerCase().startsWith('image/')) {
             return null;
         }
 
@@ -204,6 +204,7 @@ export class CoverMemoryStore {
      */
     public reconcile(currentLibraryUrls: string[]): void {
         const activeSet = new Set(currentLibraryUrls);
+        this.activeUrls = activeSet;
         const toEvict: string[] = [];
 
         for (const url of this.entries.keys()) {
@@ -220,8 +221,7 @@ export class CoverMemoryStore {
         for (const [url, controller] of this.abortControllers.entries()) {
             if (!activeSet.has(url)) {
                 controller.abort(new Error('Removed from library during fetch'));
-                this.abortControllers.delete(url);
-                this.inFlightSet.delete(url);
+                // The transfer finalizer owns its slot until cancellation settles.
             }
         }
 
@@ -241,7 +241,6 @@ export class CoverMemoryStore {
             controller.abort(new Error('Store cleared'));
         }
         this.abortControllers.clear();
-        this.inFlightSet.clear();
 
         for (const entry of this.entries.values()) {
             if (typeof URL !== 'undefined' && URL.revokeObjectURL && entry.objectUrl.startsWith('blob:')) {
@@ -253,24 +252,27 @@ export class CoverMemoryStore {
         this.currentBytes = 0;
         this.backgroundQueue = [];
         this.queuedSet.clear();
-        this.activeBackgroundTransfers = 0;
+        this.activeUrls = undefined;
+        this.activeForegroundTransfers = 0;
     }
 
-    public onForegroundStart(): void {
+    public onForegroundStart(): () => void {
         this.activeForegroundTransfers++;
+        const generation = this.generation;
+        let finished = false;
         // Preemptively abort in-flight background transfers to free socket capacity for foreground
-        if (this.abortControllers.size > 0) {
-            for (const [url, controller] of this.abortControllers.entries()) {
-                controller.abort(new Error('Preempted by foreground image request'));
-                // Put back in queue to retry when foreground is idle
-                if (!this.queuedSet.has(url) && !this.entries.has(url)) {
-                    this.backgroundQueue.unshift(url);
-                    this.queuedSet.add(url);
-                }
+        for (const [url, controller] of this.abortControllers) {
+            // Put back in queue to retry when foreground is idle
+            if (!this.queuedSet.has(url) && !this.entries.has(url)) {
+                this.backgroundQueue.unshift(url);
+                this.queuedSet.add(url);
             }
-            this.abortControllers.clear();
-            this.inFlightSet.clear();
+            controller.abort(new Error('Preempted by foreground image request'));
         }
+        return () => {
+            if (!finished && this.generation === generation) this.onForegroundEnd();
+            finished = true;
+        };
     }
 
     public onForegroundEnd(): void {
@@ -282,7 +284,7 @@ export class CoverMemoryStore {
 
     public enqueue(urls: string[]): void {
         for (const url of urls) {
-            if (!this.entries.has(url) && !this.queuedSet.has(url) && !this.inFlightSet.has(url)) {
+            if (!this.entries.has(url) && !this.queuedSet.has(url) && !this.abortControllers.has(url)) {
                 this.backgroundQueue.push(url);
                 this.queuedSet.add(url);
             }
@@ -300,52 +302,37 @@ export class CoverMemoryStore {
         }
 
         while (
-            this.activeBackgroundTransfers < this.backgroundConcurrency &&
+            this.abortControllers.size < this.backgroundConcurrency &&
             this.backgroundQueue.length > 0 &&
             !this.isPaused()
         ) {
             const url = this.backgroundQueue.shift()!;
             this.queuedSet.delete(url);
 
-            if (this.entries.has(url) || this.inFlightSet.has(url)) {
+            if (this.entries.has(url) || (this.activeUrls && !this.activeUrls.has(url))) {
                 continue;
             }
 
-            this.inFlightSet.add(url);
-            this.activeBackgroundTransfers++;
             const transferGen = this.generation;
             const controller = new AbortController();
             this.abortControllers.set(url, controller);
 
             // Bounded timeout so missing/hung image cannot block a slot indefinitely
-            const timeoutId = setTimeout(() => {
-                controller.abort(new Error('Background fetch timed out'));
-            }, this.fetchTimeoutMs);
-
-            this.fetcher(url, controller.signal)
+            let timeoutId: ReturnType<typeof setTimeout>;
+            const aborted = new Promise<never>((_, reject) => {
+                controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+                timeoutId = setTimeout(() => controller.abort(new Error('Background fetch timed out')), this.fetchTimeoutMs);
+            });
+            Promise.race([Promise.resolve().then(() => this.fetcher!(url, controller.signal)), aborted])
                 .then((blob) => {
-                    clearTimeout(timeoutId);
-                    if (this.generation !== transferGen) {
-                        return;
-                    }
-                    this.abortControllers.delete(url);
-                    this.inFlightSet.delete(url);
-                    this.put(url, blob);
+                    if (this.generation === transferGen && !controller.signal.aborted &&
+                        (!this.activeUrls || this.activeUrls.has(url))) this.put(url, blob);
                 })
-                .catch(() => {
-                    clearTimeout(timeoutId);
-                    if (this.generation !== transferGen) {
-                        return;
-                    }
-                    this.abortControllers.delete(url);
-                    this.inFlightSet.delete(url);
-                })
+                .catch(() => {})
                 .finally(() => {
                     clearTimeout(timeoutId);
-                    if (this.generation === transferGen) {
-                        this.activeBackgroundTransfers = Math.max(0, this.activeBackgroundTransfers - 1);
-                        this.pump();
-                    }
+                    if (this.abortControllers.get(url) === controller) this.abortControllers.delete(url);
+                    if (this.generation === transferGen) this.pump();
                 });
         }
     }
@@ -367,7 +354,7 @@ export class CoverMemoryStore {
             maxStoreBytes: this.maxStoreBytes,
             maxImageBytes: this.maxImageBytes,
             queueLength: this.backgroundQueue.length,
-            activeBackgroundTransfers: this.activeBackgroundTransfers,
+            activeBackgroundTransfers: this.abortControllers.size,
             activeForegroundTransfers: this.activeForegroundTransfers,
             isPaused: this.isPaused(),
             generation: this.generation,
