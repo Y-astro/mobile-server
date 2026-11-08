@@ -6,6 +6,11 @@ or service state. Existing thumbnail paths in every recognized format are kept.
 It is a data repair, not a replacement MangaFire extension: newly added titles or
 cleared cache entries may need another collection until source support changes.
 
+The publisher also accepts reviewed Vortex Scans JPEGs from that source's exact
+`storage.vortexscans.org/upload/series/featured/` path. Vortex assets require a
+separate source manifest and first-party page proof; the MangaFire collector does
+not collect Vortex titles. Source IDs and CDN hosts cannot be mixed.
+
 The host collector reads only in-library source metadata and current cache names
 from the Redmi over SSH. Normal Chromium page navigation supplies the site's own
 metadata request; no verification token is generated or reverse engineered. A

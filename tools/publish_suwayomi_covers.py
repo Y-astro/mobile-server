@@ -173,7 +173,13 @@ def verify_manifest_and_staged_files(staging_dir: Path) -> Tuple[bool, str, List
     if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1:
         return False, f"Unsupported manifest schema_version: {manifest.get('schema_version')}", []
 
-    if manifest.get("source_name") != "MangaFire" or manifest.get("source_id") != "6084907896154116083":
+    if manifest.get("source_name") == "MangaFire" and manifest.get("source_id") == "6084907896154116083":
+        image_host = "static.mfcdn.nl"
+        image_path = r"/[a-zA-Z0-9/_-]+(?:@[1-9][0-9]{0,3})?\.jpe?g"
+    elif manifest.get("source_name") == "Vortex Scans" and manifest.get("source_id") == "2559570015828016575":
+        image_host = "storage.vortexscans.org"
+        image_path = r"/upload/series/featured/[a-zA-Z0-9]{1,64}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg"
+    else:
         return False, "Unexpected source identity", []
     entries = manifest.get("entries")
     if not isinstance(entries, list):
@@ -205,9 +211,9 @@ def verify_manifest_and_staged_files(staging_dir: Path) -> Tuple[bool, str, List
         url = entry.get("canonical_url")
         try:
             parsed = urlsplit(url) if isinstance(url, str) else None
-            valid_url = (parsed and parsed.scheme == "https" and parsed.netloc == "static.mfcdn.nl"
+            valid_url = (parsed and parsed.scheme == "https" and parsed.netloc == image_host
                          and not parsed.query and not parsed.fragment
-                         and re.fullmatch(r"/[a-zA-Z0-9/_-]+(?:@[1-9][0-9]{0,3})?\.jpe?g", parsed.path)
+                         and re.fullmatch(image_path, parsed.path)
                          and len(url) <= 2048)
         except ValueError:
             valid_url = False

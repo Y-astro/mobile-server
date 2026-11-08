@@ -78,6 +78,28 @@ class TestSuwayomiCoverPublication(unittest.TestCase):
         manifest_path.write_text(json.dumps(manifest))
         return manifest_path
 
+    def test_vortex_source_cannot_use_mangafire_or_lookalike_host(self):
+        entry = self._create_staged_cover(162, hid="370")
+        manifest_path = self._write_manifest([entry])
+        manifest = json.loads(manifest_path.read_text())
+        manifest.update(source_name="Vortex Scans", source_id="2559570015828016575")
+        path = "/upload/series/featured/example/70ac7ecf-0b07-4e92-8e43-53420bfe8999.jpg"
+        for url in (entry["canonical_url"], "https://storage.vortexscans.org.evil.test" + path,
+                    "http://storage.vortexscans.org" + path,
+                    "https://storage.vortexscans.org" + path + "?unreviewed=1"):
+            manifest["entries"][0]["canonical_url"] = url
+            manifest_path.write_text(json.dumps(manifest))
+            self.assertFalse(verify_manifest_and_staged_files(self.staging_dir)[0])
+        manifest["entries"][0]["canonical_url"] = "https://storage.vortexscans.org" + path
+        manifest_path.write_text(json.dumps(manifest))
+        result = publish_covers(self.staging_dir, self.target_dir, apply=True)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["published"], 1)
+        self.assertEqual((self.target_dir / "162.jpg").read_bytes(), VALID_JPEG_BYTES)
+        manifest["source_id"] = "6084907896154116083"
+        manifest_path.write_text(json.dumps(manifest))
+        self.assertFalse(verify_manifest_and_staged_files(self.staging_dir)[0])
+
     def test_image_signature_validation(self):
         """Test detection of valid JPEG, PNG, WebP headers and rejection of bad headers."""
         ok, fmt = _validate_image_signature(VALID_JPEG_BYTES)
