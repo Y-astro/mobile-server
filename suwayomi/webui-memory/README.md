@@ -51,8 +51,10 @@ Covers:
 
 ## Build and activation
 
-Run `bash suwayomi/webui-memory/build-webui.sh`. The script exports pinned upstream source into a fresh ignored build directory, applies both complete patches, compares canonical modules, checks TypeScript, and runs the real production build. It writes a deterministic archive and full file/input SHA-256 provenance to `.work/artifacts/`. It never resets or cleans another checkout. Dependencies remain workspace-local and use upstream's pinned package manager and frozen lockfile.
+Run `bash suwayomi/webui-memory/build-webui.sh`. The script exports pinned upstream source into a fresh ignored build directory, applies the complete maintained patches, compares canonical modules, checks TypeScript, and runs the real production build. It writes a deterministic archive and full file/input SHA-256 provenance to `.work/artifacts/`. It never resets or cleans another checkout. Dependencies remain workspace-local and use upstream's pinned package manager and frozen lockfile.
 
 The archive records upstream base revision `r3518`; the SHA-256 provenance distinguishes this custom build. It does not claim to be the unmodified official release. The phone publication mechanism and actual deployed browser acceptance are separate gates. The existing backend JAR contains an older customized UI resource; a custom frontend must use Suwayomi's native CUSTOM flavor so startup validation does not replace it.
 
 Encoded memory is bounded; decoded image/GPU residency is browser-managed. A newly opened tab must warm its own cache. First-page JavaScript and GraphQL startup costs remain separate from cover warming. No chapter pages, resized derivatives, or new server daemons are added.
+
+The WebUI update checker honors native CUSTOM flavor: a locally published UI does not prompt to overwrite itself with an official bundle. Managed upstream flavors retain their update check.

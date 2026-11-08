@@ -17,6 +17,7 @@ cd "${BUILD_DIR}"
 git init -q
 git apply "${SCRIPT_DIR}/0001-unread-updates-feed.patch"
 git apply "${SCRIPT_DIR}/0002-cover-memory-preload.patch"
+git apply "${SCRIPT_DIR}/0003-custom-webui-updates.patch"
 cmp "${SCRIPT_DIR}/CoverMemoryStore.ts" src/features/library/services/CoverMemoryStore.ts
 cmp "${SCRIPT_DIR}/useLibraryCoverPreload.ts" src/features/library/hooks/useLibraryCoverPreload.ts
 pnpm install --frozen-lockfile

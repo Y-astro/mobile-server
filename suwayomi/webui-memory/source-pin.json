@@ -22,6 +22,11 @@
       "order": 2,
       "path": "0002-cover-memory-preload.patch",
       "description": "Implement session-scoped cover memory preloader with bounded background queue, foreground priority, subpath URL support, and unmount safety"
+    },
+    {
+      "order": 3,
+      "path": "0003-custom-webui-updates.patch",
+      "description": "Honor native CUSTOM flavor in the upstream update prompt; preserve normal managed UI update behavior."
     }
   ],
   "limits": {

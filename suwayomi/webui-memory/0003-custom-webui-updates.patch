@@ -1,0 +1,25 @@
+diff --git a/src/features/app-updates/components/WebUIUpdateChecker.tsx b/src/features/app-updates/components/WebUIUpdateChecker.tsx
+--- a/src/features/app-updates/components/WebUIUpdateChecker.tsx
++++ b/src/features/app-updates/components/WebUIUpdateChecker.tsx
+@@ -16,7 +16,7 @@
+ import { useLingui } from '@lingui/react/macro';
+ import { defaultPromiseErrorHandler } from '@/lib/DefaultPromiseErrorHandler.ts';
+ import type { WebUiUpdateStatus } from '@/lib/graphql/generated/graphql-base.types.ts';
+-import { UpdateState, WebUiChannel } from '@/lib/graphql/generated/graphql-base.types.ts';
++import { UpdateState, WebUiChannel, WebUiFlavor } from '@/lib/graphql/generated/graphql-base.types.ts';
+ import { useLocalStorage } from '@/base/hooks/useStorage.tsx';
+ import { requestManager } from '@/lib/requests/RequestManager.ts';
+ import { makeToast } from '@/base/utils/Toast.ts';
+@@ -43,7 +43,11 @@
+     const serverSettings = requestManager.useGetServerSettings();
+     const isAutoUpdateEnabled = !!serverSettings.data?.settings.webUIUpdateCheckInterval;
+ 
+-    const shouldCheckForUpdate = !isAutoUpdateEnabled && webUIInformAvailableUpdate;
++    // Custom builds are published locally; upstream updates would replace their maintained patches.
++    const shouldCheckForUpdate =
++        !!serverSettings.data &&
++        serverSettings.data.settings.webUIFlavor !== WebUiFlavor.Custom &&
++        !isAutoUpdateEnabled && webUIInformAvailableUpdate;
+ 
+     const { data: aboutData } = requestManager.useGetAbout();
+     const { aboutWebUI } = aboutData ?? STABLE_EMPTY_OBJECT;
