@@ -437,6 +437,156 @@ class TestAntraWorker(unittest.TestCase):
         self.assertEqual(self.client.download_track_stream.call_count, 250)
         self.assertEqual(len(list(self.output_roots["family"].rglob("*.flac"))), 250)
 
+    def test_reproduction_failed_first_then_healthy_track_and_new_job_with_ack_failure(self):
+        """Reproduction proof:
+        1. Failed first track does not abort healthy later track.
+        2. Reconnect/ack failure on healthy track does not crash worker.
+        3. Completed files remain untouched byte-for-byte.
+        4. New queued job is not starved by prior failure/ack issue.
+        5. Progress counters accurately reflect terminal states.
+        """
+        self._write_credentials()
+
+        # Job 1: 2 tracks (Track 0 fails, Track 1 succeeds)
+        j1 = self.store.create_job("https://tidal.com/album/job1", destination="private")
+        j1_id = j1["id"]
+
+        valid_audio = self.base_dir / "valid_sample.flac"
+        generate_real_flac(valid_audio, bits=16, sample_rate=44100)
+        valid_bytes = valid_audio.read_bytes()
+
+        self.client.resolve = MagicMock(side_effect=lambda url: {
+            "title": "Album 1" if "job1" in url else "Album 2",
+            "artist": "Artist 1" if "job1" in url else "Artist 2",
+            "total": 2 if "job1" in url else 1,
+            "tracks": [
+                {"index": 0, "title": "Track Failed", "artist": "Artist 1"},
+                {"index": 1, "title": "Track Healthy", "artist": "Artist 1"},
+            ] if "job1" in url else [
+                {"index": 0, "title": "Track Job 2", "artist": "Artist 2"},
+            ],
+        })
+        self.client.submit_job = MagicMock(return_value=("upstream_j1", "tok_j1"))
+
+        # Upstream yields: Track 0 fails, Track 1 succeeds
+        self.client.connect_job_ws = MagicMock(return_value=[
+            {"type": "track_failed", "index": 0, "error": "source corrupted"},
+            {"type": "track_done", "index": 1, "path": "Artist 1/Album 1/02 - Track Healthy.flac"},
+            {"type": "complete"},
+        ])
+        self.client.download_track_stream = MagicMock(return_value=io.BytesIO(valid_bytes))
+
+        # Reconnect/ack failure: ack_track raises exception
+        self.client.ack_track = MagicMock(side_effect=ConnectionResetError("provider reconnect failure"))
+
+        # Process Job 1
+        self.worker.process_job(j1)
+
+        # 1. Verify Track 0 failed, Track 1 completed
+        trks1 = self.store.get_tracks(j1_id)
+        self.assertEqual(len(trks1), 2)
+        self.assertEqual(trks1[0]["status"], "failed")
+        self.assertEqual(trks1[1]["status"], "completed")
+
+        # 2. Verify completed file on disk is intact
+        published1 = self.output_roots["private"] / trks1[1]["filename"]
+        self.assertTrue(published1.is_file())
+        self.assertEqual(published1.read_bytes(), valid_bytes)
+
+        # 3. Job 1 progress counters are accurate
+        j1_final = self.store.get_job(j1_id)
+        self.assertEqual(j1_final["total"], 2)
+        self.assertEqual(j1_final["completed"], 1)
+        self.assertEqual(j1_final["failed"], 1)
+
+        # 4. Now queue Job 2 (healthy new job)
+        j2 = self.store.create_job("https://tidal.com/album/job2", destination="private")
+        j2_id = j2["id"]
+
+        self.client.submit_job = MagicMock(return_value=("upstream_j2", "tok_j2"))
+        self.client.connect_job_ws = MagicMock(return_value=[
+            {"type": "track_done", "index": 0, "path": "Artist 2/Album 2/01 - Job 2.flac"},
+            {"type": "complete"},
+        ])
+        self.client.download_track_stream = MagicMock(return_value=io.BytesIO(valid_bytes))
+        self.client.ack_track = MagicMock(return_value=True)
+
+        # Worker processes next runnable job via run_once()
+        # Even with failed ack attempts on Job 1, run_once processes Job 2 without starvation
+        processed = self.worker.run_once()
+        self.assertTrue(processed)
+
+        # Job 2 completed successfully
+        j2_final = self.store.get_job(j2_id)
+        self.assertEqual(j2_final["status"], "completed")
+        self.assertEqual(j2_final["completed"], 1)
+        self.assertEqual(j2_final["failed"], 0)
+
+        # Job 1 completed file remains untouched
+        self.assertEqual(published1.read_bytes(), valid_bytes)
+
+    def test_upstream_rejected_or_expired_drains_queued_tracks(self):
+        """Proof that provider status 400 rejection drains queued tracks without stranding."""
+        self._write_credentials()
+        job = self.store.create_job("https://tidal.com/album/stranded-test", destination="private")
+        job_id = job["id"]
+
+        tracks = [
+            {"index": 0, "title": "Track 1", "artist": "Artist"},
+            {"index": 1, "title": "Track 2", "artist": "Artist"},
+            {"index": 2, "title": "Track 3", "artist": "Artist"},
+        ]
+        self.store.set_tracks(job_id, tracks)
+        self.store.update_track(job_id, 0, status="completed")
+        # Track 1 and 2 are still queued
+
+        # Provider marks job failed upstream -> status 400
+        self.store.update_job(job_id, upstream_job_id="upstream_dead")
+        self.client.get_job_status = MagicMock(return_value={"status": "failed"})
+
+        self.worker.process_job(job)
+
+        # Status is partial because 1 completed
+        final_job = self.store.get_job(job_id)
+        self.assertEqual(final_job["status"], "partial")
+        self.assertEqual(final_job["completed"], 1)
+        self.assertEqual(final_job["failed"], 2)
+        self.assertEqual(final_job["total"], 3)
+
+        # Both remaining tracks must be failed, NOT queued!
+        trks = self.store.get_tracks(job_id)
+        self.assertEqual(trks[0]["status"], "completed")
+        self.assertEqual(trks[1]["status"], "failed")
+        self.assertEqual(trks[2]["status"], "failed")
+
+    def test_bounded_transport_retry_budget_prevents_indefinite_queue_starvation(self):
+        """10 transport failures marks job terminal so queued subsequent jobs are not starved."""
+        self._write_credentials()
+        j1 = self.store.create_job("https://tidal.com/album/failing-job", destination="private")
+        j1_id = j1["id"]
+        self.store.set_tracks(j1_id, [{"index": 0, "title": "Track 1", "artist": "Artist"}])
+        self.store.update_job(j1_id, retry_attempts=9, upstream_job_id="up_fail")
+
+        j2 = self.store.create_job("https://tidal.com/album/waiting-job", destination="private")
+        j2_id = j2["id"]
+
+        # Job 1 encounters network failure on attempt 10
+        self.client.get_job_status = MagicMock(return_value={"status": "downloading"})
+        self.client.fresh_ws_token = MagicMock(return_value="token")
+        self.client.connect_job_ws = MagicMock(side_effect=AntraClientError("Network drop"))
+
+        self.worker.process_job(j1)
+
+        # Job 1 must be terminal (failed), not left in queued or downloading loop
+        j1_final = self.store.get_job(j1_id)
+        self.assertEqual(j1_final["status"], "failed")
+        self.assertIn("Connection failed after 10 retry attempts", j1_final["message"])
+
+        # Next runnable job is now Job 2 (not starved!)
+        next_job = self.store.get_next_runnable_job()
+        self.assertIsNotNone(next_job)
+        self.assertEqual(next_job["id"], j2_id)
+
 
 class TestAntraAutomaticRetries(unittest.TestCase):
     def setUp(self):

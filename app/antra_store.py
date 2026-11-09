@@ -7,9 +7,11 @@ Nothing starts on import.
 from contextlib import contextmanager
 import os
 from pathlib import Path
+import re
 import sqlite3
 import time
 from typing import Any, Dict, Iterator, List, Optional
+import urllib.parse
 import uuid
 
 DEFAULT_DB_DIR = Path(os.path.expanduser("~/.local/share/mobile-server/antra"))
@@ -95,6 +97,7 @@ def _row_to_job_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "updated_at": row["updated_at"],
         "message": row["message"],
         "automatic_retry_rounds": row["automatic_retry_rounds"] if "automatic_retry_rounds" in row.keys() else 0,
+        "removed": row["removed"] if "removed" in row.keys() else 0,
     }
 
 
@@ -163,7 +166,8 @@ class AntraStore:
                     submission_intent INTEGER NOT NULL DEFAULT 0,
                     concurrency_retry_after REAL NOT NULL DEFAULT 0,
                     retry_attempts INTEGER NOT NULL DEFAULT 0,
-                    automatic_retry_rounds INTEGER NOT NULL DEFAULT 0
+                    automatic_retry_rounds INTEGER NOT NULL DEFAULT 0,
+                    removed INTEGER NOT NULL DEFAULT 0
                 );
             """)
             conn.execute("""
@@ -208,6 +212,8 @@ class AntraStore:
                 conn.execute("ALTER TABLE jobs ADD COLUMN concurrency_retry_after REAL NOT NULL DEFAULT 0;")
             if "retry_attempts" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN retry_attempts INTEGER NOT NULL DEFAULT 0;")
+            if "removed" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN removed INTEGER NOT NULL DEFAULT 0;")
 
             cursor_trk = conn.execute("PRAGMA table_info(tracks);")
             trk_columns = {row["name"] for row in cursor_trk.fetchall()}
@@ -274,14 +280,20 @@ class AntraStore:
                 (state, now, message),
             )
 
-    def list_jobs(self) -> List[Dict[str, Any]]:
+    def list_jobs(self, include_removed: bool = False) -> List[Dict[str, Any]]:
         with self._connect() as conn:
-            cur = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC;")
+            if include_removed:
+                cur = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC;")
+            else:
+                cur = conn.execute("SELECT * FROM jobs WHERE removed = 0 ORDER BY created_at DESC;")
             return [_row_to_job_dict(row) for row in cur.fetchall()]
 
-    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: str, include_removed: bool = False) -> Optional[Dict[str, Any]]:
         with self._connect() as conn:
-            cur = conn.execute("SELECT * FROM jobs WHERE id = ?;", (job_id,))
+            if include_removed:
+                cur = conn.execute("SELECT * FROM jobs WHERE id = ?;", (job_id,))
+            else:
+                cur = conn.execute("SELECT * FROM jobs WHERE id = ? AND removed = 0;", (job_id,))
             row = cur.fetchone()
             return _row_to_job_dict(row) if row else None
 
@@ -470,13 +482,52 @@ class AntraStore:
             raise JobNotFoundError(f"Job not found: {job_id}")
         return job
 
+    def remove_job(self, job_id: str) -> Dict[str, Any]:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute("SELECT status, removed FROM jobs WHERE id = ?;", (job_id,))
+            row = cur.fetchone()
+            if not row:
+                raise JobNotFoundError(f"Job not found: {job_id}")
+            if row["removed"]:
+                raise InvalidTransitionError("Job already removed")
+
+            current_status = row["status"]
+            if current_status not in ("completed", "partial", "failed", "cancelled"):
+                raise InvalidTransitionError("Active jobs must be cancelled before removal")
+
+            now = time.time()
+            conn.execute(
+                "UPDATE jobs SET removed = 1, updated_at = ? WHERE id = ?;",
+                (now, job_id),
+            )
+        return {"id": job_id, "status": "removed"}
+
     def finish_job(self, job_id: str, status: str, message: str = "") -> None:
         if status not in ("completed", "partial", "failed"):
             raise ValueError("Invalid terminal job status")
         with self._connect() as conn:
             conn.execute(
-                "UPDATE jobs SET status = ?, message = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'resolving', 'downloading')",
-                (status, message, time.time(), job_id),
+                """
+                UPDATE tracks SET
+                    status = 'failed',
+                    message = CASE WHEN message IS NOT NULL AND message != '' THEN message ELSE 'Provider ended before track was downloaded' END
+                WHERE job_id = ? AND status IN ('queued', 'downloading');
+                """,
+                (job_id,),
+            )
+            conn.execute(
+                """
+                UPDATE jobs SET
+                    status = ?,
+                    message = ?,
+                    completed = (SELECT COUNT(*) FROM tracks WHERE job_id = ? AND status = 'completed'),
+                    skipped = (SELECT COUNT(*) FROM tracks WHERE job_id = ? AND status = 'skipped'),
+                    failed = (SELECT COUNT(*) FROM tracks WHERE job_id = ? AND status = 'failed'),
+                    updated_at = ?
+                WHERE id = ? AND status IN ('queued', 'resolving', 'downloading');
+                """,
+                (status, message, job_id, job_id, job_id, time.time(), job_id),
             )
 
     def schedule_automatic_retry(
@@ -565,6 +616,7 @@ class AntraStore:
                 WHERE (status IN ('queued', 'resolving', 'downloading')
                        OR (status = 'blocked' AND concurrency_retry_after > 0))
                   AND concurrency_retry_after <= ?
+                  AND removed = 0
                 ORDER BY created_at ASC
                 LIMIT 1;
                 """,
@@ -584,5 +636,117 @@ class AntraStore:
             return [dict(row) for row in conn.execute(
                 "SELECT tracks.*, jobs.upstream_job_id FROM tracks JOIN jobs ON jobs.id = tracks.job_id "
                 "WHERE ack_pending = 1 AND ack_retry_after <= ? AND upstream_job_id IS NOT NULL "
-                "AND tracks.status IN ('completed', 'skipped') LIMIT 8", (time.time(),)
+                "AND tracks.status IN ('completed', 'skipped') "
+                "AND jobs.status NOT IN ('cancelled', 'failed') AND jobs.removed = 0 "
+                "LIMIT 8", (time.time(),)
             ).fetchall()]
+
+    def find_duplicate_job(self, url: str, destination: str) -> Optional[Dict[str, Any]]:
+        """Detect existing job in destination matching normalized URL, even if removed or differing in tracking query."""
+        canon = canonical_music_url(url)
+        if not canon:
+            return None
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT * FROM jobs WHERE destination = ? ORDER BY created_at DESC;",
+                (destination,),
+            )
+            for row in cur.fetchall():
+                if canonical_music_url(row["url"]) == canon:
+                    return _row_to_job_dict(row)
+        return None
+
+    def check_track_duplicates(
+        self,
+        job_id: str,
+        destination: str,
+        tracks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Annotate tracks with duplicate warnings if present in this destination.
+
+        Compares within selected destination only. Preserves evidence after Remove.
+        Avoids false positives for different artists or versions.
+        Labels possible duplicates when reliable artist identity is absent.
+        """
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                SELECT tracks.title, tracks.artist, tracks.status, tracks.message, jobs.id AS job_id
+                FROM tracks
+                JOIN jobs ON jobs.id = tracks.job_id
+                WHERE jobs.destination = ? AND jobs.id != ?
+                  AND tracks.status IN ('completed', 'downloading', 'queued');
+                """,
+                (destination, job_id),
+            )
+            existing = cur.fetchall()
+
+        if not existing:
+            return tracks
+
+        def version_tag(title: str) -> str:
+            match = re.search(r"\b(live|remix|acoustic|remastered|deluxe|instrumental|edit|extended)\b", title, re.IGNORECASE)
+            return match.group(1).lower() if match else ""
+
+        def norm(s: Optional[str]) -> str:
+            if not s:
+                return ""
+            return re.sub(r"[^\w\s]", "", str(s)).strip().lower()
+
+        existing_exact = set()
+        existing_titles = set()
+        for row in existing:
+            t_norm = norm(row["title"])
+            a_norm = norm(row["artist"])
+            v_tag = version_tag(row["title"])
+            if t_norm:
+                existing_titles.add((t_norm, v_tag))
+                if a_norm and a_norm not in ("unknown", "various artists", "various"):
+                    existing_exact.add((t_norm, a_norm, v_tag))
+
+        annotated = []
+        for trk in tracks:
+            trk_copy = dict(trk)
+            t_norm = norm(trk_copy.get("title", ""))
+            a_norm = norm(trk_copy.get("artist", ""))
+            v_tag = version_tag(trk_copy.get("title", ""))
+
+            if not t_norm:
+                annotated.append(trk_copy)
+                continue
+
+            has_reliable_artist = bool(a_norm and a_norm not in ("unknown", "various artists", "various"))
+
+            if has_reliable_artist:
+                if (t_norm, a_norm, v_tag) in existing_exact:
+                    msg = trk_copy.get("message", "")
+                    warning = "Warning: duplicate song already in library."
+                    trk_copy["message"] = f"{warning} {msg}".strip() if msg else warning
+            else:
+                if (t_norm, v_tag) in existing_titles:
+                    msg = trk_copy.get("message", "")
+                    warning = "Possible duplicate: song title matches existing library record (artist identity unconfirmed)."
+                    trk_copy["message"] = f"{warning} {msg}".strip() if msg else warning
+
+            annotated.append(trk_copy)
+
+        return annotated
+
+
+def canonical_music_url(url: str) -> str:
+    """Canonicalize music URL for duplicate detection, stripping tracking query parameters."""
+    if not isinstance(url, str):
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(url.strip())
+        filtered = []
+        if parsed.query:
+            for k, v in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True):
+                k_lower = k.lower()
+                if k_lower in ("si", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "sp_cid", "feature", "context"):
+                    continue
+                filtered.append((k, v))
+        new_query = urllib.parse.urlencode(filtered)
+        return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), new_query, ""))
+    except Exception:
+        return url.strip().lower()

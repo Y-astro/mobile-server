@@ -47,6 +47,7 @@
   let cachedJobs = [];
   let activeTrackController = null;
   let activeMainFetchController = null;
+  let pendingDuplicateConfirm = false;
 
   // Helper: Format status badge class
   function getStatusClass(status) {
@@ -367,6 +368,20 @@
         actionsDiv.appendChild(retryBtn);
       }
 
+      // Remove button if terminal
+      if (['completed', 'partial', 'failed', 'cancelled'].includes(job.status)) {
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-muted hover:text-white border-white/20';
+        removeBtn.textContent = 'Remove';
+        removeBtn.title = 'Remove job from list (downloaded songs are kept)';
+        removeBtn.setAttribute('data-action', 'remove');
+        removeBtn.setAttribute('data-id', job.id);
+        removeBtn.setAttribute('aria-label', `Remove ${job.title || 'job'} from list (downloaded songs are kept)`);
+        removeBtn.addEventListener('click', () => handleJobRemove(job.id, removeBtn));
+        actionsDiv.appendChild(removeBtn);
+      }
+
       // Details button
       const detailsBtn = document.createElement('button');
       detailsBtn.type = 'button';
@@ -564,25 +579,30 @@
     }
 
     const destination = (destinationSelect && destinationSelect.value === 'family') ? 'family' : 'private';
+    const confirmDup = pendingDuplicateConfirm;
 
     // Immediate pending guard
     isSubmitting = true;
     submitBtn.disabled = true;
     submitBtn.setAttribute('aria-busy', 'true');
-    submitBtnText.textContent = 'Queueing…';
+    submitBtnText.textContent = confirmDup ? 'Confirming…' : 'Queueing…';
     hideFormStatus();
 
     const postController = new AbortController();
     const timeoutId = setTimeout(() => postController.abort(), 10000);
 
     try {
+      const payload = { url, destination };
+      if (confirmDup) {
+        payload.confirm_duplicate = true;
+      }
       const res = await fetch('/api/antra/jobs', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
-        body: JSON.stringify({ url, destination }),
+        body: JSON.stringify(payload),
         signal: postController.signal
       });
 
@@ -595,8 +615,16 @@
 
       const data = await res.json();
 
+      if (res.status === 409 && data.warning === 'duplicate') {
+        pendingDuplicateConfirm = true;
+        submitBtnText.textContent = 'Confirm Queue';
+        showFormStatus(data.message || 'Warning: duplicate detected. Click Confirm Queue to proceed.', 'warning');
+        return;
+      }
+
       if (res.status === 202 || res.ok) {
         urlInput.value = '';
+        pendingDuplicateConfirm = false;
         showFormStatus('Download queued successfully. Processing started.', 'success');
         if (pollingLoop && typeof pollingLoop.refreshAfterMutation === 'function') {
           pollingLoop.refreshAfterMutation();
@@ -619,7 +647,7 @@
       if (!isAccessDenied) {
         submitBtn.disabled = false;
         submitBtn.removeAttribute('aria-busy');
-        submitBtnText.textContent = 'Queue Download';
+        submitBtnText.textContent = pendingDuplicateConfirm ? 'Confirm Queue' : 'Queue Download';
       }
     }
   }
@@ -628,7 +656,13 @@
   function showFormStatus(msg, type) {
     if (!formStatus) return;
     formStatus.textContent = msg;
-    formStatus.className = type === 'error' ? 'form-status-error text-sm mt-2' : 'form-status-success text-sm mt-2';
+    if (type === 'error') {
+      formStatus.className = 'form-status-error text-sm mt-2';
+    } else if (type === 'warning') {
+      formStatus.className = 'form-status-warning text-sm mt-2';
+    } else {
+      formStatus.className = 'form-status-success text-sm mt-2';
+    }
     formStatus.classList.remove('hidden');
   }
 
@@ -732,8 +766,76 @@
     }
   }
 
+  // Job Remove Action
+  async function handleJobRemove(jobId, btn) {
+    if (!jobId || isAccessDenied) return;
+    btn.disabled = true;
+    btn.textContent = 'Removing…';
+
+    // Clear detail view immediately if this job was currently open
+    if (activeJobId === jobId) {
+      closeTrackDetails();
+    }
+
+    const removeController = new AbortController();
+    const timeoutId = setTimeout(() => removeController.abort(), 10000);
+
+    try {
+      const res = await fetch(`/api/antra/jobs/${encodeURIComponent(jobId)}/remove`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        signal: removeController.signal
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        let errData = {};
+        try { errData = await res.json(); } catch (_) {}
+        handleAccessRefusal(res.status, errData.message);
+        return;
+      }
+
+      if (res.status === 200 || res.status === 202 || res.ok) {
+        if (pollingLoop && typeof pollingLoop.refreshAfterMutation === 'function') {
+          pollingLoop.refreshAfterMutation();
+        } else {
+          fetchJobs();
+        }
+      } else {
+        let errData = {};
+        try { errData = await res.json(); } catch (_) {}
+        alert(errData.message || 'Unable to remove job');
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        alert('Remove request timed out. Please refresh to confirm status.');
+      } else {
+        alert('Network error while removing job.');
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      btn.disabled = false;
+      btn.textContent = 'Remove';
+    }
+  }
+
   // Setup Event Listeners
   if (antraForm) antraForm.addEventListener('submit', handleSubmit);
+  if (urlInput) {
+    urlInput.addEventListener('input', () => {
+      if (pendingDuplicateConfirm) {
+        pendingDuplicateConfirm = false;
+        if (submitBtnText) submitBtnText.textContent = 'Queue Download';
+      }
+    });
+  }
+  if (destinationSelect) {
+    destinationSelect.addEventListener('change', () => {
+      if (pendingDuplicateConfirm) {
+        pendingDuplicateConfirm = false;
+        if (submitBtnText) submitBtnText.textContent = 'Queue Download';
+      }
+    });
+  }
   if (btnCloseTracks) btnCloseTracks.addEventListener('click', closeTrackDetails);
   if (btnRefresh) {
     btnRefresh.addEventListener('click', () => {

@@ -320,6 +320,132 @@ class TestAntraApiUnit(unittest.TestCase):
         self.assertNotIn("cookie", raw_resp.lower())
         self.assertNotIn("password", raw_resp.lower())
 
+    def test_remove_job_endpoint_and_security(self):
+        job = self.store.create_job("https://tidal.com/album/remove-test", destination="private")
+        job_id = job["id"]
+
+        # 1. Removing an active job fails with 409
+        h_act = MockHandler(
+            command="POST",
+            path=f"/api/antra/jobs/{job_id}/remove",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Origin": "http://localhost:8001"},
+            user="admin",
+        )
+        dispatch_antra(h_act, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h_act.status_code, 409)
+        self.assertIn("Active jobs must be cancelled before removal", h_act.get_json_body()["message"])
+
+        # Cancel job so it is terminal
+        self.store.cancel_job(job_id)
+
+        # 2. Cross-origin POST rejected with 403
+        h_cross = MockHandler(
+            command="POST",
+            path=f"/api/antra/jobs/{job_id}/remove",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "cross-site", "Origin": "http://evil.com"},
+            user="admin",
+        )
+        dispatch_antra(h_cross, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h_cross.status_code, 403)
+
+        # 3. Family/non-admin user rejected with 403
+        h_nonadmin = MockHandler(
+            command="POST",
+            path=f"/api/antra/jobs/{job_id}/remove",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Origin": "http://localhost:8001"},
+            user="family_member",
+        )
+        dispatch_antra(h_nonadmin, user="family_member", store=self.store, is_admin=lambda u: False)
+        self.assertEqual(h_nonadmin.status_code, 403)
+
+        # 4. Valid authenticated admin same-origin remove -> 200
+        h_ok = MockHandler(
+            command="POST",
+            path=f"/api/antra/jobs/{job_id}/remove",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Origin": "http://localhost:8001"},
+            user="admin",
+        )
+        dispatch_antra(h_ok, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h_ok.status_code, 200)
+        self.assertEqual(h_ok.get_json_body()["status"], "removed")
+
+        # 5. Detail after removal returns 404
+        h_get = MockHandler(
+            command="GET",
+            path=f"/api/antra/jobs/{job_id}",
+            user="admin",
+        )
+        dispatch_antra(h_get, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h_get.status_code, 404)
+
+        # 6. Repeat removal returns 409 deliberate error response
+        h_repeat = MockHandler(
+            command="POST",
+            path=f"/api/antra/jobs/{job_id}/remove",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Origin": "http://localhost:8001"},
+            user="admin",
+        )
+        dispatch_antra(h_repeat, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h_repeat.status_code, 409)
+        self.assertIn("Job already removed", h_repeat.get_json_body()["message"])
+
+    def test_duplicate_url_warning_and_override_api(self):
+        url = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=track1"
+        dup_url = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=track2&utm_source=copy-link"
+
+        # 1. Initial queue -> 202
+        body1 = json.dumps({"url": url, "destination": "private"}).encode()
+        h1 = MockHandler(
+            command="POST",
+            path="/api/antra/jobs",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(body1))},
+            body=body1,
+            user="admin",
+        )
+        dispatch_antra(h1, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h1.status_code, 202)
+
+        # 2. Duplicate URL in same destination without confirmation -> 409 duplicate warning
+        body2 = json.dumps({"url": dup_url, "destination": "private"}).encode()
+        h2 = MockHandler(
+            command="POST",
+            path="/api/antra/jobs",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(body2))},
+            body=body2,
+            user="admin",
+        )
+        dispatch_antra(h2, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h2.status_code, 409)
+        json2 = h2.get_json_body()
+        self.assertEqual(json2["warning"], "duplicate")
+        self.assertIn("already queued or downloaded", json2["message"])
+
+        # 3. Duplicate URL in same destination WITH confirm_duplicate -> 202
+        body3 = json.dumps({"url": dup_url, "destination": "private", "confirm_duplicate": True}).encode()
+        h3 = MockHandler(
+            command="POST",
+            path="/api/antra/jobs",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(body3))},
+            body=body3,
+            user="admin",
+        )
+        dispatch_antra(h3, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h3.status_code, 202)
+        self.assertEqual(h3.get_json_body()["warning"], "duplicate")
+
+        # 4. Duplicate URL in DIFFERENT destination (family) -> 202 without warning
+        body4 = json.dumps({"url": dup_url, "destination": "family"}).encode()
+        h4 = MockHandler(
+            command="POST",
+            path="/api/antra/jobs",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(body4))},
+            body=body4,
+            user="admin",
+        )
+        dispatch_antra(h4, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h4.status_code, 202)
+        self.assertIsNone(h4.get_json_body().get("warning"))
+
 
 class TestDashboardAntraIntegration(unittest.TestCase):
     """Integrated tests spinning up real Dashboard HTTP server exercising /api/antra/."""

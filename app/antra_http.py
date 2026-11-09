@@ -220,9 +220,23 @@ def dispatch_antra(
                 _send_error(handler, 400, "Invalid destination: must be 'private' or 'family'")
                 return
 
+            confirm_dup = bool(payload.get("confirm_duplicate") or payload.get("confirm"))
+            existing_dup = ant_store.find_duplicate_job(url.strip(), destination=destination)
+            if existing_dup and not confirm_dup:
+                _send_response(handler, 409, {
+                    "status": "warning",
+                    "warning": "duplicate",
+                    "message": f"This music URL is already queued or downloaded in {destination} music. Confirm to proceed anyway.",
+                    "existing_job_id": existing_dup["id"],
+                })
+                return
+
             try:
                 job = ant_store.create_job(url=url.strip(), destination=destination)
-                _send_response(handler, 202, {"job": job})
+                if existing_dup:
+                    ant_store.update_job(job["id"], message=f"Duplicate of {existing_dup['id'][:8]}. Confirmed by user.")
+                    job = ant_store.get_job(job["id"])
+                _send_response(handler, 202, {"job": job, "warning": "duplicate" if existing_dup else None})
             except Exception as e:
                 _send_error(handler, 500, "Failed to enqueue job")
             return
@@ -277,6 +291,18 @@ def dispatch_antra(
                     _send_error(handler, 409, str(e))
                 except Exception:
                     _send_error(handler, 500, "Retry operation failed")
+                return
+
+            if action == "remove":
+                try:
+                    res = ant_store.remove_job(job_id)
+                    _send_response(handler, 200, res)
+                except JobNotFoundError:
+                    _send_error(handler, 404, "Job not found")
+                except InvalidTransitionError as e:
+                    _send_error(handler, 409, str(e))
+                except Exception:
+                    _send_error(handler, 500, "Remove operation failed")
                 return
 
             _send_error(handler, 404, "Unknown job action")

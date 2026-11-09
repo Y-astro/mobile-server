@@ -219,6 +219,141 @@ class TestAntraStore(unittest.TestCase):
         # j3 is in future backoff, so not runnable yet
         self.assertIsNone(self.store.get_next_runnable_job())
 
+    def test_remove_job_terminal_transitions_and_hiding(self):
+        # 1. Active jobs cannot be removed directly
+        j_active = self.store.create_job("https://tidal.com/album/active")
+        with self.assertRaises(InvalidTransitionError) as ctx:
+            self.store.remove_job(j_active["id"])
+        self.assertIn("Active jobs must be cancelled before removal", str(ctx.exception))
+
+        # Cancel it -> now terminal 'cancelled'
+        self.store.cancel_job(j_active["id"])
+        res = self.store.remove_job(j_active["id"])
+        self.assertEqual(res["status"], "removed")
+        self.assertEqual(res["id"], j_active["id"])
+
+        # 2. List hides removed job; get_job returns None (404 detail proof)
+        self.assertIsNone(self.store.get_job(j_active["id"]))
+        all_ids = [j["id"] for j in self.store.list_jobs()]
+        self.assertNotIn(j_active["id"], all_ids)
+
+        # Internal/full query preserves metadata (evidence survives)
+        internal = self.store.get_job(j_active["id"], include_removed=True)
+        self.assertIsNotNone(internal)
+        self.assertEqual(internal["removed"], 1)
+
+        # 3. Repeat removal has deliberate error response
+        with self.assertRaises(InvalidTransitionError) as ctx_repeat:
+            self.store.remove_job(j_active["id"])
+        self.assertIn("Job already removed", str(ctx_repeat.exception))
+
+        # 4. Nonexistent job raises JobNotFoundError
+        with self.assertRaises(JobNotFoundError):
+            self.store.remove_job("nonexistent-uuid")
+
+        # 5. Completed and failed jobs can also be removed
+        j_comp = self.store.create_job("https://tidal.com/album/comp")
+        self.store.finish_job(j_comp["id"], "completed")
+        self.assertEqual(self.store.remove_job(j_comp["id"])["status"], "removed")
+
+        j_fail = self.store.create_job("https://tidal.com/album/fail")
+        self.store.finish_job(j_fail["id"], "failed")
+        self.assertEqual(self.store.remove_job(j_fail["id"])["status"], "removed")
+
+        # 6. Worker resurrection prevented: get_next_runnable_job ignores removed
+        j_resurrect = self.store.create_job("https://tidal.com/album/resurrect")
+        self.store.cancel_job(j_resurrect["id"])
+        self.store.remove_job(j_resurrect["id"])
+        # Attempt to set queued status on removed job directly in DB
+        with self.store._connect() as conn:
+            conn.execute("UPDATE jobs SET status = 'queued' WHERE id = ?", (j_resurrect["id"],))
+        self.assertIsNone(self.store.get_next_runnable_job())
+
+    def test_finish_job_drains_queued_tracks_and_recalculates_counts(self):
+        job = self.store.create_job("https://tidal.com/album/playlist-drain")
+        job_id = job["id"]
+        tracks = [
+            {"index": 0, "title": "Track 1", "artist": "Artist"},
+            {"index": 1, "title": "Track 2", "artist": "Artist"},
+            {"index": 2, "title": "Track 3", "artist": "Artist"},
+            {"index": 3, "title": "Track 4", "artist": "Artist"},
+        ]
+        self.store.set_tracks(job_id, tracks)
+        self.store.update_track(job_id, 0, status="completed")
+        self.store.update_track(job_id, 1, status="skipped")
+        # Track 2 and 3 are still 'queued'
+
+        # When finish_job is called (e.g. provider ended or expired)
+        self.store.finish_job(job_id, "partial", "Provider ended early")
+
+        # Verify no tracks remain in 'queued' or 'downloading'
+        trks = self.store.get_tracks(job_id)
+        self.assertEqual(trks[0]["status"], "completed")
+        self.assertEqual(trks[1]["status"], "skipped")
+        self.assertEqual(trks[2]["status"], "failed")
+        self.assertEqual(trks[3]["status"], "failed")
+        self.assertIn("Provider ended before track was downloaded", trks[2]["message"])
+
+        # Job counters accurately reflect drained tracks
+        updated_job = self.store.get_job(job_id)
+        self.assertEqual(updated_job["status"], "partial")
+        self.assertEqual(updated_job["completed"], 1)
+        self.assertEqual(updated_job["skipped"], 1)
+        self.assertEqual(updated_job["failed"], 2)
+        self.assertEqual(updated_job["total"], 4)
+
+    def test_duplicate_job_and_track_detection(self):
+        # 1. URL duplicate matching with differing tracking query
+        url1 = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abcd1234"
+        url2 = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=wxyz5678&utm_source=copy-link"
+        j1 = self.store.create_job(url1, destination="private")
+
+        # Same destination matches duplicate
+        dup = self.store.find_duplicate_job(url2, destination="private")
+        self.assertIsNotNone(dup)
+        self.assertEqual(dup["id"], j1["id"])
+
+        # Different destination does NOT match (scope isolated)
+        self.assertIsNone(self.store.find_duplicate_job(url2, destination="family"))
+
+        # Preserve evidence after Remove
+        self.store.cancel_job(j1["id"])
+        self.store.remove_job(j1["id"])
+        dup_after_remove = self.store.find_duplicate_job(url2, destination="private")
+        self.assertIsNotNone(dup_after_remove)
+        self.assertEqual(dup_after_remove["id"], j1["id"])
+
+        # 2. Track duplicate warnings within destination
+        # Create an existing job with completed track
+        j_lib = self.store.create_job("https://tidal.com/album/lib", destination="private")
+        self.store.set_tracks(j_lib["id"], [
+            {"index": 0, "title": "Hotel California", "artist": "Eagles", "status": "completed"},
+            {"index": 1, "title": "Mystery Track", "artist": "", "status": "completed"},
+        ])
+        self.store.update_track(j_lib["id"], 0, status="completed")
+        self.store.update_track(j_lib["id"], 1, status="completed")
+
+        # Now resolve a new playlist with various candidates
+        new_candidates = [
+            {"index": 0, "title": "Hotel California", "artist": "Eagles"},               # Exact duplicate
+            {"index": 1, "title": "Hotel California", "artist": "Different Band"},         # Different artist -> no duplicate
+            {"index": 2, "title": "Hotel California (Live)", "artist": "Eagles"},         # Different version -> no duplicate
+            {"index": 3, "title": "Mystery Track", "artist": ""},                         # Missing artist -> possible duplicate
+            {"index": 4, "title": "Brand New Song", "artist": "Fresh Artist"},            # Unique song -> no warning
+        ]
+        annotated = self.store.check_track_duplicates("new_job_id", "private", new_candidates)
+
+        self.assertIn("Warning: duplicate song already in library", annotated[0].get("message", ""))
+        self.assertEqual(annotated[1].get("message", ""), "")
+        self.assertEqual(annotated[2].get("message", ""), "")
+        self.assertIn("Possible duplicate: song title matches", annotated[3].get("message", ""))
+        self.assertEqual(annotated[4].get("message", ""), "")
+
+        # Destination isolation: checking family destination does NOT read private library
+        annotated_fam = self.store.check_track_duplicates("new_job_id", "family", new_candidates)
+        self.assertEqual(annotated_fam[0].get("message", ""), "")
+        self.assertEqual(annotated_fam[3].get("message", ""), "")
+
 
 if __name__ == "__main__":
     unittest.main()

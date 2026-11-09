@@ -316,7 +316,18 @@ class AntraWorker:
 
     def _backoff(self, job_id, error, *, daily=False):
         job = self.store.get_internal_job(job_id)
-        attempts = min(int(job.get("retry_attempts", 0)) + 1, 10)
+        if not job or job.get("status") == "cancelled" or self.store.is_job_cancelled(job_id):
+            return
+        attempts = int(job.get("retry_attempts", 0)) + 1
+        if attempts >= 10 and not daily:
+            records = self.store.get_tracks(job_id)
+            completed = sum(t["status"] == "completed" for t in records)
+            skipped = sum(t["status"] == "skipped" for t in records)
+            state = "partial" if (completed or skipped) else "failed"
+            final_msg = f"Connection failed after {attempts} retry attempts. Manual retry is available."
+            self.store.finish_job(job_id, status=state, message=final_msg)
+            return
+
         delay = getattr(error, "retry_after", None) or (86402 - time.time() % 86400 if daily else min(60, 5 * attempts))
         self.store.update_job(
             job_id, status="blocked" if daily else ("downloading" if job.get("upstream_job_id") else "queued"),
@@ -350,12 +361,15 @@ class AntraWorker:
                 self.store.update_job(job_id, status="resolving")
                 resolved = self.client.resolve(job["url"])
                 if not resolved["tracks"]:
-                    self.store.update_job(job_id, status="failed", message="The provider returned no tracks.")
+                    self.store.finish_job(job_id, status="failed", message="The provider returned no tracks.")
                     return
                 if self.store.is_job_cancelled(job_id):
                     return
-                self.store.set_tracks(job_id, resolved["tracks"])
-                self.store.update_job(job_id, title=resolved["title"])
+                tracks_with_dups = self.store.check_track_duplicates(job_id, destination, resolved["tracks"])
+                self.store.set_tracks(job_id, tracks_with_dups)
+                dup_count = sum(1 for t in tracks_with_dups if "duplicate" in t.get("message", "").lower())
+                job_msg = f"Detected {dup_count} duplicate track(s) in {destination} destination." if dup_count else ""
+                self.store.update_job(job_id, title=resolved["title"], message=job_msg)
                 tracks = self.store.get_tracks(job_id)
             if tracks and all(track["status"] in ("completed", "skipped") for track in tracks):
                 self.store.finish_job(job_id, status="completed" if all(track["status"] == "completed" for track in tracks) else "partial", message="")
@@ -454,7 +468,16 @@ class AntraWorker:
             self.store.update_job(job_id, status="blocked", message="Download transport is not installed.")
         except AntraClientError as error:
             if getattr(error, "status", None) in (400, 401, 403, 404):
-                self.store.update_job(job_id, status="failed", message="Provider rejected or expired this job. Completed files were preserved.", submission_intent=0)
+                records = self.store.get_tracks(job_id)
+                completed = sum(t["status"] == "completed" for t in records)
+                skipped = sum(t["status"] == "skipped" for t in records)
+                state = "partial" if (completed or skipped) else "failed"
+                self.store.finish_job(
+                    job_id,
+                    status=state,
+                    message="Provider rejected or expired this job. Completed files were preserved.",
+                )
+                self.store.update_job(job_id, submission_intent=0)
             else:
                 self._backoff(job_id, error)
         except Exception:
@@ -465,7 +488,13 @@ class AntraWorker:
                 self._backoff(job_id, AntraClientError("Download interrupted."))
 
     def _acknowledge(self, job_id, index, upstream):
-        acknowledged = self.client.ack_track(upstream, index)
+        if self.store.is_job_cancelled(job_id):
+            self.store.update_track(job_id, index, ack_pending=0)
+            return
+        try:
+            acknowledged = self.client.ack_track(upstream, index)
+        except Exception:
+            acknowledged = False
         self.store.update_track(job_id, index, ack_pending=0 if acknowledged else 1, ack_retry_after=time.time() + 30)
 
     def _download_and_publish_track(self, job_id, destination_root, upstream_job_id, upstream_index, global_index, rel_path):
@@ -600,7 +629,10 @@ class AntraWorker:
     def run_once(self) -> bool:
         """Process one runnable job if available."""
         for record in self.store.pending_acknowledgements():
-            self._acknowledge(record["job_id"], record["track_index"], record["upstream_job_id"])
+            try:
+                self._acknowledge(record["job_id"], record["track_index"], record["upstream_job_id"])
+            except Exception as e:
+                logger.warning("Ack failed for job %s track %s: %s", record["job_id"], record["track_index"], e)
         job = self.store.get_next_runnable_job()
         if not job:
             return False

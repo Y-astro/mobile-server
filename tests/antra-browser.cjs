@@ -211,6 +211,17 @@ function createInitialState() {
           }
           state.submittedPayloads.push(payload);
           const destination = payload.destination === 'family' ? 'family' : 'private';
+
+          const isDup = state.jobs.some(j => j.destination === destination && j.url === payload.url);
+          if (isDup && !payload.confirm_duplicate) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              status: 'warning',
+              warning: 'duplicate',
+              message: `This music URL is already queued or downloaded in ${destination} music. Confirm to proceed anyway.`
+            }));
+          }
+
           const newJob = {
             id: 'job-' + Date.now(),
             url: payload.url,
@@ -230,7 +241,7 @@ function createInitialState() {
             { index: 0, title: 'Sample Track 1', artist: 'Artist', status: 'queued', bit_depth: null, sample_rate: null, filename: null, message: 'Queued' }
           ];
           res.writeHead(202, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ job: newJob }));
+          return res.end(JSON.stringify({ job: newJob, warning: isDup ? 'duplicate' : null }));
         } catch (e) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ status: 'error', message: 'Malformed JSON' }));
@@ -293,6 +304,27 @@ function createInitialState() {
       job.message = 'Retry queued';
       res.writeHead(202, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ job }));
+    }
+
+    // POST /api/antra/jobs/<id>/remove
+    const matchRemove = pathname.match(/^\/api\/antra\/jobs\/([^/]+)\/remove$/);
+    if (matchRemove && req.method === 'POST') {
+      const id = decodeURIComponent(matchRemove[1]);
+      const jobIndex = state.jobs.findIndex(j => j.id === id);
+      if (jobIndex === -1) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ status: 'error', message: 'Job not found' }));
+      }
+      const job = state.jobs[jobIndex];
+      if (!['completed', 'partial', 'failed', 'cancelled'].includes(job.status)) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ status: 'error', message: 'Active jobs must be cancelled before removal' }));
+      }
+      state.removedJobs = state.removedJobs || [];
+      state.removedJobs.push(job);
+      state.jobs.splice(jobIndex, 1);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ id, status: 'removed' }));
     }
 
     res.writeHead(404);
@@ -619,6 +651,58 @@ function createInitialState() {
     assert.strictEqual(await page.locator('#tracks-section').evaluate(el => el.classList.contains('hidden')), true);
     state.delayTrackJobId = null;
     state.delayMs = 0;
+
+    // =========================================================================
+    // 15. TERMINAL JOB REMOVE ACTION
+    // =========================================================================
+    console.log('[Test 15] Verifying Terminal-job Remove action on real Antra page...');
+    const cancelledJobCard = page.locator('#jobs-list .job-card[data-job-id="job-uuid-250"]');
+    const removeBtn = cancelledJobCard.locator('button[data-action="remove"]');
+    assert.strictEqual(await removeBtn.count(), 1, 'Remove button rendered on terminal cancelled job');
+    assert.strictEqual(await removeBtn.textContent(), 'Remove', 'Remove button text is Remove');
+    assert.match(await removeBtn.getAttribute('title'), /downloaded songs are kept/i, 'Remove button title explains songs kept');
+
+    // First open track details for job-uuid-250
+    await cancelledJobCard.locator('button:has-text("View Tracks")').click();
+    await page.waitForSelector('#tracks-section:not(.hidden)');
+    assert.match(await page.textContent('#tracks-job-title'), /250/);
+
+    // Click Remove on job-uuid-250
+    await removeBtn.click();
+
+    // Verify track details section immediately closed / cleared
+    await page.waitForFunction(() => document.getElementById('tracks-section').classList.contains('hidden'));
+    assert.strictEqual(await page.locator('#tracks-section').evaluate(el => el.classList.contains('hidden')), true, 'Track details closed upon removal');
+
+    // Verify job card removed from DOM
+    await page.waitForFunction(() => !document.querySelector('#jobs-list .job-card[data-job-id="job-uuid-250"]'));
+    assert.strictEqual(await page.locator('#jobs-list .job-card[data-job-id="job-uuid-250"]').count(), 0, 'Removed job hidden from list');
+
+    // Verify downloaded tracks survived in state (files/evidence not deleted)
+    assert.strictEqual(state.tracksByJobId['job-uuid-250'].length, 250, 'Tracks and files preserved after removal');
+    assert.strictEqual(state.removedJobs.length, 1, 'Job archived in backend state');
+
+    // =========================================================================
+    // 16. DUPLICATE URL WARNING AND CONSCIOUS CONTINUATION
+    // =========================================================================
+    console.log('[Test 16] Verifying Duplicate URL warning and conscious continuation...');
+    // Submit same private URL as submitted in Test 4a
+    await page.selectOption('#antra-destination-select', 'private');
+    await page.fill('#antra-url-input', 'https://tidal.com/album/private-album');
+    await page.click('#antra-submit-btn');
+
+    // Warning appears in #form-status with warning styling
+    await page.waitForSelector('.form-status-warning');
+    const warnText = await page.textContent('#form-status');
+    assert.match(warnText, /already queued or downloaded/i, 'Warning shows duplicate explanation');
+    assert.strictEqual(await page.textContent('#submit-btn-text'), 'Confirm Queue', 'Button updates to Confirm Queue');
+
+    // Click Confirm Queue to proceed
+    await page.click('#antra-submit-btn');
+    await page.waitForSelector('.form-status-success');
+    const successText = await page.textContent('#form-status');
+    assert.match(successText, /Download queued successfully/i, 'Job queued after conscious confirmation');
+    assert.strictEqual(await page.textContent('#submit-btn-text'), 'Queue Download', 'Button reset to Queue Download');
 
     await page.close();
     await context.close();
