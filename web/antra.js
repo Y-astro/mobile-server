@@ -36,6 +36,8 @@
   const tracksSummary = document.getElementById('tracks-summary');
   const tracksTbody = document.getElementById('tracks-tbody');
   const btnCloseTracks = document.getElementById('btn-close-tracks');
+  const reorderAnnouncer = document.getElementById('reorder-announcer');
+  const reorderAlert = document.getElementById('reorder-alert');
 
   // Application State
   let activeJobId = null;
@@ -43,6 +45,10 @@
   let isAccessDenied = false;
   let isPageHidden = false;
   let manualFetchInFlight = false;
+  let isDragging = false;
+  let isPointerDown = false;
+  let isReordering = false;
+  let draggedCard = null;
   let pollingLoop = null;
   let cachedJobs = [];
   let activeTrackController = null;
@@ -128,6 +134,10 @@
     // Purge all previous cached content and DOM elements
     cachedJobs = [];
     activeJobId = null;
+    isDragging = false;
+    isPointerDown = false;
+    isReordering = false;
+    draggedCard = null;
     if (jobsList) jobsList.innerHTML = '';
     if (tracksTbody) tracksTbody.innerHTML = '';
     if (tracksSection) tracksSection.classList.add('hidden');
@@ -135,6 +145,7 @@
     if (tracksSummary) tracksSummary.textContent = '';
     if (jobsCountBadge) jobsCountBadge.textContent = '0 jobs';
     if (jobsEmpty) jobsEmpty.classList.add('hidden');
+    hideReorderAlert();
 
     if (authAlert) {
       authAlert.classList.remove('hidden');
@@ -157,6 +168,7 @@
   // Fetch Jobs and Worker Status (Main Polling Action)
   async function fetchJobs(signal) {
     if (isAccessDenied || isPageHidden || manualFetchInFlight) return;
+    if (isDragging || isPointerDown || isReordering) return;
     manualFetchInFlight = true;
 
     const controller = new AbortController();
@@ -236,10 +248,11 @@
   // Render Jobs List
   function renderJobs(jobs) {
     if (isAccessDenied) return;
-    cachedJobs = jobs;
+    if (isDragging || isPointerDown || isReordering) return;
+    cachedJobs = jobs || [];
 
     if (jobsCountBadge) {
-      jobsCountBadge.textContent = `${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'}`;
+      jobsCountBadge.textContent = `${cachedJobs.length} ${cachedJobs.length === 1 ? 'job' : 'jobs'}`;
     }
 
     if (!jobs || jobs.length === 0) {
@@ -251,175 +264,511 @@
     if (jobsEmpty) jobsEmpty.classList.add('hidden');
     if (!jobsList) return;
 
-    // Build fragment safely with textContent for all user strings
+    const pendingJobs = cachedJobs.filter(j => !['downloading', 'resolving', 'completed', 'partial', 'failed', 'cancelled'].includes(j.status));
+    const totalPending = pendingJobs.length;
+
     const frag = document.createDocumentFragment();
+    let pendingSeen = 0;
+    let historyDividerRendered = false;
 
-    jobs.forEach(job => {
-      const card = document.createElement('div');
-      card.className = 'm3-card golden-glass-card p-4 rounded-xl space-y-3 job-card';
-      card.setAttribute('data-job-id', job.id);
+    cachedJobs.forEach(job => {
+      const isActive = job.status === 'downloading' || job.status === 'resolving';
+      const isTerminal = ['completed', 'partial', 'failed', 'cancelled'].includes(job.status);
+      const isPending = !isActive && !isTerminal;
 
-      // Top Header: Title, URL, Badges
-      const topRow = document.createElement('div');
-      topRow.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-2';
-
-      const titleCol = document.createElement('div');
-      titleCol.className = 'flex-1 min-w-0';
-
-      const titleEl = document.createElement('h3');
-      titleEl.className = 'text-sm font-semibold text-white tracking-tight truncate';
-      titleEl.textContent = job.title || job.url || 'Untitled Download';
-
-      const urlEl = document.createElement('p');
-      urlEl.className = 'text-xs text-muted truncate mono';
-      urlEl.textContent = job.url || '';
-
-      titleCol.appendChild(titleEl);
-      titleCol.appendChild(urlEl);
-
-      const badgesCol = document.createElement('div');
-      badgesCol.className = 'flex items-center gap-2 flex-wrap';
-
-      // Render immutable destination badge from server
-      const destBadge = createDestinationBadge(job.destination);
-      badgesCol.appendChild(destBadge);
-
-      const statusBadge = document.createElement('span');
-      statusBadge.className = `badge-status ${getStatusClass(job.status)}`;
-      statusBadge.textContent = job.status || 'queued';
-      badgesCol.appendChild(statusBadge);
-
-      topRow.appendChild(titleCol);
-      topRow.appendChild(badgesCol);
-      card.appendChild(topRow);
-
-      // Progress Bar
-      const total = typeof job.total === 'number' ? job.total : 0;
-      const completed = typeof job.completed === 'number' ? job.completed : 0;
-      const skipped = typeof job.skipped === 'number' ? job.skipped : 0;
-      const failed = typeof job.failed === 'number' ? job.failed : 0;
-      const processed = completed + skipped;
-      const pct = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : (job.status === 'completed' ? 100 : 0);
-
-      const progTrack = document.createElement('div');
-      progTrack.className = 'progress-track';
-      progTrack.setAttribute('role', 'progressbar');
-      progTrack.setAttribute('aria-valuenow', String(pct));
-      progTrack.setAttribute('aria-valuemin', '0');
-      progTrack.setAttribute('aria-valuemax', '100');
-      progTrack.setAttribute('aria-label', `Download progress for ${job.title || job.url}`);
-
-      const progFill = document.createElement('div');
-      progFill.className = `progress-fill ${job.status === 'failed' ? 'fill-failed' : ''}`;
-      progFill.style.width = `${pct}%`;
-      progTrack.appendChild(progFill);
-      card.appendChild(progTrack);
-
-      // Metrics & Actions Row
-      const metaRow = document.createElement('div');
-      metaRow.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-soft';
-
-      const metricsDiv = document.createElement('div');
-      metricsDiv.className = 'flex flex-wrap items-center gap-3';
-
-      const compSpan = document.createElement('span');
-      compSpan.innerHTML = `Completed: <strong class="text-white">${completed}</strong> / ${total}`;
-
-      const skipSpan = document.createElement('span');
-      skipSpan.className = 'text-muted';
-      skipSpan.innerHTML = `Skipped (&lt;24b): <strong class="text-white">${skipped}</strong>`;
-
-      metricsDiv.appendChild(compSpan);
-      metricsDiv.appendChild(skipSpan);
-
-      if (failed > 0) {
-        const failSpan = document.createElement('span');
-        failSpan.className = 'text-red-300';
-        failSpan.innerHTML = `Failed: <strong>${failed}</strong>`;
-        metricsDiv.appendChild(failSpan);
+      if (isTerminal && !historyDividerRendered && (pendingSeen > 0 || cachedJobs.some(j => j.status === 'downloading' || j.status === 'resolving'))) {
+        const histDiv = document.createElement('div');
+        histDiv.className = 'history-header';
+        histDiv.textContent = 'Download History';
+        frag.appendChild(histDiv);
+        historyDividerRendered = true;
       }
 
-      metaRow.appendChild(metricsDiv);
-
-      // Action Buttons
-      const actionsDiv = document.createElement('div');
-      actionsDiv.className = 'flex items-center gap-2 job-actions';
-
-      // Cancel button if active
-      if (['queued', 'resolving', 'downloading'].includes(job.status)) {
-        const cancelBtn = document.createElement('button');
-        cancelBtn.type = 'button';
-        cancelBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-red-300 hover:text-red-200 border-red-500/30';
-        cancelBtn.textContent = 'Cancel';
-        cancelBtn.setAttribute('data-action', 'cancel');
-        cancelBtn.setAttribute('data-id', job.id);
-        cancelBtn.addEventListener('click', () => handleJobCancel(job.id, cancelBtn));
-        actionsDiv.appendChild(cancelBtn);
+      let rank = null;
+      let pendingIndex = -1;
+      if (isPending) {
+        pendingIndex = pendingSeen;
+        rank = pendingSeen + 1;
+        pendingSeen++;
       }
 
-      // Retry button if failed or partial or cancelled
-      if (['failed', 'cancelled', 'blocked', 'partial'].includes(job.status)) {
-        if (job.status === 'blocked' && job.duplicate_count > 0 && !job.duplicate_confirmed) {
-          const contBtn = document.createElement('button');
-          contBtn.type = 'button';
-          contBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-amber-300 hover:text-white border-amber-500/40';
-          contBtn.textContent = 'Continue';
-          contBtn.title = 'Continue downloading playlist despite duplicate tracks';
-          contBtn.setAttribute('data-action', 'continue');
-          contBtn.setAttribute('data-id', job.id);
-          contBtn.addEventListener('click', () => handleJobContinue(job.id, contBtn));
-          actionsDiv.appendChild(contBtn);
-        } else {
-          const retryBtn = document.createElement('button');
-          retryBtn.type = 'button';
-          retryBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-teal hover:text-white border-teal/40';
-          retryBtn.textContent = 'Retry';
-          retryBtn.setAttribute('data-action', 'retry');
-          retryBtn.setAttribute('data-id', job.id);
-          retryBtn.addEventListener('click', () => handleJobRetry(job.id, retryBtn));
-          actionsDiv.appendChild(retryBtn);
-        }
-      }
-
-      // Remove button if terminal
-      if (['completed', 'partial', 'failed', 'cancelled'].includes(job.status)) {
-        const removeBtn = document.createElement('button');
-        removeBtn.type = 'button';
-        removeBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-muted hover:text-white border-white/20';
-        removeBtn.textContent = 'Remove';
-        removeBtn.title = 'Remove job from list (downloaded songs are kept)';
-        removeBtn.setAttribute('data-action', 'remove');
-        removeBtn.setAttribute('data-id', job.id);
-        removeBtn.setAttribute('aria-label', `Remove ${job.title || 'job'} from list (downloaded songs are kept)`);
-        removeBtn.addEventListener('click', () => handleJobRemove(job.id, removeBtn));
-        actionsDiv.appendChild(removeBtn);
-      }
-
-      // Details button
-      const detailsBtn = document.createElement('button');
-      detailsBtn.type = 'button';
-      detailsBtn.className = 'm3-btn m3-btn-tonal action-btn text-xs font-medium';
-      detailsBtn.textContent = activeJobId === job.id ? 'Hide Tracks' : 'View Tracks';
-      detailsBtn.setAttribute('aria-expanded', activeJobId === job.id ? 'true' : 'false');
-      detailsBtn.addEventListener('click', () => toggleTrackDetails(job.id));
-      actionsDiv.appendChild(detailsBtn);
-
-      metaRow.appendChild(actionsDiv);
-      card.appendChild(metaRow);
-
-      // Optional Job Message
-      if (job.message) {
-        const msgEl = document.createElement('div');
-        msgEl.className = 'text-[11px] text-muted border-t border-white/5 pt-1.5';
-        msgEl.textContent = job.message;
-        card.appendChild(msgEl);
-      }
-
-      frag.appendChild(card);
+      frag.appendChild(createJobCard(job, {
+        isActive,
+        isPending,
+        rank,
+        pendingIndex,
+        totalPending,
+      }));
     });
 
     jobsList.innerHTML = '';
     jobsList.appendChild(frag);
+  }
+
+  function createJobCard(job, opts) {
+    const { isActive, isPending, rank, pendingIndex, totalPending } = opts;
+    const card = document.createElement('div');
+    card.className = 'm3-card golden-glass-card p-4 rounded-xl space-y-3 job-card';
+    card.setAttribute('data-job-id', job.id);
+    if (isPending) {
+      card.setAttribute('data-pending', 'true');
+    }
+
+    const topRow = document.createElement('div');
+    topRow.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-2';
+
+    const leftCol = document.createElement('div');
+    leftCol.className = 'flex items-center gap-2.5 flex-1 min-w-0';
+
+    if (isPending) {
+      const handle = document.createElement('button');
+      handle.type = 'button';
+      handle.className = 'drag-handle action-btn touch-target flex-shrink-0';
+      handle.setAttribute('aria-label', `Drag to reorder ${job.title || 'job'}. Use Move Up and Move Down buttons for keyboard control.`);
+      handle.title = 'Drag to reorder priority';
+      handle.innerHTML = `
+        <svg class="w-4 h-4 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8h16M4 16h16"></path>
+        </svg>
+      `;
+      attachDragListeners(handle, card, job.id);
+      leftCol.appendChild(handle);
+    }
+
+    const titleCol = document.createElement('div');
+    titleCol.className = 'flex-1 min-w-0';
+
+    const titleEl = document.createElement('h3');
+    titleEl.className = 'text-sm font-semibold text-white tracking-tight truncate';
+    titleEl.textContent = job.title || job.url || 'Untitled Download';
+
+    const urlEl = document.createElement('p');
+    urlEl.className = 'text-xs text-muted truncate mono';
+    urlEl.textContent = job.url || '';
+
+    titleCol.appendChild(titleEl);
+    titleCol.appendChild(urlEl);
+    leftCol.appendChild(titleCol);
+    topRow.appendChild(leftCol);
+
+    const badgesCol = document.createElement('div');
+    badgesCol.className = 'flex items-center gap-2 flex-wrap';
+
+    if (isActive) {
+      const activeBadge = document.createElement('span');
+      activeBadge.className = 'm3-badge badge-active-download';
+      activeBadge.textContent = 'Active Download';
+      badgesCol.appendChild(activeBadge);
+    } else if (isPending && typeof rank === 'number') {
+      const prioBadge = document.createElement('span');
+      prioBadge.className = 'm3-badge badge-priority';
+      prioBadge.setAttribute('data-rank-badge', 'true');
+      prioBadge.textContent = rank === 1 ? '#1 • Runs Next' : `#${rank}`;
+      badgesCol.appendChild(prioBadge);
+    }
+
+    const destBadge = createDestinationBadge(job.destination);
+    badgesCol.appendChild(destBadge);
+
+    const statusBadge = document.createElement('span');
+    statusBadge.className = `badge-status ${getStatusClass(job.status)}`;
+    statusBadge.textContent = job.status || 'queued';
+    badgesCol.appendChild(statusBadge);
+
+    topRow.appendChild(badgesCol);
+    card.appendChild(topRow);
+
+    // Progress Bar
+    const total = typeof job.total === 'number' ? job.total : 0;
+    const completed = typeof job.completed === 'number' ? job.completed : 0;
+    const skipped = typeof job.skipped === 'number' ? job.skipped : 0;
+    const failed = typeof job.failed === 'number' ? job.failed : 0;
+    const processed = completed + skipped;
+    const pct = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : (job.status === 'completed' ? 100 : 0);
+
+    const progTrack = document.createElement('div');
+    progTrack.className = 'progress-track';
+    progTrack.setAttribute('role', 'progressbar');
+    progTrack.setAttribute('aria-valuenow', String(pct));
+    progTrack.setAttribute('aria-valuemin', '0');
+    progTrack.setAttribute('aria-valuemax', '100');
+    progTrack.setAttribute('aria-label', `Download progress for ${job.title || job.url}`);
+
+    const progFill = document.createElement('div');
+    progFill.className = `progress-fill ${job.status === 'failed' ? 'fill-failed' : ''}`;
+    progFill.style.width = `${pct}%`;
+    progTrack.appendChild(progFill);
+    card.appendChild(progTrack);
+
+    // Metrics & Actions Row
+    const metaRow = document.createElement('div');
+    metaRow.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-soft';
+
+    const metricsDiv = document.createElement('div');
+    metricsDiv.className = 'flex flex-wrap items-center gap-3';
+
+    const compSpan = document.createElement('span');
+    compSpan.innerHTML = `Completed: <strong class="text-white">${completed}</strong> / ${total}`;
+
+    const skipSpan = document.createElement('span');
+    skipSpan.className = 'text-muted';
+    skipSpan.innerHTML = `Skipped (&lt;24b): <strong class="text-white">${skipped}</strong>`;
+
+    metricsDiv.appendChild(compSpan);
+    metricsDiv.appendChild(skipSpan);
+
+    if (failed > 0) {
+      const failSpan = document.createElement('span');
+      failSpan.className = 'text-red-300';
+      failSpan.innerHTML = `Failed: <strong>${failed}</strong>`;
+      metricsDiv.appendChild(failSpan);
+    }
+
+    metaRow.appendChild(metricsDiv);
+
+    // Action Buttons
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'flex items-center gap-2 job-actions flex-wrap';
+
+    if (isPending) {
+      // Move Up Button
+      const moveUpBtn = document.createElement('button');
+      moveUpBtn.type = 'button';
+      moveUpBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs btn-move-up';
+      moveUpBtn.setAttribute('data-action', 'move-up');
+      moveUpBtn.setAttribute('data-id', job.id);
+      moveUpBtn.setAttribute('aria-label', `Move ${job.title || 'job'} up in priority`);
+      moveUpBtn.title = 'Move up in priority';
+      moveUpBtn.disabled = (pendingIndex === 0);
+      moveUpBtn.innerHTML = `
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path>
+        </svg>
+      `;
+      moveUpBtn.addEventListener('click', () => handleMoveJob(job.id, -1));
+      actionsDiv.appendChild(moveUpBtn);
+
+      // Move Down Button
+      const moveDownBtn = document.createElement('button');
+      moveDownBtn.type = 'button';
+      moveDownBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs btn-move-down';
+      moveDownBtn.setAttribute('data-action', 'move-down');
+      moveDownBtn.setAttribute('data-id', job.id);
+      moveDownBtn.setAttribute('aria-label', `Move ${job.title || 'job'} down in priority`);
+      moveDownBtn.title = 'Move down in priority';
+      moveDownBtn.disabled = (pendingIndex === totalPending - 1);
+      moveDownBtn.innerHTML = `
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+        </svg>
+      `;
+      moveDownBtn.addEventListener('click', () => handleMoveJob(job.id, 1));
+      actionsDiv.appendChild(moveDownBtn);
+    }
+
+    // Cancel button if active or pending
+    if (['queued', 'resolving', 'downloading'].includes(job.status)) {
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-red-300 hover:text-red-200 border-red-500/30';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.setAttribute('data-action', 'cancel');
+      cancelBtn.setAttribute('data-id', job.id);
+      cancelBtn.addEventListener('click', () => handleJobCancel(job.id, cancelBtn));
+      actionsDiv.appendChild(cancelBtn);
+    }
+
+    // Retry / Continue button if failed/cancelled/blocked
+    if (['failed', 'cancelled', 'blocked', 'partial'].includes(job.status)) {
+      if (job.status === 'blocked' && job.duplicate_count > 0 && !job.duplicate_confirmed) {
+        const contBtn = document.createElement('button');
+        contBtn.type = 'button';
+        contBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-amber-300 hover:text-white border-amber-500/40';
+        contBtn.textContent = 'Continue';
+        contBtn.title = 'Continue downloading playlist despite duplicate tracks';
+        contBtn.setAttribute('data-action', 'continue');
+        contBtn.setAttribute('data-id', job.id);
+        contBtn.addEventListener('click', () => handleJobContinue(job.id, contBtn));
+        actionsDiv.appendChild(contBtn);
+      } else {
+        const retryBtn = document.createElement('button');
+        retryBtn.type = 'button';
+        retryBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-teal hover:text-white border-teal/40';
+        retryBtn.textContent = 'Retry';
+        retryBtn.setAttribute('data-action', 'retry');
+        retryBtn.setAttribute('data-id', job.id);
+        retryBtn.addEventListener('click', () => handleJobRetry(job.id, retryBtn));
+        actionsDiv.appendChild(retryBtn);
+      }
+    }
+
+    // Remove button if terminal
+    if (['completed', 'partial', 'failed', 'cancelled'].includes(job.status)) {
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-muted hover:text-white border-white/20';
+      removeBtn.textContent = 'Remove';
+      removeBtn.title = 'Remove job from list (downloaded songs are kept)';
+      removeBtn.setAttribute('data-action', 'remove');
+      removeBtn.setAttribute('data-id', job.id);
+      removeBtn.setAttribute('aria-label', `Remove ${job.title || 'job'} from list (downloaded songs are kept)`);
+      removeBtn.addEventListener('click', () => handleJobRemove(job.id, removeBtn));
+      actionsDiv.appendChild(removeBtn);
+    }
+
+    // Details button
+    const detailsBtn = document.createElement('button');
+    detailsBtn.type = 'button';
+    detailsBtn.className = 'm3-btn m3-btn-tonal action-btn text-xs font-medium';
+    detailsBtn.textContent = activeJobId === job.id ? 'Hide Tracks' : 'View Tracks';
+    detailsBtn.setAttribute('aria-expanded', activeJobId === job.id ? 'true' : 'false');
+    detailsBtn.addEventListener('click', () => toggleTrackDetails(job.id));
+    actionsDiv.appendChild(detailsBtn);
+
+    metaRow.appendChild(actionsDiv);
+    card.appendChild(metaRow);
+
+    // Optional Job Message
+    if (job.message) {
+      const msgEl = document.createElement('div');
+      msgEl.className = 'text-[11px] text-muted border-t border-white/5 pt-1.5';
+      msgEl.textContent = job.message;
+      card.appendChild(msgEl);
+    }
+
+    return card;
+  }
+
+  function updateRanksInDOM() {
+    if (!jobsList) return;
+    const pendingCards = Array.from(jobsList.querySelectorAll('.job-card[data-pending="true"]'));
+    const total = pendingCards.length;
+    pendingCards.forEach((c, idx) => {
+      const rank = idx + 1;
+      const rankBadge = c.querySelector('[data-rank-badge="true"]');
+      if (rankBadge) {
+        rankBadge.textContent = rank === 1 ? '#1 • Runs Next' : `#${rank}`;
+      }
+      const upBtn = c.querySelector('button[data-action="move-up"]');
+      if (upBtn) {
+        upBtn.disabled = (idx === 0);
+      }
+      const downBtn = c.querySelector('button[data-action="move-down"]');
+      if (downBtn) {
+        downBtn.disabled = (idx === total - 1);
+      }
+    });
+  }
+
+  function attachDragListeners(handle, card, jobId) {
+    let pointerStart = null;
+    let didMove = false;
+
+    const onPointerMove = (e) => {
+      if (!isPointerDown || draggedCard !== card) return;
+
+      if (!didMove && pointerStart) {
+        const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
+        if (dist >= 4) {
+          didMove = true;
+          isDragging = true;
+          card.classList.add('dragging');
+        }
+      }
+
+      if (didMove && isDragging) {
+        const pendingCards = Array.from(jobsList.querySelectorAll('.job-card[data-pending="true"]'));
+        for (const other of pendingCards) {
+          if (other === card) continue;
+          const rect = other.getBoundingClientRect();
+          if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+            const midY = rect.top + rect.height / 2;
+            if (e.clientY < midY) {
+              jobsList.insertBefore(card, other);
+            } else {
+              jobsList.insertBefore(card, other.nextElementSibling);
+            }
+            updateRanksInDOM();
+            break;
+          }
+        }
+      }
+    };
+
+    const onPointerEnd = async (e) => {
+      if (!isPointerDown || draggedCard !== card) return;
+      isPointerDown = false;
+      const wasDragging = isDragging;
+      isDragging = false;
+      card.classList.remove('dragging');
+      draggedCard = null;
+
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerEnd);
+      window.removeEventListener('pointercancel', onPointerCancel);
+
+      try {
+        if (handle.hasPointerCapture(e.pointerId)) {
+          handle.releasePointerCapture(e.pointerId);
+        }
+      } catch (_) {}
+
+      if (wasDragging) {
+        const pendingCards = Array.from(jobsList.querySelectorAll('.job-card[data-pending="true"]'));
+        const newOrder = pendingCards.map(c => c.getAttribute('data-job-id'));
+        const oldOrder = cachedJobs
+          .filter(j => !['downloading', 'resolving', 'completed', 'partial', 'failed', 'cancelled'].includes(j.status))
+          .map(j => j.id);
+
+        const hasChanged = newOrder.length !== oldOrder.length || newOrder.some((id, i) => id !== oldOrder[i]);
+        if (hasChanged) {
+          const newIndex = newOrder.indexOf(jobId);
+          announceReorder(jobId, newIndex + 1, newOrder.length);
+          await commitReorder(newOrder);
+        }
+      }
+    };
+
+    const onPointerCancel = (e) => {
+      if (!isPointerDown || draggedCard !== card) return;
+      isPointerDown = false;
+      isDragging = false;
+      card.classList.remove('dragging');
+      draggedCard = null;
+
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerEnd);
+      window.removeEventListener('pointercancel', onPointerCancel);
+
+      try {
+        if (handle.hasPointerCapture(e.pointerId)) {
+          handle.releasePointerCapture(e.pointerId);
+        }
+      } catch (_) {}
+      // Restore DOM to match latest server state without sending POST
+      renderJobs(cachedJobs);
+    };
+
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || isAccessDenied || isReordering) return;
+      pointerStart = { x: e.clientX, y: e.clientY };
+      isPointerDown = true;
+      didMove = false;
+      draggedCard = card;
+      try {
+        handle.setPointerCapture(e.pointerId);
+      } catch (_) {}
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerEnd);
+      window.addEventListener('pointercancel', onPointerCancel);
+    });
+  }
+
+  async function handleMoveJob(jobId, delta) {
+    if (isAccessDenied || isReordering) return;
+    const pendingCards = Array.from(jobsList.querySelectorAll('.job-card[data-pending="true"]'));
+    const currentIds = pendingCards.map(c => c.getAttribute('data-job-id'));
+    const idx = currentIds.indexOf(jobId);
+    if (idx === -1) return;
+    const targetIdx = idx + delta;
+    if (targetIdx < 0 || targetIdx >= currentIds.length) return;
+
+    const newIds = [...currentIds];
+    const temp = newIds[idx];
+    newIds[idx] = newIds[targetIdx];
+    newIds[targetIdx] = temp;
+
+    const card = pendingCards[idx];
+    const targetCard = pendingCards[targetIdx];
+    if (delta < 0) {
+      jobsList.insertBefore(card, targetCard);
+    } else {
+      jobsList.insertBefore(card, targetCard.nextElementSibling);
+    }
+    updateRanksInDOM();
+
+    announceReorder(jobId, targetIdx + 1, newIds.length);
+    await commitReorder(newIds);
+  }
+
+  async function commitReorder(newIds) {
+    // Abort obsolete in-flight main GET on reorder begin
+    if (activeMainFetchController) {
+      activeMainFetchController.abort();
+      activeMainFetchController = null;
+    }
+
+    isReordering = true;
+    hideReorderAlert();
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      const res = await fetch('/api/antra/jobs/reorder', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({ job_ids: newIds }),
+        signal: controller.signal,
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        let errData = {};
+        try { errData = await res.json(); } catch (_) {}
+        handleAccessRefusal(res.status, errData.message);
+        return;
+      }
+
+      const data = await res.json();
+
+      if (res.ok && data.status === 'ok') {
+        isReordering = false;
+        renderJobs(data.jobs || []);
+        if (pollingLoop && typeof pollingLoop.refreshAfterMutation === 'function') {
+          pollingLoop.refreshAfterMutation();
+        }
+      } else {
+        isReordering = false;
+        const msg = data.message || `Priority update failed (${res.status})`;
+        showReorderAlert(`Priority update conflict: ${msg}. Restoring server queue.`);
+        renderJobs(cachedJobs);
+        await fetchJobs();
+      }
+    } catch (err) {
+      isReordering = false;
+      if (err.name === 'AbortError') {
+        showReorderAlert('Reorder request timed out. Restoring server queue.');
+      } else {
+        showReorderAlert('Network error saving job priority. Restoring server queue.');
+      }
+      renderJobs(cachedJobs);
+      await fetchJobs();
+    } finally {
+      clearTimeout(timeoutId);
+      isReordering = false;
+    }
+  }
+
+  function showReorderAlert(msg) {
+    if (!reorderAlert) return;
+    reorderAlert.textContent = msg;
+    reorderAlert.classList.remove('hidden');
+  }
+
+  function hideReorderAlert() {
+    if (!reorderAlert) return;
+    reorderAlert.textContent = '';
+    reorderAlert.classList.add('hidden');
+  }
+
+  function announceReorder(jobId, rank, total) {
+    if (!reorderAnnouncer) return;
+    const job = cachedJobs.find(j => j.id === jobId);
+    const title = job ? (job.title || job.url || 'Job') : 'Job';
+    reorderAnnouncer.textContent = `${title} priority changed to position ${rank} of ${total}`;
   }
 
   // Toggle Track Details

@@ -250,6 +250,63 @@ function createInitialState() {
       return;
     }
 
+    // POST /api/antra/jobs/reorder
+    if (pathname === '/api/antra/jobs/reorder' && req.method === 'POST') {
+      if (state.role === 'anonymous') {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ status: 'error', message: 'Authentication required' }));
+      }
+      if (state.role !== 'admin') {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ status: 'error', message: 'Admin access required' }));
+      }
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(body || '{}');
+          const jobIds = payload.job_ids;
+          if (!Array.isArray(jobIds)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ status: 'error', message: 'job_ids must be a list' }));
+          }
+          if (new Set(jobIds).size !== jobIds.length) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ status: 'error', message: 'Duplicate job IDs' }));
+          }
+          if (state.failNextReorder) {
+            state.failNextReorder = false;
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ status: 'error', message: 'Queue state changed concurrently', conflict: 'stale_queue' }));
+          }
+          const pendingJobs = state.jobs.filter(j => !['downloading', 'resolving', 'completed', 'partial', 'failed', 'cancelled'].includes(j.status));
+          const pendingIds = pendingJobs.map(j => j.id);
+          const isMatch = jobIds.length === pendingIds.length && jobIds.every(id => pendingIds.includes(id));
+          if (!isMatch) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ status: 'error', message: 'Queue state changed concurrently', conflict: 'stale_queue' }));
+          }
+          // Reorder pending jobs in state.jobs
+          const nonPendingBefore = state.jobs.filter(j => j.status === 'downloading' || j.status === 'resolving');
+          const nonPendingAfter = state.jobs.filter(j => ['completed', 'partial', 'failed', 'cancelled'].includes(j.status));
+          const reorderedPending = jobIds.map((id, idx) => {
+            const j = pendingJobs.find(item => item.id === id);
+            j.priority = jobIds.length - idx;
+            return j;
+          });
+          state.jobs = [...nonPendingBefore, ...reorderedPending, ...nonPendingAfter];
+          state.reorderCallCount = (state.reorderCallCount || 0) + 1;
+          state.lastReorderedIds = jobIds;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ status: 'ok', jobs: state.jobs }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ status: 'error', message: 'Malformed JSON' }));
+        }
+      });
+      return;
+    }
+
     // GET /api/antra/jobs/<id>
     const matchDetail = pathname.match(/^\/api\/antra\/jobs\/([^/]+)$/);
     if (matchDetail && req.method === 'GET') {
@@ -750,6 +807,138 @@ function createInitialState() {
       return card && !card.querySelector('button[data-action="continue"]');
     });
     assert.strictEqual(state.jobs.find(j => j.id === 'job-duplicate-playlist').duplicate_confirmed, 1);
+
+    // =========================================================================
+    // 19. ACCESSIBLE MOVE UP / MOVE DOWN BUTTONS & TOUCH TARGETS
+    // =========================================================================
+    console.log('[Test 19] Verifying accessible Move Up / Move Down buttons with >= 48px touch targets...');
+    const pendingCards = page.locator('#jobs-list .job-card[data-pending="true"]');
+    const pendingCount = await pendingCards.count();
+    assert.ok(pendingCount >= 2, 'At least two pending jobs available for reordering');
+
+    // 19a. Verify touch targets on Move buttons >= 48px
+    const moveDownBtnFirst = pendingCards.first().locator('button[data-action="move-down"]');
+    const moveDownBox = await moveDownBtnFirst.boundingBox();
+    assert.ok(moveDownBox.width >= 48 && moveDownBox.height >= 48, 'Move Down button meets >= 48px touch target');
+
+    // 19b. Verify boundary disabled states
+    assert.strictEqual(await pendingCards.first().locator('button[data-action="move-up"]').isDisabled(), true, 'Move Up disabled on top pending job');
+    assert.strictEqual(await pendingCards.last().locator('button[data-action="move-down"]').isDisabled(), true, 'Move Down disabled on bottom pending job');
+
+    // 19c. Click Move Down on top pending job
+    const topIdBefore = await pendingCards.nth(0).getAttribute('data-job-id');
+    const secondIdBefore = await pendingCards.nth(1).getAttribute('data-job-id');
+
+    const reorderPromise19 = page.waitForResponse(r => new URL(r.url()).pathname === '/api/antra/jobs/reorder');
+    await pendingCards.nth(0).locator('button[data-action="move-down"]').click();
+    await reorderPromise19;
+
+    // Verify DOM order swapped
+    await page.waitForFunction((expectedId) => {
+      const cards = document.querySelectorAll('#jobs-list .job-card[data-pending="true"]');
+      return cards[0] && cards[0].getAttribute('data-job-id') === expectedId;
+    }, secondIdBefore);
+
+    // Verify screen reader announcement in #reorder-announcer
+    const announcement = await page.textContent('#reorder-announcer');
+    assert.match(announcement, /priority changed to position 2/i, 'Screen reader announcement made for position change');
+
+    // Verify backend received POST /api/antra/jobs/reorder with updated sequence
+    assert.strictEqual(state.lastReorderedIds[0], secondIdBefore);
+    assert.strictEqual(state.lastReorderedIds[1], topIdBefore);
+
+    // =========================================================================
+    // 20. REAL POINTER DRAG ACROSS PENDING CARDS & PERSISTENCE
+    // =========================================================================
+    console.log('[Test 20] Verifying real pointer drag across pending cards and reload persistence...');
+    // Drag the second pending card (topIdBefore) back to the top position
+    const cardToDrag = page.locator('#jobs-list .job-card[data-job-id="' + topIdBefore + '"]');
+    await cardToDrag.scrollIntoViewIfNeeded();
+    const dragHandle = cardToDrag.locator('.drag-handle');
+    await dragHandle.waitFor({ state: 'visible' });
+    const handleBox = await dragHandle.boundingBox();
+    assert.ok(handleBox.width >= 48 && handleBox.height >= 48, 'Drag handle meets >= 48px touch target');
+
+    const dropTargetCard = page.locator('#jobs-list .job-card[data-job-id="' + secondIdBefore + '"]');
+    await dropTargetCard.scrollIntoViewIfNeeded();
+    const targetBox = await dropTargetCard.boundingBox();
+
+    // Perform actual pointer drag: mouse down on handle, move over drop target, mouse up
+    const reorderPromise20 = page.waitForResponse(r => new URL(r.url()).pathname === '/api/antra/jobs/reorder');
+    await dragHandle.hover();
+    await page.mouse.down();
+    await dropTargetCard.hover();
+    await page.mouse.up();
+    await reorderPromise20;
+
+    // Verify DOM swapped back
+    await page.waitForFunction((expectedId) => {
+      const cards = document.querySelectorAll('#jobs-list .job-card[data-pending="true"]');
+      return cards[0] && cards[0].getAttribute('data-job-id') === expectedId;
+    }, topIdBefore);
+
+    // Verify backend confirmed mutation
+    assert.strictEqual(state.lastReorderedIds[0], topIdBefore);
+    assert.strictEqual(state.lastReorderedIds[1], secondIdBefore);
+
+    // Verify order persists across full page reload
+    await page.reload();
+    await page.waitForSelector('#jobs-list .job-card[data-pending="true"]');
+    const cardsAfterReload = page.locator('#jobs-list .job-card[data-pending="true"]');
+    assert.strictEqual(await cardsAfterReload.nth(0).getAttribute('data-job-id'), topIdBefore, 'Persisted order survives reload');
+    assert.strictEqual(await cardsAfterReload.nth(1).getAttribute('data-job-id'), secondIdBefore, 'Persisted order survives reload');
+
+    // =========================================================================
+    // 21. POLLING DURING IN-PROGRESS DRAG DOES NOT REPLACE DOM
+    // =========================================================================
+    console.log('[Test 21] Verifying polling during in-progress drag does not replace DOM cards...');
+    const card21 = cardsAfterReload.nth(1);
+    const handle21 = card21.locator('.drag-handle');
+    const box21 = await handle21.boundingBox();
+
+    // Start drag
+    await page.mouse.move(box21.x + box21.width / 2, box21.y + box21.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box21.x + box21.width / 2, box21.y + box21.height / 2 + 10, { steps: 5 });
+
+    // Verify dragging state active
+    assert.strictEqual(await card21.evaluate(el => el.classList.contains('dragging')), true, 'Card has dragging class');
+
+    // Mark DOM node with unique property
+    await card21.evaluate(el => { el.__markerToken = 'preserved_during_drag'; });
+
+    // Trigger refresh / polling while drag is in progress
+    await page.click('#btn-refresh', { force: true });
+
+    // Check DOM node identity preserved (not wiped / recreated by polling)
+    const markerPreserved = await card21.evaluate(el => el.__markerToken === 'preserved_during_drag');
+    assert.strictEqual(markerPreserved, true, 'DOM element identity preserved during polling while drag is in flight');
+
+    // End drag without swapping
+    await page.mouse.up();
+    assert.strictEqual(await card21.evaluate(el => el.classList.contains('dragging')), false, 'Dragging class removed on pointerup');
+
+    // =========================================================================
+    // 22. FAILED SAVE / 409 CONFLICT RESTORATION
+    // =========================================================================
+    console.log('[Test 22] Verifying failed save / 409 conflict displays warning and restores server order...');
+    state.failNextReorder = true;
+    const firstCardIdBefore = await page.locator('#jobs-list .job-card[data-pending="true"]').nth(0).getAttribute('data-job-id');
+
+    // Trigger Move Down which will hit 409 Conflict
+    await page.locator('#jobs-list .job-card[data-pending="true"]').nth(0).locator('button[data-action="move-down"]').click();
+
+    // Wait for conflict alert
+    await page.waitForSelector('#reorder-alert:not(.hidden)');
+    const alertMsg = await page.textContent('#reorder-alert');
+    assert.match(alertMsg, /Priority update conflict/i, 'Alert explains concurrent conflict');
+
+    // Verify server order restored
+    await page.waitForFunction((expectedId) => {
+      const cards = document.querySelectorAll('#jobs-list .job-card[data-pending="true"]');
+      return cards[0] && cards[0].getAttribute('data-job-id') === expectedId;
+    }, firstCardIdBefore);
+    assert.strictEqual(await page.locator('#jobs-list .job-card[data-pending="true"]').nth(0).getAttribute('data-job-id'), firstCardIdBefore, 'Server order restored after failed mutation');
 
     await page.close();
     await context.close();

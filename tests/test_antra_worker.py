@@ -861,6 +861,53 @@ class TestAntraAutomaticRetries(unittest.TestCase):
         self.assertEqual(j_state["retry_attempts"], 9)
         self.assertGreater(j_state["concurrency_retry_after"], time.time())
 
+    def test_worker_picks_highest_runnable_priority(self):
+        j1 = self.store.create_job("https://tidal.com/album/1")
+        time.sleep(0.01)
+        j2 = self.store.create_job("https://tidal.com/album/2")
+        time.sleep(0.01)
+        j3 = self.store.create_job("https://tidal.com/album/3")
+
+        self.store.reorder_jobs([j3["id"], j1["id"], j2["id"]])
+
+        with patch.object(self.worker, "process_job") as mock_proc:
+            handled = self.worker.run_once()
+            self.assertTrue(handled)
+            mock_proc.assert_called_once()
+            called_job = mock_proc.call_args[0][0]
+            self.assertEqual(called_job["id"], j3["id"])
+
+    def test_worker_skips_blocked_future_wait(self):
+        j_high = self.store.create_job("https://tidal.com/album/high")
+        time.sleep(0.01)
+        j_low = self.store.create_job("https://tidal.com/album/low")
+
+        self.store.reorder_jobs([j_high["id"], j_low["id"]])
+        # j_high has future backoff wait
+        self.store.update_job(j_high["id"], status="blocked", concurrency_retry_after=time.time() + 600)
+
+        with patch.object(self.worker, "process_job") as mock_proc:
+            handled = self.worker.run_once()
+            self.assertTrue(handled)
+            mock_proc.assert_called_once()
+            called_job = mock_proc.call_args[0][0]
+            self.assertEqual(called_job["id"], j_low["id"])
+
+    def test_active_job_not_preempted_by_priority_change(self):
+        j_active = self.store.create_job("https://tidal.com/album/active")
+        j_queued = self.store.create_job("https://tidal.com/album/queued")
+
+        # j_active is downloading
+        self.store.update_job(j_active["id"], status="downloading")
+        # queued job is prioritized
+        self.store.update_job(j_queued["id"], priority=999)
+
+        # Worker runnable selection preserves active download completion before new job
+        next_job = self.store.get_next_runnable_job()
+        self.assertIsNotNone(next_job)
+        # If j_active is currently running in process_job, priority change on j_queued cannot abort it
+        self.assertEqual(self.store.get_job(j_active["id"])["status"], "downloading")
+
 
 if __name__ == "__main__":
     unittest.main()

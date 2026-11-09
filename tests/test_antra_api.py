@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 from typing import Any, Dict, Optional
 import unittest
 from unittest.mock import MagicMock, patch
@@ -472,6 +473,133 @@ class TestAntraApiUnit(unittest.TestCase):
         self.assertEqual(h_cont.status_code, 202)
         self.assertEqual(self.store.get_job(j_block["id"])["status"], "queued")
         self.assertEqual(self.store.get_internal_job(j_block["id"])["duplicate_confirmed"], 1)
+
+    def test_reorder_permissions_and_origin(self):
+        j1 = self.store.create_job("https://tidal.com/album/1")
+        j2 = self.store.create_job("https://tidal.com/album/2")
+        payload = json.dumps({"job_ids": [j2["id"], j1["id"]]}).encode()
+
+        # 1. Unauthenticated -> 401
+        h_anon = MockHandler(
+            command="POST",
+            path="/api/antra/jobs/reorder",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(payload))},
+            body=payload,
+            user=None,
+        )
+        dispatch_antra(h_anon, store=self.store, is_admin=lambda u: False)
+        self.assertEqual(h_anon.status_code, 401)
+
+        # 2. Family role -> 403
+        h_fam = MockHandler(
+            command="POST",
+            path="/api/antra/jobs/reorder",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(payload))},
+            body=payload,
+            user="family_user",
+            role="family",
+        )
+        dispatch_antra(h_fam, user="family_user", store=self.store, is_admin=lambda u: False)
+        self.assertEqual(h_fam.status_code, 403)
+
+        # 3. Cross-origin -> 403
+        h_cors = MockHandler(
+            command="POST",
+            path="/api/antra/jobs/reorder",
+            headers={
+                "Host": "localhost:8001",
+                "Sec-Fetch-Site": "cross-site",
+                "Origin": "http://evil.com",
+                "Content-Length": str(len(payload)),
+            },
+            body=payload,
+            user="admin",
+            role="admin",
+        )
+        dispatch_antra(h_cors, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h_cors.status_code, 403)
+
+    def test_reorder_endpoint_success(self):
+        j1 = self.store.create_job("https://tidal.com/album/1")
+        time.sleep(0.01)
+        j2 = self.store.create_job("https://tidal.com/album/2")
+        payload = json.dumps({"job_ids": [j2["id"], j1["id"]]}).encode()
+
+        h = MockHandler(
+            command="POST",
+            path="/api/antra/jobs/reorder",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(payload))},
+            body=payload,
+            user="admin",
+            role="admin",
+        )
+        dispatch_antra(h, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h.status_code, 200)
+        res = h.get_json_body()
+        self.assertEqual(res.get("status"), "ok")
+        jobs = res.get("jobs", [])
+        self.assertEqual([j["id"] for j in jobs], [j2["id"], j1["id"]])
+        self.assertEqual(jobs[0]["priority"], 2)
+        self.assertEqual(jobs[1]["priority"], 1)
+
+    def test_reorder_endpoint_stale_queue_409(self):
+        j1 = self.store.create_job("https://tidal.com/album/1")
+        j2 = self.store.create_job("https://tidal.com/album/2")
+        # Missing j2 from request -> stale queue conflict
+        payload = json.dumps({"job_ids": [j1["id"]]}).encode()
+
+        h = MockHandler(
+            command="POST",
+            path="/api/antra/jobs/reorder",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(payload))},
+            body=payload,
+            user="admin",
+            role="admin",
+        )
+        dispatch_antra(h, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h.status_code, 409)
+        res = h.get_json_body()
+        self.assertEqual(res.get("conflict"), "stale_queue")
+
+    def test_reorder_endpoint_bad_requests(self):
+        # 1. Non-dict payload
+        payload1 = b"\"string\""
+        h1 = MockHandler(
+            command="POST",
+            path="/api/antra/jobs/reorder",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(payload1))},
+            body=payload1,
+            user="admin",
+        )
+        dispatch_antra(h1, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h1.status_code, 400)
+
+        # 2. Duplicate IDs
+        j1 = self.store.create_job("https://tidal.com/album/1")
+        payload2 = json.dumps({"job_ids": [j1["id"], j1["id"]]}).encode()
+        h2 = MockHandler(
+            command="POST",
+            path="/api/antra/jobs/reorder",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(payload2))},
+            body=payload2,
+            user="admin",
+        )
+        dispatch_antra(h2, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h2.status_code, 400)
+        self.assertIn("Duplicate", h2.get_json_body().get("message", ""))
+
+        # 3. Invalid UUID format
+        payload3 = json.dumps({"job_ids": ["not-a-valid-uuid"]}).encode()
+        h3 = MockHandler(
+            command="POST",
+            path="/api/antra/jobs/reorder",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(payload3))},
+            body=payload3,
+            user="admin",
+        )
+        dispatch_antra(h3, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h3.status_code, 400)
+        self.assertIn("Invalid job identifier", h3.get_json_body().get("message", ""))
 
 
 class TestDashboardAntraIntegration(unittest.TestCase):

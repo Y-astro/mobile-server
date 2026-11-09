@@ -82,6 +82,11 @@ class JobNotFoundError(AntraStoreError):
     pass
 
 
+class StaleQueueError(AntraStoreError):
+    """Raised when queue state changes concurrently or invalid jobs are targeted for reorder."""
+    pass
+
+
 def _row_to_job_dict(row: sqlite3.Row) -> Dict[str, Any]:
     return {
         "id": row["id"],
@@ -100,6 +105,7 @@ def _row_to_job_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "removed": row["removed"] if "removed" in row.keys() else 0,
         "duplicate_confirmed": row["duplicate_confirmed"] if "duplicate_confirmed" in row.keys() else 0,
         "duplicate_count": row["duplicate_count"] if "duplicate_count" in row.keys() else 0,
+        "priority": int(row["priority"]) if "priority" in row.keys() else 0,
     }
 
 
@@ -171,7 +177,8 @@ class AntraStore:
                     automatic_retry_rounds INTEGER NOT NULL DEFAULT 0,
                     removed INTEGER NOT NULL DEFAULT 0,
                     duplicate_confirmed INTEGER NOT NULL DEFAULT 0,
-                    duplicate_count INTEGER NOT NULL DEFAULT 0
+                    duplicate_count INTEGER NOT NULL DEFAULT 0,
+                    priority INTEGER NOT NULL DEFAULT 0
                 );
             """)
             conn.execute("""
@@ -222,6 +229,9 @@ class AntraStore:
                 conn.execute("ALTER TABLE jobs ADD COLUMN duplicate_confirmed INTEGER NOT NULL DEFAULT 0;")
             if "duplicate_count" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN duplicate_count INTEGER NOT NULL DEFAULT 0;")
+            if "priority" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_priority ON jobs (priority, created_at);")
 
             cursor_trk = conn.execute("PRAGMA table_info(tracks);")
             trk_columns = {row["name"] for row in cursor_trk.fetchall()}
@@ -290,10 +300,28 @@ class AntraStore:
 
     def list_jobs(self, include_removed: bool = False) -> List[Dict[str, Any]]:
         with self._connect() as conn:
-            if include_removed:
-                cur = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC;")
-            else:
-                cur = conn.execute("SELECT * FROM jobs WHERE removed = 0 ORDER BY created_at DESC;")
+            filter_clause = "" if include_removed else "WHERE removed = 0"
+            query = f"""
+                SELECT * FROM jobs
+                {filter_clause}
+                ORDER BY
+                    CASE
+                        WHEN status IN ('downloading', 'resolving') THEN 0
+                        WHEN status NOT IN ('completed', 'partial', 'failed', 'cancelled') THEN 1
+                        ELSE 2
+                    END ASC,
+                    CASE
+                        WHEN status NOT IN ('completed', 'partial', 'failed', 'cancelled') THEN priority
+                        ELSE 0
+                    END DESC,
+                    CASE
+                        WHEN status IN ('completed', 'partial', 'failed', 'cancelled') THEN updated_at
+                        ELSE 0
+                    END DESC,
+                    created_at ASC,
+                    id ASC;
+            """
+            cur = conn.execute(query)
             return [_row_to_job_dict(row) for row in cur.fetchall()]
 
     def get_job(self, job_id: str, include_removed: bool = False) -> Optional[Dict[str, Any]]:
@@ -343,8 +371,8 @@ class AntraStore:
                 INSERT INTO jobs (
                     id, url, title, destination, status, total, completed, skipped, failed,
                     created_at, updated_at, message, format, chunk_start, chunk_end,
-                    submission_intent, concurrency_retry_after, retry_attempts
-                ) VALUES (?, ?, ?, ?, 'queued', 0, 0, 0, 0, ?, ?, '', ?, 0, 0, 0, 0, 0);
+                    submission_intent, concurrency_retry_after, retry_attempts, priority
+                ) VALUES (?, ?, ?, ?, 'queued', 0, 0, 0, 0, ?, ?, '', ?, 0, 0, 0, 0, 0, 0);
                 """,
                 (job_id, url, title, destination, now, now, format_pref),
             )
@@ -362,7 +390,7 @@ class AntraStore:
             "message", "upstream_job_id", "updated_at", "format",
             "chunk_start", "chunk_end", "submission_intent",
             "concurrency_retry_after", "retry_attempts",
-            "duplicate_confirmed", "duplicate_count",
+            "duplicate_confirmed", "duplicate_count", "priority",
         }
         updates = {}
         for k, v in fields.items():
@@ -608,6 +636,7 @@ class AntraStore:
                     retry_attempts = 0,
                     automatic_retry_rounds = 0,
                     failed = 0,
+                    priority = 0,
                     upstream_job_id = NULL
                 WHERE id = ? AND removed = 0;
                 """,
@@ -671,13 +700,53 @@ class AntraStore:
                        OR (status = 'blocked' AND concurrency_retry_after > 0))
                   AND concurrency_retry_after <= ?
                   AND removed = 0
-                ORDER BY created_at ASC
+                ORDER BY
+                    priority DESC,
+                    created_at ASC,
+                    id ASC
                 LIMIT 1;
                 """,
                 (now,),
             )
             row = cur.fetchone()
             return dict(row) if row else None
+
+    def reorder_jobs(self, job_ids: List[str]) -> List[Dict[str, Any]]:
+        """Reorder pending jobs atomically, assigning normalized priority scores.
+
+        Validates that job_ids matches exactly all currently reorderable pending jobs.
+        Rejects requests containing terminal, removed, active, or missing jobs.
+        """
+        if not isinstance(job_ids, list):
+            raise ValueError("job_ids must be a list")
+        if len(job_ids) != len(set(job_ids)):
+            raise ValueError("Duplicate job IDs in reorder request")
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute(
+                """
+                SELECT id FROM jobs
+                WHERE removed = 0
+                  AND status NOT IN ('completed', 'partial', 'failed', 'cancelled', 'downloading', 'resolving')
+                ORDER BY priority DESC, created_at ASC, id ASC;
+                """
+            )
+            pending_db_ids = [row["id"] for row in cur.fetchall()]
+
+            if set(job_ids) != set(pending_db_ids):
+                raise StaleQueueError("Queue state changed or invalid job in reorder request")
+
+            now = time.time()
+            total_jobs = len(job_ids)
+            for idx, j_id in enumerate(job_ids):
+                priority = total_jobs - idx
+                conn.execute(
+                    "UPDATE jobs SET priority = ?, updated_at = ? WHERE id = ?;",
+                    (priority, now, j_id),
+                )
+
+        return self.list_jobs()
 
 
     def get_internal_track(self, job_id: str, index: int) -> Optional[Dict[str, Any]]:

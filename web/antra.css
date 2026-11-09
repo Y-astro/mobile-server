@@ -247,6 +247,106 @@ select.antra-input {
   justify-content: center;
 }
 
+/* --- Drag Handle & Priority Reordering --- */
+.drag-handle {
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--md-sys-color-outline, #899392);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.drag-handle:hover:not(:disabled) {
+  color: var(--md-sys-color-on-surface, #e1e3e3);
+  background-color: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.drag-handle:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary, #70d6c5);
+  outline-offset: 1px;
+}
+
+.drag-handle:active,
+.drag-handle.dragging {
+  cursor: grabbing;
+}
+
+.job-card.dragging {
+  opacity: 0.85;
+  border-color: rgba(229, 196, 108, 0.55);
+  background-color: rgba(39, 44, 45, 0.95);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  transform: scale(1.01);
+}
+
+.badge-priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 9999px;
+  background-color: rgba(229, 196, 108, 0.15);
+  color: #e5c46c;
+  border: 1px solid rgba(229, 196, 108, 0.35);
+  white-space: nowrap;
+}
+
+.badge-active-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 9999px;
+  background-color: rgba(0, 79, 74, 0.5);
+  color: #8bf2e1;
+  border: 1px solid rgba(112, 214, 197, 0.4);
+  white-space: nowrap;
+}
+
+.btn-move-up,
+.btn-move-down {
+  border-color: rgba(255, 255, 255, 0.15);
+  color: var(--md-sys-color-outline, #899392);
+}
+
+.btn-move-up:hover:not(:disabled),
+.btn-move-down:hover:not(:disabled) {
+  border-color: var(--md-sys-color-primary, #70d6c5);
+  color: var(--md-sys-color-on-surface, #e1e3e3);
+}
+
+.btn-move-up:disabled,
+.btn-move-down:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+.history-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--md-sys-color-outline, #899392);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 /* --- Responsive Adjustments --- */
 @media (max-width: 640px) {
   .job-card {

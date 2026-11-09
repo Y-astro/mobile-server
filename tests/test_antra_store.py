@@ -9,6 +9,7 @@ from app.antra_store import (
     AntraStore,
     InvalidTransitionError,
     JobNotFoundError,
+    StaleQueueError,
     LOGICAL_OUTPUT_DIRECTORIES,
     canonical_music_url,
 )
@@ -428,6 +429,87 @@ class TestAntraStore(unittest.TestCase):
         self.assertEqual(annotated[0].get("message", ""), "")
         self.assertIn("duplicate song within this playlist", annotated[1].get("message", ""))
         self.assertEqual(annotated[2].get("message", ""), "")
+
+    def test_reorder_survives_reopen(self):
+        j1 = self.store.create_job("https://tidal.com/album/1", title="Job 1")
+        time.sleep(0.01)
+        j2 = self.store.create_job("https://tidal.com/album/2", title="Job 2")
+        time.sleep(0.01)
+        j3 = self.store.create_job("https://tidal.com/album/3", title="Job 3")
+
+        # Initial FIFO order
+        jobs_initial = self.store.list_jobs()
+        self.assertEqual([j["id"] for j in jobs_initial], [j1["id"], j2["id"], j3["id"]])
+
+        # Reorder: J3 top, then J1, then J2
+        reordered = self.store.reorder_jobs([j3["id"], j1["id"], j2["id"]])
+        self.assertEqual([j["id"] for j in reordered], [j3["id"], j1["id"], j2["id"]])
+        self.assertEqual(reordered[0]["priority"], 3)
+        self.assertEqual(reordered[1]["priority"], 2)
+        self.assertEqual(reordered[2]["priority"], 1)
+
+        # Reopen database in a new store instance
+        reopened_store = AntraStore(db_path=self.db_path, output_roots=self.output_roots)
+        reopened_jobs = reopened_store.list_jobs()
+        self.assertEqual([j["id"] for j in reopened_jobs], [j3["id"], j1["id"], j2["id"]])
+        self.assertEqual(reopened_jobs[0]["priority"], 3)
+        self.assertEqual(reopened_jobs[1]["priority"], 2)
+        self.assertEqual(reopened_jobs[2]["priority"], 1)
+
+    def test_fifo_tie_break_and_new_jobs(self):
+        j1 = self.store.create_job("https://tidal.com/album/1")
+        time.sleep(0.01)
+        j2 = self.store.create_job("https://tidal.com/album/2")
+
+        # Equal priority (0) breaks ties deterministically by created_at ASC (FIFO)
+        self.assertEqual([j["id"] for j in self.store.list_jobs()], [j1["id"], j2["id"]])
+
+        # User explicitly reorders [j2, j1]
+        self.store.reorder_jobs([j2["id"], j1["id"]])
+        self.assertEqual([j["id"] for j in self.store.list_jobs()], [j2["id"], j1["id"]])
+
+        # New job arrives with default priority (0) -> joins the end
+        time.sleep(0.01)
+        j3 = self.store.create_job("https://tidal.com/album/3")
+        time.sleep(0.01)
+        j4 = self.store.create_job("https://tidal.com/album/4")
+
+        jobs = self.store.list_jobs()
+        self.assertEqual([j["id"] for j in jobs], [j2["id"], j1["id"], j3["id"], j4["id"]])
+        # j3 and j4 both have priority 0, preserve FIFO tie break between them
+        self.assertEqual(jobs[2]["priority"], 0)
+        self.assertEqual(jobs[3]["priority"], 0)
+
+    def test_reorder_validation_and_atomicity(self):
+        j1 = self.store.create_job("https://tidal.com/album/1")
+        j2 = self.store.create_job("https://tidal.com/album/2")
+
+        # 1. Non-list rejected
+        with self.assertRaises(ValueError):
+            self.store.reorder_jobs("not-a-list")
+
+        # 2. Duplicate IDs rejected
+        with self.assertRaises(ValueError):
+            self.store.reorder_jobs([j1["id"], j1["id"]])
+
+        # 3. Missing pending job (stale queue) rejected
+        with self.assertRaises(StaleQueueError):
+            self.store.reorder_jobs([j1["id"]])
+
+        # 4. Unknown job ID rejected
+        with self.assertRaises(StaleQueueError):
+            self.store.reorder_jobs([j1["id"], j2["id"], "unknown_uuid"])
+
+        # 5. Terminal / removed jobs cannot be in reorder request
+        j_term = self.store.create_job("https://tidal.com/album/term")
+        self.store.finish_job(j_term["id"], "completed")
+
+        with self.assertRaises(StaleQueueError):
+            self.store.reorder_jobs([j1["id"], j2["id"], j_term["id"]])
+
+        # Verify atomic rollback: priorities remain untouched
+        jobs = self.store.list_jobs()
+        self.assertEqual([j["id"] for j in jobs[:2]], [j1["id"], j2["id"]])
 
 
 if __name__ == "__main__":

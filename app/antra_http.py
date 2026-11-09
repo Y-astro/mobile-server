@@ -16,6 +16,7 @@ from antra_store import (
     AntraStore,
     InvalidTransitionError,
     JobNotFoundError,
+    StaleQueueError,
     LOGICAL_OUTPUT_DIRECTORIES,
     VALID_DESTINATIONS,
 )
@@ -244,6 +245,63 @@ def dispatch_antra(
             except Exception as e:
                 _send_error(handler, 500, "Failed to enqueue job")
             return
+
+    # Route: POST /api/antra/jobs/reorder
+    if raw_path in ("/api/antra/jobs/reorder", "/api/antra/jobs/reorder/"):
+        if method != "POST":
+            _send_error(handler, 405, "Method not allowed")
+            return
+
+        content_length_str = handler.headers.get("Content-Length", "")
+        if not content_length_str.isdigit() or len(content_length_str) > 12:
+            _send_error(handler, 400, "Invalid Content-Length")
+            return
+
+        length = int(content_length_str)
+        if length > MAX_REQUEST_BYTES:
+            _send_error(handler, 413, "Request payload exceeds size limit")
+            return
+
+        try:
+            body_raw = handler.rfile.read(length)
+            payload = json.loads(body_raw.decode("utf-8")) if body_raw else {}
+        except Exception:
+            _send_error(handler, 400, "Malformed JSON request body")
+            return
+
+        if not isinstance(payload, dict):
+            _send_error(handler, 400, "JSON payload must be an object")
+            return
+
+        job_ids = payload.get("job_ids")
+
+        if not isinstance(job_ids, list):
+            _send_error(handler, 400, "Field 'job_ids' must be a list of job identifiers")
+            return
+
+        for j_id in job_ids:
+            if not isinstance(j_id, str) or not UUID_PATTERN.match(j_id):
+                _send_error(handler, 400, "Invalid job identifier format in reorder list")
+                return
+
+        if len(job_ids) != len(set(job_ids)):
+            _send_error(handler, 400, "Duplicate job identifiers in reorder list")
+            return
+
+        try:
+            updated_jobs = ant_store.reorder_jobs(job_ids)
+            _send_response(handler, 200, {"status": "ok", "jobs": updated_jobs})
+        except StaleQueueError as e:
+            _send_response(handler, 409, {
+                "status": "error",
+                "message": str(e),
+                "conflict": "stale_queue",
+            })
+        except ValueError as e:
+            _send_error(handler, 400, str(e))
+        except Exception:
+            _send_error(handler, 500, "Failed to reorder jobs")
+        return
 
     # Sub-routes for /api/antra/jobs/<id>[/cancel|/retry]
     if raw_path.startswith("/api/antra/jobs/"):
