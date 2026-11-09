@@ -981,6 +981,12 @@ function createInitialState() {
     await page.waitForFunction(id => document.querySelector('.job-card[data-pending="true"]')?.dataset.jobId === id, cancelOrder[0]);
     assert.deepEqual(state.lastReorderedIds, cancelOrder);
     assert.equal(cancelPosts, 0);
+    const longJob = state.jobs.find(job => job.id === cancelOrder[0]);
+    longJob.title = 'Myriad Notes, Ever New (Original Game Soundtrack) '.repeat(3);
+    longJob.url = 'https://open.spotify.com/track/2jjneY06LKuNjTbcg2uYhz?si=long-tracking-parameter-for-mobile-layout';
+    await page.locator('#btn-refresh').evaluate(button => button.click());
+    await page.waitForFunction(title => Array.from(document.querySelectorAll('.job-card h3')).some(node => node.textContent === title), longJob.title);
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'Pending cards and long titles fit the mobile viewport');
     page.off('request', countCancelPost);
     await touch.detach();
 
