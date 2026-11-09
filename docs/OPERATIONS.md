@@ -60,6 +60,8 @@ Finished, failed, partial, and cancelled jobs expose **Remove**. Removal hides t
 
 Local deployment evidence lives in `.superpowers/sdd/antra-queue-release-state.json`, which is excluded from Git. This deployment preserves the separately published Suwayomi WebUI and the existing server music libraries.
 
+Drag pending jobs by their handles to set priority, or use **Move Up** and **Move Down**. Queue order persists across reloads; the highest-priority ready job runs next. The current download finishes first, and terminal history cannot be reordered. New jobs start at the lowest priority. A concurrent queue change rejects a stale reorder and refreshes the server order instead of dropping jobs. Local priority deployment evidence lives in `.superpowers/sdd/antra-priority-release-state.json`.
+
 Individual track failures do not stop later track events. A quiet WebSocket yields worker heartbeats while the transport's ping/pong keepalive detects dead peers; a 30-second wait for the next track does not consume the reconnect budget. Rejected or expired provider jobs mark unfinished tracks as failed instead of leaving them queued. Ten transport failures end that job with manual retry available; provider-busy and daily-quota waits do not consume this budget. Saved files remain verified and reusable on retry. Provider availability still determines whether missing tracks can be delivered.
 
 The real 186-track user playlist delivered 148 verified FLAC files before retries were added; 38 provider failures remained. Provider recovery and additional passes depend on upstream availability.

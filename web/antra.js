@@ -363,7 +363,7 @@
       const prioBadge = document.createElement('span');
       prioBadge.className = 'm3-badge badge-priority';
       prioBadge.setAttribute('data-rank-badge', 'true');
-      prioBadge.textContent = rank === 1 ? '#1 • Runs Next' : `#${rank}`;
+      prioBadge.textContent = rank === 1 ? '#1 • Highest Priority' : `#${rank}`;
       badgesCol.appendChild(prioBadge);
     }
 
@@ -547,7 +547,7 @@
       const rank = idx + 1;
       const rankBadge = c.querySelector('[data-rank-badge="true"]');
       if (rankBadge) {
-        rankBadge.textContent = rank === 1 ? '#1 • Runs Next' : `#${rank}`;
+        rankBadge.textContent = rank === 1 ? '#1 • Highest Priority' : `#${rank}`;
       }
       const upBtn = c.querySelector('button[data-action="move-up"]');
       if (upBtn) {
@@ -565,7 +565,7 @@
     let didMove = false;
 
     const onPointerMove = (e) => {
-      if (!isPointerDown || draggedCard !== card) return;
+      if (!isPointerDown || draggedCard !== card || e.pointerId !== pointerStart.pointerId) return;
 
       if (!didMove && pointerStart) {
         const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
@@ -596,7 +596,7 @@
     };
 
     const onPointerEnd = async (e) => {
-      if (!isPointerDown || draggedCard !== card) return;
+      if (!isPointerDown || draggedCard !== card || e.pointerId !== pointerStart.pointerId) return;
       isPointerDown = false;
       const wasDragging = isDragging;
       isDragging = false;
@@ -630,7 +630,7 @@
     };
 
     const onPointerCancel = (e) => {
-      if (!isPointerDown || draggedCard !== card) return;
+      if (!isPointerDown || draggedCard !== card || e.pointerId !== pointerStart.pointerId) return;
       isPointerDown = false;
       isDragging = false;
       card.classList.remove('dragging');
@@ -650,8 +650,8 @@
     };
 
     handle.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0 || isAccessDenied || isReordering) return;
-      pointerStart = { x: e.clientX, y: e.clientY };
+      if (e.button !== 0 || isAccessDenied || isReordering || isPointerDown) return;
+      pointerStart = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
       isPointerDown = true;
       didMove = false;
       draggedCard = card;

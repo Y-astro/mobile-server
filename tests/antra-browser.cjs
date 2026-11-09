@@ -894,6 +894,8 @@ function createInitialState() {
     console.log('[Test 21] Verifying polling during in-progress drag does not replace DOM cards...');
     const card21 = cardsAfterReload.nth(1);
     const handle21 = card21.locator('.drag-handle');
+    await handle21.scrollIntoViewIfNeeded();
+    await handle21.hover();
     const box21 = await handle21.boundingBox();
 
     // Start drag
@@ -908,7 +910,7 @@ function createInitialState() {
     await card21.evaluate(el => { el.__markerToken = 'preserved_during_drag'; });
 
     // Trigger refresh / polling while drag is in progress
-    await page.click('#btn-refresh', { force: true });
+    await page.locator('#btn-refresh').evaluate(button => button.click());
 
     // Check DOM node identity preserved (not wiped / recreated by polling)
     const markerPreserved = await card21.evaluate(el => el.__markerToken === 'preserved_during_drag');
@@ -939,6 +941,48 @@ function createInitialState() {
       return cards[0] && cards[0].getAttribute('data-job-id') === expectedId;
     }, firstCardIdBefore);
     assert.strictEqual(await page.locator('#jobs-list .job-card[data-pending="true"]').nth(0).getAttribute('data-job-id'), firstCardIdBefore, 'Server order restored after failed mutation');
+
+    console.log('[Test 23] Touch dragging persists priority order...');
+    const touch = await context.newCDPSession(page);
+    await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+    await page.setViewportSize({ width: 390, height: 1100 });
+    const touchCards = page.locator('#jobs-list .job-card[data-pending="true"]');
+    await touchCards.first().scrollIntoViewIfNeeded();
+    await touchCards.first().evaluate(card => window.scrollBy(0, card.getBoundingClientRect().top - 60));
+    const touchFirstId = await touchCards.nth(0).getAttribute('data-job-id');
+    const touchSecondId = await touchCards.nth(1).getAttribute('data-job-id');
+    const touchHandle = await touchCards.first().locator('.drag-handle').boundingBox();
+    const touchTarget = await touchCards.nth(1).boundingBox();
+    const startPoint = { x: touchHandle.x + touchHandle.width / 2, y: touchHandle.y + touchHandle.height / 2, id: 10 };
+    const dropPoint = { x: startPoint.x, y: touchTarget.y + touchTarget.height * 0.8, id: 10 };
+    assert(dropPoint.y < 1100, 'Both touch drag positions fit in mobile viewport');
+    const touchSaved = page.waitForResponse(r => new URL(r.url()).pathname === '/api/antra/jobs/reorder');
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [startPoint] });
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [dropPoint] });
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    assert.equal((await touchSaved).status(), 200);
+    await page.waitForFunction(id => document.querySelector('.job-card[data-pending="true"]')?.dataset.jobId === id, touchSecondId);
+    assert.deepEqual(state.lastReorderedIds.slice(0, 2), [touchSecondId, touchFirstId]);
+
+    console.log('[Test 24] Cancelled touch drag restores order without saving...');
+    const cancelOrder = [...state.lastReorderedIds];
+    await touchCards.first().scrollIntoViewIfNeeded();
+    await touchCards.first().evaluate(card => window.scrollBy(0, card.getBoundingClientRect().top - 60));
+    const cancelHandle = await touchCards.first().locator('.drag-handle').boundingBox();
+    const cancelTarget = await touchCards.nth(1).boundingBox();
+    let cancelPosts = 0;
+    const countCancelPost = request => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/antra/jobs/reorder') cancelPosts++;
+    };
+    page.on('request', countCancelPost);
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: cancelHandle.x + 24, y: cancelHandle.y + 24, id: 11 }] });
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cancelHandle.x + 24, y: cancelTarget.y + cancelTarget.height * 0.8, id: 11 }] });
+    await touch.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+    await page.waitForFunction(id => document.querySelector('.job-card[data-pending="true"]')?.dataset.jobId === id, cancelOrder[0]);
+    assert.deepEqual(state.lastReorderedIds, cancelOrder);
+    assert.equal(cancelPosts, 0);
+    page.off('request', countCancelPost);
+    await touch.detach();
 
     await page.close();
     await context.close();
