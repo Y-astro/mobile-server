@@ -207,17 +207,17 @@ class TestAntraStore(unittest.TestCase):
         j3 = self.store.create_job("https://tidal.com/album/3")
         self.store.update_job(j3["id"], concurrency_retry_after=time.time() + 3600)
 
-        # First runnable is j1 (oldest queued)
+        # Resume the active download before starting pending work.
         first = self.store.get_next_runnable_job()
-        self.assertEqual(first["id"], j1["id"])
-
-        self.store.update_job(j1["id"], status="completed")
-
-        # Second runnable is j2 (interrupted downloading job recovered across restart!)
-        second = self.store.get_next_runnable_job()
-        self.assertEqual(second["id"], j2["id"])
+        self.assertEqual(first["id"], j2["id"])
 
         self.store.update_job(j2["id"], status="completed")
+
+        # Pending work follows after the recovered download finishes.
+        second = self.store.get_next_runnable_job()
+        self.assertEqual(second["id"], j1["id"])
+
+        self.store.update_job(j1["id"], status="completed")
 
         # j3 is in future backoff, so not runnable yet
         self.assertIsNone(self.store.get_next_runnable_job())
@@ -429,6 +429,14 @@ class TestAntraStore(unittest.TestCase):
         self.assertEqual(annotated[0].get("message", ""), "")
         self.assertIn("duplicate song within this playlist", annotated[1].get("message", ""))
         self.assertEqual(annotated[2].get("message", ""), "")
+
+    def test_active_reconnect_precedes_raised_pending_jobs(self):
+        active = self.store.create_job("https://tidal.com/album/active")
+        self.store.update_job(active["id"], status="downloading")
+        pending = self.store.create_job("https://tidal.com/album/pending")
+        self.store.reorder_jobs([pending["id"]])
+        self.assertGreater(self.store.get_job(pending["id"])["priority"], self.store.get_job(active["id"])["priority"])
+        self.assertEqual(self.store.get_next_runnable_job()["id"], active["id"])
 
     def test_reorder_survives_reopen(self):
         j1 = self.store.create_job("https://tidal.com/album/1", title="Job 1")

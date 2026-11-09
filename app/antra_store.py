@@ -701,6 +701,7 @@ class AntraStore:
                   AND concurrency_retry_after <= ?
                   AND removed = 0
                 ORDER BY
+                    CASE WHEN status IN ('downloading', 'resolving') THEN 0 ELSE 1 END ASC,
                     priority DESC,
                     created_at ASC,
                     id ASC
