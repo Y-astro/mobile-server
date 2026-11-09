@@ -350,7 +350,9 @@ class AntraWorker:
         """Keep one folder-mode upstream job for the whole playlist, including after restart."""
         job_id = job["id"]
         job = self.store.get_internal_job(job_id)
-        if not job or job["status"] == "cancelled":
+        if not job or job["status"] == "cancelled" or job.get("removed"):
+            return
+        if job.get("duplicate_count") and not job.get("duplicate_confirmed"):
             return
         if job.get("submission_intent") and not job.get("upstream_job_id"):
             self.store.update_job(job_id, status="uncertain", message="Submission was not confirmed. Automatic resubmission is disabled.")
@@ -379,12 +381,13 @@ class AntraWorker:
                 self.store.set_tracks(job_id, tracks_with_dups)
                 dup_count = sum(1 for t in tracks_with_dups if "duplicate" in t.get("message", "").lower())
                 job_msg = f"Detected {dup_count} duplicate track(s) in {destination} destination." if dup_count else ""
-                self.store.update_job(job_id, title=resolved["title"], message=job_msg)
+                self.store.update_job(job_id, title=resolved["title"], message=job_msg, duplicate_count=dup_count)
                 tracks = self.store.get_tracks(job_id)
                 if dup_count and not job.get("duplicate_confirmed"):
                     self.store.update_job(
                         job_id,
                         status="blocked",
+                        concurrency_retry_after=0,
                         message=f"Blocked: playlist contains {dup_count} duplicate track(s). Continue to download anyway.",
                     )
                     return

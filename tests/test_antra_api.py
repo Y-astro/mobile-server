@@ -461,7 +461,7 @@ class TestAntraApiUnit(unittest.TestCase):
 
         # 6. Continue endpoint POST /api/antra/jobs/<id>/continue
         j_block = self.store.create_job("https://tidal.com/album/block-cont")
-        self.store.update_job(j_block["id"], status="blocked")
+        self.store.update_job(j_block["id"], status="blocked", duplicate_count=1)
         h_cont = MockHandler(
             command="POST",
             path=f"/api/antra/jobs/{j_block['id']}/continue",

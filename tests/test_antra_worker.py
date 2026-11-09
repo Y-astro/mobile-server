@@ -806,6 +806,7 @@ class TestAntraAutomaticRetries(unittest.TestCase):
         j_old = self.store.create_job("https://tidal.com/album/old", destination="private")
         self.store.set_tracks(j_old["id"], [{"index": 0, "title": "Saved Song", "artist": "Artist A"}])
         self.store.update_track(j_old["id"], 0, status="completed")
+        self.store.finish_job(j_old["id"], "completed")
 
         # Now queue new playlist containing the same song
         job = self.store.create_job("https://tidal.com/playlist/new-with-dup", destination="private")
@@ -825,6 +826,13 @@ class TestAntraAutomaticRetries(unittest.TestCase):
         j_state = self.store.get_job(job["id"])
         self.assertEqual(j_state["status"], "blocked")
         self.assertIn("Blocked: playlist contains 1 duplicate track", j_state["message"])
+        self.assertEqual(j_state["duplicate_count"], 1)
+        self.assertEqual(self.store.get_internal_job(job["id"])["concurrency_retry_after"], 0)
+        self.assertIsNone(self.store.get_next_runnable_job())
+        self.client.submit_job.assert_not_called()
+
+        # A reconnect or stale scheduler selection cannot bypass the hold.
+        self.worker.process_job(j_state)
         self.client.submit_job.assert_not_called()
 
         # User continues download anyway

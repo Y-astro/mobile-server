@@ -344,7 +344,7 @@ class TestAntraStore(unittest.TestCase):
         ]
         annotated = self.store.check_track_duplicates("new_job_id", "private", new_candidates)
 
-        self.assertIn("Warning: duplicate song already in library", annotated[0].get("message", ""))
+        self.assertIn("Possible duplicate: song title and artist match saved library history", annotated[0].get("message", ""))
         self.assertEqual(annotated[1].get("message", ""), "")
         self.assertEqual(annotated[2].get("message", ""), "")
         self.assertIn("Possible duplicate: song title matches", annotated[3].get("message", ""))
@@ -384,6 +384,24 @@ class TestAntraStore(unittest.TestCase):
 
         # Runnable jobs query must strictly exclude removed jobs
         self.assertIsNone(self.store.get_next_runnable_job())
+
+    def test_continue_only_confirms_duplicate_hold(self):
+        job = self.store.create_job("https://open.spotify.com/playlist/duplicate")
+        self.store.update_job(job["id"], status="blocked", concurrency_retry_after=time.time() + 300)
+        before = self.store.get_internal_job(job["id"])
+        with self.assertRaises(InvalidTransitionError):
+            self.store.continue_job(job["id"])
+        self.assertEqual(before, self.store.get_internal_job(job["id"]))
+        self.store.update_job(job["id"], duplicate_count=1, concurrency_retry_after=0)
+        with self.assertRaises(InvalidTransitionError):
+            self.store.retry_job(job["id"])
+        self.store.cancel_job(job["id"])
+        retried = self.store.retry_job(job["id"])
+        self.assertEqual(retried["status"], "blocked")
+        self.assertIsNone(self.store.get_next_runnable_job())
+        continued = self.store.continue_job(job["id"])
+        self.assertEqual(continued["status"], "queued")
+        self.assertEqual(continued["duplicate_confirmed"], 1)
 
     def test_url_canonicalizer_spotify_pi_query_order_and_apple_music_i(self):
         """Reproduction 4: Strip pi, si, utm_*; query order does not defeat matching; preserve Apple Music ?i=."""

@@ -56,6 +56,10 @@ One upstream folder-mode job handles the full playlist; the website's 100-track 
 
 After a confirmed provider job finishes with failures, the worker schedules up to three additional passes, with persistent delays of 10, 20, and 30 seconds. Each pass regenerates the full playlist upstream but downloads only missing or failed local tracks; completed files are verified against their saved checksums and reused. Each pass uses the same account and consumes one provider playlist request. Busy responses and daily quota waits retain their separate backoff without consuming another pass. A changed playlist stops retries to protect track identities. The **Retry** action starts a fresh retry budget while preserving completed files.
 
+Finished, failed, partial, and cancelled jobs expose **Remove**. Removal hides the job and its details while retaining downloaded files and recovery metadata. Cancel an active job before removing it. Removed jobs cannot be retried or continued. Matching URLs, including links with different tracking parameters, require confirmation before queueing again. Resolved playlists with possible duplicate titles and artists pause before upstream submission and expose **Continue**. These warnings compare Antra history within the selected destination, including saved tracks from removed jobs; they do not scan unrelated files or establish exact recording identity.
+
+Individual track failures do not stop later track events. Rejected or expired provider jobs mark unfinished tracks as failed instead of leaving them queued. Ten transport failures end that job with manual retry available; provider-busy and daily-quota waits do not consume this budget. Saved files remain verified and reusable on retry. Provider availability still determines whether missing tracks can be delivered.
+
 The real 186-track user playlist delivered 148 verified FLAC files before retries were added; 38 provider failures remained. Provider recovery and additional passes depend on upstream availability.
 
 ### On-Demand Utility

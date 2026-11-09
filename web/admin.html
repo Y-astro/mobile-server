@@ -816,12 +816,6 @@
                 ${svc.category ? `<span class='text-xs font-medium text-muted'>${svc.category}</span>` : ''}
                 <h3 class="font-semibold text-sm text-white mt-0.5">${svc.name}</h3>
                 <p class="service-desc text-xs text-soft mt-1 leading-relaxed">${svc.desc || ''}</p>
-                ${svc.id === 'vaultwarden' ? `
-                  <div class="mt-2 p-2 rounded-lg bg-surface-raised border border-white/5 text-xs text-soft flex items-center justify-between">
-                    <span class="mono">Bitwarden: http://100.75.159.53:8082</span>
-                    <button type="button" onclick="navigator.clipboard.writeText('http://100.75.159.53:8082'); alert('Copied Bitwarden Server URL');" class="m3-btn m3-btn-tonal text-xs px-3 py-1.5 touch-target">Copy</button>
-                  </div>
-                ` : ''}
                 ${svc.id === 'syncthing' ? `
                   <div class="mt-2 p-2 rounded-lg bg-surface-raised border border-white/5 text-xs text-soft flex items-center justify-between">
                     <span class="mono">Sync: PES/Sem3 &harr; PC</span>

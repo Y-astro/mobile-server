@@ -99,6 +99,7 @@ def _row_to_job_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "automatic_retry_rounds": row["automatic_retry_rounds"] if "automatic_retry_rounds" in row.keys() else 0,
         "removed": row["removed"] if "removed" in row.keys() else 0,
         "duplicate_confirmed": row["duplicate_confirmed"] if "duplicate_confirmed" in row.keys() else 0,
+        "duplicate_count": row["duplicate_count"] if "duplicate_count" in row.keys() else 0,
     }
 
 
@@ -169,7 +170,8 @@ class AntraStore:
                     retry_attempts INTEGER NOT NULL DEFAULT 0,
                     automatic_retry_rounds INTEGER NOT NULL DEFAULT 0,
                     removed INTEGER NOT NULL DEFAULT 0,
-                    duplicate_confirmed INTEGER NOT NULL DEFAULT 0
+                    duplicate_confirmed INTEGER NOT NULL DEFAULT 0,
+                    duplicate_count INTEGER NOT NULL DEFAULT 0
                 );
             """)
             conn.execute("""
@@ -218,6 +220,8 @@ class AntraStore:
                 conn.execute("ALTER TABLE jobs ADD COLUMN removed INTEGER NOT NULL DEFAULT 0;")
             if "duplicate_confirmed" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN duplicate_confirmed INTEGER NOT NULL DEFAULT 0;")
+            if "duplicate_count" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN duplicate_count INTEGER NOT NULL DEFAULT 0;")
 
             cursor_trk = conn.execute("PRAGMA table_info(tracks);")
             trk_columns = {row["name"] for row in cursor_trk.fetchall()}
@@ -358,7 +362,7 @@ class AntraStore:
             "message", "upstream_job_id", "updated_at", "format",
             "chunk_start", "chunk_end", "submission_intent",
             "concurrency_retry_after", "retry_attempts",
-            "duplicate_confirmed", "removed",
+            "duplicate_confirmed", "duplicate_count",
         }
         updates = {}
         for k, v in fields.items():
@@ -575,12 +579,15 @@ class AntraStore:
     def retry_job(self, job_id: str) -> Dict[str, Any]:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE;")
-            cur = conn.execute("SELECT status, destination, removed FROM jobs WHERE id = ?;", (job_id,))
+            cur = conn.execute("SELECT status, destination, removed, duplicate_count, duplicate_confirmed FROM jobs WHERE id = ?;", (job_id,))
             row = cur.fetchone()
             if not row or row["removed"]:
                 raise JobNotFoundError(f"Job not found: {job_id}")
 
             current_status = row["status"]
+            duplicate_hold = row["duplicate_count"] and not row["duplicate_confirmed"]
+            if current_status == "blocked" and duplicate_hold:
+                raise InvalidTransitionError("Review duplicate tracks and use Continue to confirm")
             if current_status not in RETRIABLE_JOB_STATUSES:
                 raise InvalidTransitionError(
                     f"Cannot retry job in status '{current_status}'"
@@ -591,8 +598,8 @@ class AntraStore:
             conn.execute(
                 """
                 UPDATE jobs SET
-                    status = 'queued',
-                    message = '',
+                    status = ?,
+                    message = ?,
                     updated_at = ?,
                     chunk_start = 0,
                     chunk_end = 0,
@@ -603,7 +610,9 @@ class AntraStore:
                     upstream_job_id = NULL
                 WHERE id = ? AND removed = 0;
                 """,
-                (now, job_id),
+                ("blocked" if duplicate_hold else "queued",
+                 "Review possible duplicate tracks and use Continue to confirm." if duplicate_hold else "",
+                 now, job_id),
             )
             conn.execute(
                 """
@@ -621,13 +630,13 @@ class AntraStore:
     def continue_job(self, job_id: str) -> Dict[str, Any]:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE;")
-            cur = conn.execute("SELECT status, removed FROM jobs WHERE id = ?;", (job_id,))
+            cur = conn.execute("SELECT status, removed, duplicate_count, duplicate_confirmed FROM jobs WHERE id = ?;", (job_id,))
             row = cur.fetchone()
             if not row or row["removed"]:
                 raise JobNotFoundError(f"Job not found: {job_id}")
 
             current_status = row["status"]
-            if current_status not in ("blocked", "queued"):
+            if current_status != "blocked" or not row["duplicate_count"] or row["duplicate_confirmed"]:
                 raise InvalidTransitionError(
                     f"Cannot continue job in status '{current_status}'"
                 )
@@ -720,7 +729,10 @@ class AntraStore:
                 FROM tracks
                 JOIN jobs ON jobs.id = tracks.job_id
                 WHERE jobs.destination = ? AND jobs.id != ?
-                  AND tracks.status IN ('completed', 'downloading', 'queued');
+                  AND (tracks.status = 'completed' OR (
+                      tracks.status IN ('downloading', 'queued') AND jobs.removed = 0
+                      AND jobs.status IN ('queued', 'resolving', 'downloading', 'blocked')
+                  ));
                 """,
                 (destination, job_id),
             )
@@ -775,7 +787,7 @@ class AntraStore:
                 if key in seen_in_playlist_exact:
                     warning = "Possible duplicate: duplicate song within this playlist."
                 elif key in saved_exact:
-                    warning = "Warning: duplicate song already in library."
+                    warning = "Possible duplicate: song title and artist match saved library history."
                 elif key in queued_exact:
                     warning = "Possible duplicate: song already in queued/downloading job."
                 seen_in_playlist_exact.add(key)

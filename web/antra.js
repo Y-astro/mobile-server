@@ -359,7 +359,7 @@
 
       // Retry button if failed or partial or cancelled
       if (['failed', 'cancelled', 'blocked', 'partial'].includes(job.status)) {
-        if (job.status === 'blocked' && (job.message || '').includes('Blocked: playlist contains duplicate')) {
+        if (job.status === 'blocked' && job.duplicate_count > 0 && !job.duplicate_confirmed) {
           const contBtn = document.createElement('button');
           contBtn.type = 'button';
           contBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-amber-300 hover:text-white border-amber-500/40';

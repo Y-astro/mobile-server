@@ -275,6 +275,19 @@ function createInitialState() {
       return sendResponse();
     }
 
+    const matchContinue = pathname.match(/^\/api\/antra\/jobs\/([^/]+)\/continue$/);
+    if (matchContinue && req.method === 'POST') {
+      const job = state.jobs.find(j => j.id === decodeURIComponent(matchContinue[1]));
+      if (!job || job.status !== 'blocked' || !job.duplicate_count) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ message: 'No duplicate hold' }));
+      }
+      job.status = 'queued';
+      job.duplicate_confirmed = 1;
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ job }));
+    }
+
     // POST /api/antra/jobs/<id>/cancel
     const matchCancel = pathname.match(/^\/api\/antra\/jobs\/([^/]+)\/cancel$/);
     if (matchCancel && req.method === 'POST') {
@@ -717,6 +730,26 @@ function createInitialState() {
     // Change input text
     await page.fill('#antra-url-input', 'https://tidal.com/album/completely-different');
     assert.strictEqual(await page.textContent('#submit-btn-text'), 'Queue Download', 'Button immediately resets to Queue Download on input change');
+
+    console.log('[Test 18] Duplicate playlist Continue action uses server state...');
+    state.jobs.push({
+      id: 'job-duplicate-playlist', url: 'https://tidal.com/playlist/overlap',
+      title: 'Overlapping playlist', destination: 'private', status: 'blocked',
+      duplicate_count: 1, duplicate_confirmed: 0,
+      total: 2, completed: 0, skipped: 0, failed: 0,
+      created_at: Date.now() / 1000, updated_at: Date.now() / 1000,
+      message: 'Blocked: playlist contains 1 duplicate track(s). Continue to download anyway.'
+    });
+    await page.click('#btn-refresh');
+    const duplicateCard = page.locator('.job-card[data-job-id="job-duplicate-playlist"]');
+    await duplicateCard.locator('button[data-action="continue"]').waitFor();
+    assert.strictEqual(await duplicateCard.locator('button[data-action="retry"]').count(), 0);
+    await duplicateCard.locator('button[data-action="continue"]').click();
+    await page.waitForFunction(() => {
+      const card = document.querySelector('.job-card[data-job-id="job-duplicate-playlist"]');
+      return card && !card.querySelector('button[data-action="continue"]');
+    });
+    assert.strictEqual(state.jobs.find(j => j.id === 'job-duplicate-playlist').duplicate_confirmed, 1);
 
     await page.close();
     await context.close();
