@@ -267,6 +267,20 @@ class AntraSafetyTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_quiet_websocket_keeps_session_and_delivers_later_tracks(self):
+        client = AntraClient(base_url="https://antra.fake.local", config_dir=self.config_dir)
+        with patch("websockets.sync.client.connect") as connect:
+            socket = connect.return_value.__enter__.return_value
+            socket.recv.side_effect = [
+                TimeoutError(),
+                json.dumps({"type": "track_failed", "index": 0}),
+                json.dumps({"type": "track_done", "index": 1, "path": "song.flac"}),
+                json.dumps({"type": "complete"}),
+            ]
+            events = list(client.connect_job_ws("known-job", "private-token"))
+        self.assertEqual([event["type"] for event in events], ["heartbeat", "track_failed", "track_done", "complete"])
+        connect.assert_called_once()
+
     def test_submit_job_success_payload_and_validation(self):
         client = AntraClient(base_url="https://antra.fake.local", config_dir=self.config_dir)
         captured = {}

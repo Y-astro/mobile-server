@@ -417,6 +417,10 @@ class AntraClient:
             while True:
                 try:
                     message = ws.recv(timeout=30)
+                except TimeoutError:
+                    # Provider lookup may be quiet; WebSocket keepalive detects dead peers.
+                    yield {"type": "heartbeat"}
+                    continue
                 except Exception as error:
                     raise AntraClientError("Download event stream interrupted; reconnecting.") from error
 
