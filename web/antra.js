@@ -47,7 +47,8 @@
   let cachedJobs = [];
   let activeTrackController = null;
   let activeMainFetchController = null;
-  let pendingDuplicateConfirm = false;
+  let pendingDuplicateUrl = null;
+  let pendingDuplicateDest = null;
 
   // Helper: Format status badge class
   function getStatusClass(status) {
@@ -358,14 +359,26 @@
 
       // Retry button if failed or partial or cancelled
       if (['failed', 'cancelled', 'blocked', 'partial'].includes(job.status)) {
-        const retryBtn = document.createElement('button');
-        retryBtn.type = 'button';
-        retryBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-teal hover:text-white border-teal/40';
-        retryBtn.textContent = 'Retry';
-        retryBtn.setAttribute('data-action', 'retry');
-        retryBtn.setAttribute('data-id', job.id);
-        retryBtn.addEventListener('click', () => handleJobRetry(job.id, retryBtn));
-        actionsDiv.appendChild(retryBtn);
+        if (job.status === 'blocked' && (job.message || '').includes('Blocked: playlist contains duplicate')) {
+          const contBtn = document.createElement('button');
+          contBtn.type = 'button';
+          contBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-amber-300 hover:text-white border-amber-500/40';
+          contBtn.textContent = 'Continue';
+          contBtn.title = 'Continue downloading playlist despite duplicate tracks';
+          contBtn.setAttribute('data-action', 'continue');
+          contBtn.setAttribute('data-id', job.id);
+          contBtn.addEventListener('click', () => handleJobContinue(job.id, contBtn));
+          actionsDiv.appendChild(contBtn);
+        } else {
+          const retryBtn = document.createElement('button');
+          retryBtn.type = 'button';
+          retryBtn.className = 'm3-btn m3-btn-outlined action-btn text-xs text-teal hover:text-white border-teal/40';
+          retryBtn.textContent = 'Retry';
+          retryBtn.setAttribute('data-action', 'retry');
+          retryBtn.setAttribute('data-id', job.id);
+          retryBtn.addEventListener('click', () => handleJobRetry(job.id, retryBtn));
+          actionsDiv.appendChild(retryBtn);
+        }
       }
 
       // Remove button if terminal
@@ -579,13 +592,13 @@
     }
 
     const destination = (destinationSelect && destinationSelect.value === 'family') ? 'family' : 'private';
-    const confirmDup = pendingDuplicateConfirm;
+    const isConfirming = pendingDuplicateUrl === url && pendingDuplicateDest === destination;
 
     // Immediate pending guard
     isSubmitting = true;
     submitBtn.disabled = true;
     submitBtn.setAttribute('aria-busy', 'true');
-    submitBtnText.textContent = confirmDup ? 'Confirming…' : 'Queueing…';
+    submitBtnText.textContent = isConfirming ? 'Confirming…' : 'Queueing…';
     hideFormStatus();
 
     const postController = new AbortController();
@@ -593,7 +606,7 @@
 
     try {
       const payload = { url, destination };
-      if (confirmDup) {
+      if (isConfirming) {
         payload.confirm_duplicate = true;
       }
       const res = await fetch('/api/antra/jobs', {
@@ -616,15 +629,22 @@
       const data = await res.json();
 
       if (res.status === 409 && data.warning === 'duplicate') {
-        pendingDuplicateConfirm = true;
-        submitBtnText.textContent = 'Confirm Queue';
-        showFormStatus(data.message || 'Warning: duplicate detected. Click Confirm Queue to proceed.', 'warning');
+        // Guard against late response if user already modified inputs
+        const currentUrl = (urlInput.value || '').trim();
+        const currentDest = (destinationSelect && destinationSelect.value === 'family') ? 'family' : 'private';
+        if (currentUrl === url && currentDest === destination) {
+          pendingDuplicateUrl = url;
+          pendingDuplicateDest = destination;
+          submitBtnText.textContent = 'Confirm Queue';
+          showFormStatus(data.message || 'Warning: duplicate detected. Click Confirm Queue to proceed.', 'warning');
+        }
         return;
       }
 
       if (res.status === 202 || res.ok) {
         urlInput.value = '';
-        pendingDuplicateConfirm = false;
+        pendingDuplicateUrl = null;
+        pendingDuplicateDest = null;
         showFormStatus('Download queued successfully. Processing started.', 'success');
         if (pollingLoop && typeof pollingLoop.refreshAfterMutation === 'function') {
           pollingLoop.refreshAfterMutation();
@@ -647,7 +667,8 @@
       if (!isAccessDenied) {
         submitBtn.disabled = false;
         submitBtn.removeAttribute('aria-busy');
-        submitBtnText.textContent = pendingDuplicateConfirm ? 'Confirm Queue' : 'Queue Download';
+        const hasPending = pendingDuplicateUrl === (urlInput.value || '').trim() && pendingDuplicateDest === ((destinationSelect && destinationSelect.value === 'family') ? 'family' : 'private');
+        submitBtnText.textContent = hasPending ? 'Confirm Queue' : 'Queue Download';
       }
     }
   }
@@ -670,6 +691,53 @@
     if (!formStatus) return;
     formStatus.textContent = '';
     formStatus.className = 'text-sm mt-2 hidden';
+  }
+
+  // Job Continue Action
+  async function handleJobContinue(jobId, btn) {
+    if (!jobId || isAccessDenied) return;
+    btn.disabled = true;
+    btn.textContent = 'Continuing…';
+
+    const contController = new AbortController();
+    const timeoutId = setTimeout(() => contController.abort(), 10000);
+
+    try {
+      const res = await fetch(`/api/antra/jobs/${encodeURIComponent(jobId)}/continue`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        signal: contController.signal
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        let errData = {};
+        try { errData = await res.json(); } catch (_) {}
+        handleAccessRefusal(res.status, errData.message);
+        return;
+      }
+
+      if (res.status === 202 || res.ok) {
+        if (pollingLoop && typeof pollingLoop.refreshAfterMutation === 'function') {
+          pollingLoop.refreshAfterMutation();
+        } else {
+          fetchJobs();
+        }
+      } else {
+        let errData = {};
+        try { errData = await res.json(); } catch (_) {}
+        alert(errData.message || 'Unable to continue job');
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        alert('Continue request timed out. Please refresh to confirm status.');
+      } else {
+        alert('Network error while continuing job.');
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      btn.disabled = false;
+      btn.textContent = 'Continue';
+    }
   }
 
   // Job Cancel Action
@@ -822,16 +890,18 @@
   if (antraForm) antraForm.addEventListener('submit', handleSubmit);
   if (urlInput) {
     urlInput.addEventListener('input', () => {
-      if (pendingDuplicateConfirm) {
-        pendingDuplicateConfirm = false;
+      if (pendingDuplicateUrl !== null) {
+        pendingDuplicateUrl = null;
+        pendingDuplicateDest = null;
         if (submitBtnText) submitBtnText.textContent = 'Queue Download';
       }
     });
   }
   if (destinationSelect) {
     destinationSelect.addEventListener('change', () => {
-      if (pendingDuplicateConfirm) {
-        pendingDuplicateConfirm = false;
+      if (pendingDuplicateUrl !== null) {
+        pendingDuplicateUrl = null;
+        pendingDuplicateDest = null;
         if (submitBtnText) submitBtnText.textContent = 'Queue Download';
       }
     });

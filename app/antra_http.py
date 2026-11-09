@@ -220,7 +220,11 @@ def dispatch_antra(
                 _send_error(handler, 400, "Invalid destination: must be 'private' or 'family'")
                 return
 
-            confirm_dup = bool(payload.get("confirm_duplicate") or payload.get("confirm"))
+            confirm_dup = payload.get("confirm_duplicate", False)
+            if "confirm_duplicate" in payload and not isinstance(confirm_dup, bool):
+                _send_error(handler, 400, "Field 'confirm_duplicate' must be a boolean")
+                return
+            confirm_dup = bool(confirm_dup)
             existing_dup = ant_store.find_duplicate_job(url.strip(), destination=destination)
             if existing_dup and not confirm_dup:
                 _send_response(handler, 409, {
@@ -291,6 +295,18 @@ def dispatch_antra(
                     _send_error(handler, 409, str(e))
                 except Exception:
                     _send_error(handler, 500, "Retry operation failed")
+                return
+
+            if action == "continue":
+                try:
+                    job = ant_store.continue_job(job_id)
+                    _send_response(handler, 202, {"job": job})
+                except JobNotFoundError:
+                    _send_error(handler, 404, "Job not found")
+                except InvalidTransitionError as e:
+                    _send_error(handler, 409, str(e))
+                except Exception:
+                    _send_error(handler, 500, "Continue operation failed")
                 return
 
             if action == "remove":

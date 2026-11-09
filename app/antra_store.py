@@ -98,6 +98,7 @@ def _row_to_job_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "message": row["message"],
         "automatic_retry_rounds": row["automatic_retry_rounds"] if "automatic_retry_rounds" in row.keys() else 0,
         "removed": row["removed"] if "removed" in row.keys() else 0,
+        "duplicate_confirmed": row["duplicate_confirmed"] if "duplicate_confirmed" in row.keys() else 0,
     }
 
 
@@ -167,7 +168,8 @@ class AntraStore:
                     concurrency_retry_after REAL NOT NULL DEFAULT 0,
                     retry_attempts INTEGER NOT NULL DEFAULT 0,
                     automatic_retry_rounds INTEGER NOT NULL DEFAULT 0,
-                    removed INTEGER NOT NULL DEFAULT 0
+                    removed INTEGER NOT NULL DEFAULT 0,
+                    duplicate_confirmed INTEGER NOT NULL DEFAULT 0
                 );
             """)
             conn.execute("""
@@ -214,6 +216,8 @@ class AntraStore:
                 conn.execute("ALTER TABLE jobs ADD COLUMN retry_attempts INTEGER NOT NULL DEFAULT 0;")
             if "removed" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN removed INTEGER NOT NULL DEFAULT 0;")
+            if "duplicate_confirmed" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN duplicate_confirmed INTEGER NOT NULL DEFAULT 0;")
 
             cursor_trk = conn.execute("PRAGMA table_info(tracks);")
             trk_columns = {row["name"] for row in cursor_trk.fetchall()}
@@ -354,6 +358,7 @@ class AntraStore:
             "message", "upstream_job_id", "updated_at", "format",
             "chunk_start", "chunk_end", "submission_intent",
             "concurrency_retry_after", "retry_attempts",
+            "duplicate_confirmed", "removed",
         }
         updates = {}
         for k, v in fields.items():
@@ -453,9 +458,10 @@ class AntraStore:
 
     def cancel_job(self, job_id: str) -> Dict[str, Any]:
         with self._connect() as conn:
-            cur = conn.execute("SELECT status FROM jobs WHERE id = ?;", (job_id,))
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute("SELECT status, removed FROM jobs WHERE id = ?;", (job_id,))
             row = cur.fetchone()
-            if not row:
+            if not row or row["removed"]:
                 raise JobNotFoundError(f"Job not found: {job_id}")
 
             current_status = row["status"]
@@ -466,7 +472,7 @@ class AntraStore:
 
             now = time.time()
             conn.execute(
-                "UPDATE jobs SET status = 'cancelled', updated_at = ? WHERE id = ?;",
+                "UPDATE jobs SET status = 'cancelled', updated_at = ? WHERE id = ? AND removed = 0;",
                 (now, job_id),
             )
             conn.execute(
@@ -507,6 +513,11 @@ class AntraStore:
         if status not in ("completed", "partial", "failed"):
             raise ValueError("Invalid terminal job status")
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute("SELECT status, removed FROM jobs WHERE id = ?;", (job_id,))
+            row = cur.fetchone()
+            if not row or row["removed"] or row["status"] not in ('queued', 'resolving', 'downloading', 'blocked'):
+                return
             conn.execute(
                 """
                 UPDATE tracks SET
@@ -525,7 +536,7 @@ class AntraStore:
                     skipped = (SELECT COUNT(*) FROM tracks WHERE job_id = ? AND status = 'skipped'),
                     failed = (SELECT COUNT(*) FROM tracks WHERE job_id = ? AND status = 'failed'),
                     updated_at = ?
-                WHERE id = ? AND status IN ('queued', 'resolving', 'downloading');
+                WHERE id = ? AND removed = 0 AND status IN ('queued', 'resolving', 'downloading', 'blocked');
                 """,
                 (status, message, job_id, job_id, job_id, time.time(), job_id),
             )
@@ -563,9 +574,10 @@ class AntraStore:
 
     def retry_job(self, job_id: str) -> Dict[str, Any]:
         with self._connect() as conn:
-            cur = conn.execute("SELECT status, destination FROM jobs WHERE id = ?;", (job_id,))
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute("SELECT status, destination, removed FROM jobs WHERE id = ?;", (job_id,))
             row = cur.fetchone()
-            if not row:
+            if not row or row["removed"]:
                 raise JobNotFoundError(f"Job not found: {job_id}")
 
             current_status = row["status"]
@@ -589,7 +601,7 @@ class AntraStore:
                     retry_attempts = 0,
                     automatic_retry_rounds = 0,
                     upstream_job_id = NULL
-                WHERE id = ?;
+                WHERE id = ? AND removed = 0;
                 """,
                 (now, job_id),
             )
@@ -599,6 +611,38 @@ class AntraStore:
                 WHERE job_id = ? AND status NOT IN ('completed', 'skipped');
                 """,
                 (job_id,),
+            )
+
+        job = self.get_job(job_id)
+        if job is None:
+            raise JobNotFoundError(f"Job not found: {job_id}")
+        return job
+
+    def continue_job(self, job_id: str) -> Dict[str, Any]:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            cur = conn.execute("SELECT status, removed FROM jobs WHERE id = ?;", (job_id,))
+            row = cur.fetchone()
+            if not row or row["removed"]:
+                raise JobNotFoundError(f"Job not found: {job_id}")
+
+            current_status = row["status"]
+            if current_status not in ("blocked", "queued"):
+                raise InvalidTransitionError(
+                    f"Cannot continue job in status '{current_status}'"
+                )
+
+            now = time.time()
+            conn.execute(
+                """
+                UPDATE jobs SET
+                    status = 'queued',
+                    duplicate_confirmed = 1,
+                    concurrency_retry_after = 0,
+                    updated_at = ?
+                WHERE id = ? AND removed = 0;
+                """,
+                (now, job_id),
             )
 
         job = self.get_job(job_id)
@@ -662,10 +706,11 @@ class AntraStore:
         destination: str,
         tracks: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """Annotate tracks with duplicate warnings if present in this destination.
+        """Annotate tracks with duplicate warnings if present in this destination or within playlist.
 
         Compares within selected destination only. Preserves evidence after Remove.
         Avoids false positives for different artists or versions.
+        Distinguishes saved library history vs queued matches, and within-playlist duplicates.
         Labels possible duplicates when reliable artist identity is absent.
         """
         with self._connect() as conn:
@@ -681,9 +726,6 @@ class AntraStore:
             )
             existing = cur.fetchall()
 
-        if not existing:
-            return tracks
-
         def version_tag(title: str) -> str:
             match = re.search(r"\b(live|remix|acoustic|remastered|deluxe|instrumental|edit|extended)\b", title, re.IGNORECASE)
             return match.group(1).lower() if match else ""
@@ -693,16 +735,26 @@ class AntraStore:
                 return ""
             return re.sub(r"[^\w\s]", "", str(s)).strip().lower()
 
-        existing_exact = set()
-        existing_titles = set()
+        saved_exact = set()
+        saved_titles = set()
+        queued_exact = set()
+        queued_titles = set()
+
         for row in existing:
             t_norm = norm(row["title"])
             a_norm = norm(row["artist"])
             v_tag = version_tag(row["title"])
+            is_saved = row["status"] == "completed"
+            exact_set = saved_exact if is_saved else queued_exact
+            title_set = saved_titles if is_saved else queued_titles
+
             if t_norm:
-                existing_titles.add((t_norm, v_tag))
+                title_set.add((t_norm, v_tag))
                 if a_norm and a_norm not in ("unknown", "various artists", "various"):
-                    existing_exact.add((t_norm, a_norm, v_tag))
+                    exact_set.add((t_norm, a_norm, v_tag))
+
+        seen_in_playlist_exact = set()
+        seen_in_playlist_titles = set()
 
         annotated = []
         for trk in tracks:
@@ -716,17 +768,30 @@ class AntraStore:
                 continue
 
             has_reliable_artist = bool(a_norm and a_norm not in ("unknown", "various artists", "various"))
+            warning = None
 
             if has_reliable_artist:
-                if (t_norm, a_norm, v_tag) in existing_exact:
-                    msg = trk_copy.get("message", "")
+                key = (t_norm, a_norm, v_tag)
+                if key in seen_in_playlist_exact:
+                    warning = "Possible duplicate: duplicate song within this playlist."
+                elif key in saved_exact:
                     warning = "Warning: duplicate song already in library."
-                    trk_copy["message"] = f"{warning} {msg}".strip() if msg else warning
+                elif key in queued_exact:
+                    warning = "Possible duplicate: song already in queued/downloading job."
+                seen_in_playlist_exact.add(key)
             else:
-                if (t_norm, v_tag) in existing_titles:
-                    msg = trk_copy.get("message", "")
-                    warning = "Possible duplicate: song title matches existing library record (artist identity unconfirmed)."
-                    trk_copy["message"] = f"{warning} {msg}".strip() if msg else warning
+                key = (t_norm, v_tag)
+                if key in seen_in_playlist_titles:
+                    warning = "Possible duplicate: duplicate song title within this playlist."
+                elif key in saved_titles:
+                    warning = "Possible duplicate: song title matches saved library record."
+                elif key in queued_titles:
+                    warning = "Possible duplicate: song title matches queued/downloading job."
+                seen_in_playlist_titles.add(key)
+
+            if warning:
+                msg = trk_copy.get("message", "")
+                trk_copy["message"] = f"{warning} {msg}".strip() if msg else warning
 
             annotated.append(trk_copy)
 
@@ -734,7 +799,7 @@ class AntraStore:
 
 
 def canonical_music_url(url: str) -> str:
-    """Canonicalize music URL for duplicate detection, stripping tracking query parameters."""
+    """Canonicalize music URL for duplicate detection, stripping tracking query parameters and ordering remaining."""
     if not isinstance(url, str):
         return ""
     try:
@@ -743,9 +808,11 @@ def canonical_music_url(url: str) -> str:
         if parsed.query:
             for k, v in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True):
                 k_lower = k.lower()
-                if k_lower in ("si", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "sp_cid", "feature", "context"):
+                if (k_lower in ("pi", "si", "sp_cid", "feature", "context")
+                        or k_lower.startswith("utm_")):
                     continue
                 filtered.append((k, v))
+        filtered.sort(key=lambda item: (item[0], item[1]))
         new_query = urllib.parse.urlencode(filtered)
         return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), new_query, ""))
     except Exception:

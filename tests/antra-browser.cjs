@@ -704,6 +704,20 @@ function createInitialState() {
     assert.match(successText, /Download queued successfully/i, 'Job queued after conscious confirmation');
     assert.strictEqual(await page.textContent('#submit-btn-text'), 'Queue Download', 'Button reset to Queue Download');
 
+    // =========================================================================
+    // 17. INPUT CHANGE DISCARDS UNCONFIRMED DUPLICATE STATE
+    // =========================================================================
+    console.log('[Test 17] Verifying input change discards unconfirmed duplicate state...');
+    // Trigger duplicate warning again
+    await page.fill('#antra-url-input', 'https://tidal.com/album/private-album');
+    await page.click('#antra-submit-btn');
+    await page.waitForSelector('.form-status-warning');
+    assert.strictEqual(await page.textContent('#submit-btn-text'), 'Confirm Queue');
+
+    // Change input text
+    await page.fill('#antra-url-input', 'https://tidal.com/album/completely-different');
+    assert.strictEqual(await page.textContent('#submit-btn-text'), 'Queue Download', 'Button immediately resets to Queue Download on input change');
+
     await page.close();
     await context.close();
     console.log('ALL ANTRA BROWSER ACCEPTANCE TESTS PASSED');

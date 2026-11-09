@@ -318,22 +318,32 @@ class AntraWorker:
         job = self.store.get_internal_job(job_id)
         if not job or job.get("status") == "cancelled" or self.store.is_job_cancelled(job_id):
             return
-        attempts = int(job.get("retry_attempts", 0)) + 1
-        if attempts >= 10 and not daily:
-            records = self.store.get_tracks(job_id)
-            completed = sum(t["status"] == "completed" for t in records)
-            skipped = sum(t["status"] == "skipped" for t in records)
-            state = "partial" if (completed or skipped) else "failed"
-            final_msg = f"Connection failed after {attempts} retry attempts. Manual retry is available."
-            self.store.finish_job(job_id, status=state, message=final_msg)
-            return
 
-        delay = getattr(error, "retry_after", None) or (86402 - time.time() % 86400 if daily else min(60, 5 * attempts))
+        is_429 = isinstance(error, ConcurrencyLimitError)
+        is_daily = daily or isinstance(error, DailyLimitError)
+        attempts = int(job.get("retry_attempts", 0))
+
+        if not (is_429 or is_daily):
+            attempts += 1
+            if attempts >= 10:
+                records = self.store.get_tracks(job_id)
+                completed = sum(t["status"] == "completed" for t in records)
+                skipped = sum(t["status"] == "skipped" for t in records)
+                state = "partial" if (completed or skipped) else "failed"
+                final_msg = f"Connection failed after {attempts} retry attempts. Manual retry is available."
+                self.store.finish_job(job_id, status=state, message=final_msg)
+                return
+
+        delay = getattr(error, "retry_after", None) or (86402 - time.time() % 86400 if is_daily else (30 if is_429 else min(60, 5 * attempts)))
+        msg = ("Daily quota reached; waiting for reset." if is_daily
+               else ("Provider busy; waiting for capacity." if is_429
+                     else "Connection interrupted; retrying the existing job."))
+
         self.store.update_job(
-            job_id, status="blocked" if daily else ("downloading" if job.get("upstream_job_id") else "queued"),
+            job_id, status="blocked" if is_daily else ("downloading" if job.get("upstream_job_id") else "queued"),
             concurrency_retry_after=time.time() + max(2, min(float(delay), 86400)),
             retry_attempts=attempts,
-            message="Daily quota reached; waiting for reset." if daily else "Connection interrupted; retrying the existing job.",
+            message=msg,
         )
 
     def process_job(self, job: Dict[str, Any]) -> None:
@@ -371,6 +381,13 @@ class AntraWorker:
                 job_msg = f"Detected {dup_count} duplicate track(s) in {destination} destination." if dup_count else ""
                 self.store.update_job(job_id, title=resolved["title"], message=job_msg)
                 tracks = self.store.get_tracks(job_id)
+                if dup_count and not job.get("duplicate_confirmed"):
+                    self.store.update_job(
+                        job_id,
+                        status="blocked",
+                        message=f"Blocked: playlist contains {dup_count} duplicate track(s). Continue to download anyway.",
+                    )
+                    return
             if tracks and all(track["status"] in ("completed", "skipped") for track in tracks):
                 self.store.finish_job(job_id, status="completed" if all(track["status"] == "completed" for track in tracks) else "partial", message="")
                 return
@@ -611,7 +628,8 @@ class AntraWorker:
                         with contextlib.suppress(OSError):
                             final.parent.rmdir()
                 return
-            self.store.update_track(job_id, global_index, status="completed", filename=str(final.relative_to(destination_root.resolve())), temporary_path=None, message="", ack_pending=1)
+            existing_msg = record.get("message") or ""
+            self.store.update_track(job_id, global_index, status="completed", filename=str(final.relative_to(destination_root.resolve())), temporary_path=None, message=existing_msg, ack_pending=1)
             self._acknowledge(job_id, global_index, upstream_job_id)
         except Exception:
             if not self.store.is_job_cancelled(job_id):
@@ -631,8 +649,8 @@ class AntraWorker:
         for record in self.store.pending_acknowledgements():
             try:
                 self._acknowledge(record["job_id"], record["track_index"], record["upstream_job_id"])
-            except Exception as e:
-                logger.warning("Ack failed for job %s track %s: %s", record["job_id"], record["track_index"], e)
+            except Exception:
+                logger.warning("Ack failed for job %s track %s", record["job_id"], record["track_index"])
         job = self.store.get_next_runnable_job()
         if not job:
             return False

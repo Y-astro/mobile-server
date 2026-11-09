@@ -10,6 +10,7 @@ from app.antra_store import (
     InvalidTransitionError,
     JobNotFoundError,
     LOGICAL_OUTPUT_DIRECTORIES,
+    canonical_music_url,
 )
 
 
@@ -353,6 +354,61 @@ class TestAntraStore(unittest.TestCase):
         annotated_fam = self.store.check_track_duplicates("new_job_id", "family", new_candidates)
         self.assertEqual(annotated_fam[0].get("message", ""), "")
         self.assertEqual(annotated_fam[3].get("message", ""), "")
+
+    def test_reproduction_retry_on_removed_job_fails_atomically(self):
+        """Reproduction 1: create_job -> finish_job('failed') -> remove_job -> retry_job raises JobNotFoundError,
+
+        and DB status is NOT modified to 'queued'.
+        """
+        job = self.store.create_job("https://tidal.com/album/fail-retry", destination="private")
+        self.store.finish_job(job["id"], "failed", "Provider error")
+        self.store.remove_job(job["id"])
+
+        # Retry must raise JobNotFoundError
+        with self.assertRaises(JobNotFoundError):
+            self.store.retry_job(job["id"])
+
+        # Internal job must remain status='failed' and removed=1, NOT altered to status='queued'
+        internal = self.store.get_internal_job(job["id"])
+        self.assertEqual(internal["status"], "failed")
+        self.assertEqual(internal["removed"], 1)
+
+        # Cancel on removed job must also raise JobNotFoundError without changing state
+        with self.assertRaises(JobNotFoundError):
+            self.store.cancel_job(job["id"])
+        self.assertEqual(self.store.get_internal_job(job["id"])["status"], "failed")
+
+        # Late finish_job cannot alter removed job
+        self.store.finish_job(job["id"], "completed", "Late finish")
+        self.assertEqual(self.store.get_internal_job(job["id"])["status"], "failed")
+
+        # Runnable jobs query must strictly exclude removed jobs
+        self.assertIsNone(self.store.get_next_runnable_job())
+
+    def test_url_canonicalizer_spotify_pi_query_order_and_apple_music_i(self):
+        """Reproduction 4: Strip pi, si, utm_*; query order does not defeat matching; preserve Apple Music ?i=."""
+        url_a = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?pi=e-12345&si=abc&b=2&a=1"
+        url_b = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?a=1&b=2"
+        self.assertEqual(canonical_music_url(url_a), canonical_music_url(url_b))
+
+        # Apple Music track ID ?i= must be preserved
+        am_url1 = "https://music.apple.com/us/album/test/123?i=456&utm_campaign=xyz"
+        am_url2 = "https://music.apple.com/us/album/test/123?i=456"
+        am_diff = "https://music.apple.com/us/album/test/123?i=789"
+        self.assertEqual(canonical_music_url(am_url1), canonical_music_url(am_url2))
+        self.assertNotEqual(canonical_music_url(am_url1), canonical_music_url(am_diff))
+
+    def test_within_playlist_duplicates_detection(self):
+        """Reproduction 3: Within-playlist duplicates are detected."""
+        candidates = [
+            {"index": 0, "title": "Track One", "artist": "Artist A"},
+            {"index": 1, "title": "Track One", "artist": "Artist A"},
+            {"index": 2, "title": "Track Two", "artist": "Artist B"},
+        ]
+        annotated = self.store.check_track_duplicates("job_test", "private", candidates)
+        self.assertEqual(annotated[0].get("message", ""), "")
+        self.assertIn("duplicate song within this playlist", annotated[1].get("message", ""))
+        self.assertEqual(annotated[2].get("message", ""), "")
 
 
 if __name__ == "__main__":

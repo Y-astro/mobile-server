@@ -392,7 +392,8 @@ class TestAntraWorker(unittest.TestCase):
         job_state = self.store.get_internal_job(job["id"])
         self.assertEqual(job_state["status"], "queued")
         self.assertGreater(job_state["concurrency_retry_after"], time.time())
-        self.assertEqual(job_state["retry_attempts"], 1)
+        # 429 concurrency limit does not exhaust transport retry budget
+        self.assertEqual(job_state["retry_attempts"], 0)
 
         # Not runnable immediately (no hot loop)
         self.assertIsNone(self.store.get_next_runnable_job())
@@ -693,7 +694,8 @@ class TestAntraAutomaticRetries(unittest.TestCase):
         self.worker.process_job(job)
         j = self.store.get_internal_job(job["id"])
         self.assertEqual(j["automatic_retry_rounds"], 0)
-        self.assertEqual(j["retry_attempts"], 1)
+        # 429 concurrency wait does not increment retry_attempts
+        self.assertEqual(j["retry_attempts"], 0)
         self.assertGreater(j["concurrency_retry_after"], time.time())
 
     def test_mixed_replay_downloads_only_failed_tracks(self):
@@ -794,6 +796,62 @@ class TestAntraAutomaticRetries(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda _: AntraStore(self.db_path).get_job(job["id"]), range(2)))
         self.assertEqual([row["automatic_retry_rounds"] for row in results], [0, 0])
+
+    def test_reproduction_duplicate_tracks_block_download_until_continue(self):
+        """Reproduction 3: Overlapping playlist sets status='blocked' and does NOT call submit_job;
+
+        after continue_job, submit_job proceeds.
+        """
+        # Seed saved track in library
+        j_old = self.store.create_job("https://tidal.com/album/old", destination="private")
+        self.store.set_tracks(j_old["id"], [{"index": 0, "title": "Saved Song", "artist": "Artist A"}])
+        self.store.update_track(j_old["id"], 0, status="completed")
+
+        # Now queue new playlist containing the same song
+        job = self.store.create_job("https://tidal.com/playlist/new-with-dup", destination="private")
+        self.client.resolve = MagicMock(return_value={
+            "title": "New Playlist",
+            "tracks": [
+                {"index": 0, "title": "Saved Song", "artist": "Artist A"},
+                {"index": 1, "title": "New Unique Song", "artist": "Artist B"},
+            ]
+        })
+        self.client.submit_job = MagicMock(return_value=("upstream-123", "token-abc"))
+
+        # Process job without duplicate_confirmed
+        self.worker.process_job(job)
+
+        # Must hold in 'blocked' status, and submit_job must NOT be called
+        j_state = self.store.get_job(job["id"])
+        self.assertEqual(j_state["status"], "blocked")
+        self.assertIn("Blocked: playlist contains 1 duplicate track", j_state["message"])
+        self.client.submit_job.assert_not_called()
+
+        # User continues download anyway
+        self.store.continue_job(job["id"])
+        j_continued = self.store.get_job(job["id"])
+        self.assertEqual(j_continued["status"], "queued")
+        self.assertEqual(self.store.get_internal_job(job["id"])["duplicate_confirmed"], 1)
+
+        # Process job again now that duplicate is confirmed -> submit_job IS called
+        self.client.connect_job_ws = MagicMock(return_value=[{"type": "complete"}])
+        self.worker.process_job(j_continued)
+        self.client.submit_job.assert_called_once()
+
+    def test_reproduction_concurrency_429_does_not_exhaust_transport_budget(self):
+        """Reproduction 2: retry_attempts=9 with 429 does NOT fail terminal and does NOT increment attempts."""
+        job = self.store.create_job("https://tidal.com/album/busy-concur", destination="private")
+        self.store.update_job(job["id"], retry_attempts=9)
+
+        self.client.resolve = MagicMock(
+            side_effect=ConcurrencyLimitError("busy", retry_after=30)
+        )
+        self.worker.process_job(job)
+
+        j_state = self.store.get_internal_job(job["id"])
+        self.assertNotEqual(j_state["status"], "failed")
+        self.assertEqual(j_state["retry_attempts"], 9)
+        self.assertGreater(j_state["concurrency_retry_after"], time.time())
 
 
 if __name__ == "__main__":

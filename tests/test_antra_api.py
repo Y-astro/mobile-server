@@ -446,6 +446,33 @@ class TestAntraApiUnit(unittest.TestCase):
         self.assertEqual(h4.status_code, 202)
         self.assertIsNone(h4.get_json_body().get("warning"))
 
+        # 5. Non-boolean confirm_duplicate is rejected with 400
+        for bad_val in ["true", 1, {}, []]:
+            body_bad = json.dumps({"url": dup_url, "destination": "private", "confirm_duplicate": bad_val}).encode()
+            h_bad = MockHandler(
+                command="POST",
+                path="/api/antra/jobs",
+                headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": str(len(body_bad))},
+                body=body_bad,
+                user="admin",
+            )
+            dispatch_antra(h_bad, user="admin", store=self.store, is_admin=lambda u: True)
+            self.assertEqual(h_bad.status_code, 400)
+
+        # 6. Continue endpoint POST /api/antra/jobs/<id>/continue
+        j_block = self.store.create_job("https://tidal.com/album/block-cont")
+        self.store.update_job(j_block["id"], status="blocked")
+        h_cont = MockHandler(
+            command="POST",
+            path=f"/api/antra/jobs/{j_block['id']}/continue",
+            headers={"Host": "localhost:8001", "Sec-Fetch-Site": "same-origin", "Content-Length": "0"},
+            user="admin",
+        )
+        dispatch_antra(h_cont, user="admin", store=self.store, is_admin=lambda u: True)
+        self.assertEqual(h_cont.status_code, 202)
+        self.assertEqual(self.store.get_job(j_block["id"])["status"], "queued")
+        self.assertEqual(self.store.get_internal_job(j_block["id"])["duplicate_confirmed"], 1)
+
 
 class TestDashboardAntraIntegration(unittest.TestCase):
     """Integrated tests spinning up real Dashboard HTTP server exercising /api/antra/."""
