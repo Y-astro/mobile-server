@@ -179,6 +179,7 @@ class TestAntraStore(unittest.TestCase):
         self.assertEqual(retried["status"], "queued")
         self.assertEqual(retried["destination"], "family")
         self.assertEqual(retried["message"], "")
+        self.assertEqual(retried["failed"], 0)
 
         # Internal fields reset
         internal = self.store.get_internal_job(job_id)

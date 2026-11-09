@@ -607,6 +607,7 @@ class AntraStore:
                     concurrency_retry_after = 0,
                     retry_attempts = 0,
                     automatic_retry_rounds = 0,
+                    failed = 0,
                     upstream_job_id = NULL
                 WHERE id = ? AND removed = 0;
                 """,
