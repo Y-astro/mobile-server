@@ -118,7 +118,7 @@
       "probe_endpoint": "GET /music/ping -> 302 Found (redirects to /music/app/)",
       "sso_header": "Remote-User injected by Caddy based on portal cookie",
       "libraries": {
-        "default": "Music/Family (shared)",
+        "shared": "Music/Family (shared)",
         "private": "Music/Astro (Astro only)"
       }
     }

@@ -7,7 +7,8 @@
 ## Summary
 - 860 nodes · 1824 edges · 56 communities (49 shown, 7 thin omitted)
 - Extraction: 98% EXTRACTED · 2% INFERRED · 0% AMBIGUOUS · INFERRED: 45 edges (avg confidence: 0.86)
-- Token cost: 0 input · 0 output
+- AGY run usage: 464,595 input tokens · 72,014 output tokens · 9,198,703 cache-read tokens.
+- AST extraction is deterministic; semantic extraction usage was not measured separately.
 
 ## Community Hubs (Navigation)
 - Release Management & Atomic Activation Engine
