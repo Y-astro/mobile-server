@@ -114,6 +114,7 @@ flowchart TD
     GuardianScript -->|Inspects PID & Broadcasts CONNECT_VPN| TailscaleApp
     GuardianScript -->|Probes GET 127.0.0.1:8000/healthz| CaddyHTTP
     GuardianScript -->|Cycles Termux on 6 failures| TermuxApp
+    GuardianScript -->|Checks & restores on 300s interval| XiaomiFind
     PauseMarker -.->|Suppresses recovery restarts| GuardianScript
 
     SupervisorDaemon -->|fcntl.flock| DaemonLock
@@ -195,7 +196,7 @@ Authoritative table of all **18 supervisor managed services**, **1 on-demand uti
 | `antra` | Music Downloader | **Disabled** (dormant) | None (worker daemon) | Admin dashboard `/antra/` | Admin role only | `$PREFIX/bin/python3 -u .../antra_worker.py` | Owned worker process | [`app/antra_worker.py`](../../app/antra_worker.py) | `$HOME/.local/share/mobile-server/antra/queue.sqlite3` | **MEDIUM**: Download queue state & provider cookies | Marker in `~/.config/services_disabled/antra`. Preserve intent. |
 | `converter` | Headless PDF Converter | **On-Demand** | None (subprocess batch) | Triggered via dashboard | Admin / Family role | `proot-distro login debian -- libreoffice ... --headless` | Bounded execution (0 MB idle RAM) | [`app/document_conversion.py`](../../app/document_conversion.py) | `$HOME/data/conversions/batch_<id>/` | **LOW**: Temporary scratch conversion files | Ephemeral process; batches cleared after download. |
 | `laptop_bridge` | Wealthfolio Laptop Bridge | **External Bridge** | `127.0.0.1:18930` (tunnel) | `:8444/*` | Laptop reverse tunnel | Laptop reverse SSH tunnel to phone loopback | HTTP probe on :18930 (503 page when offline) | [`config/Caddyfile:217`](../../config/Caddyfile#L217) | No phone-side database; backed by laptop | **LOW**: Proxy tunnel only | Offline fallback handled gracefully by Caddy 503 response. |
-| `phone_guardian`| Android Shell Watchdog | **Active** (shell UID) | None (independent loop) | Internal system monitor | None | `toybox sh /data/local/tmp/phone-server-guardian.sh` | Checks Tailscale & Termux 8000/healthz every 20s | [`scripts/phone-server-guardian.sh`](../../scripts/phone-server-guardian.sh) | `/data/local/tmp/phone-server-guardian/` | **HIGH**: Android shell permissions | Restarts Termux/Tailscale; NEVER restarts Android. Honors pause marker. |
+| `phone_guardian`| Android Shell Watchdog | **Inactive** (audit: stale PID 9242; pending root activation) | None (independent loop) | Internal system monitor | None | `toybox sh /data/local/tmp/phone-server-guardian.sh` | Checks Tailscale, Termux 8000/healthz (20s) and com.xiaomi.finddevice (300s) | [`scripts/phone-server-guardian.sh`](../../scripts/phone-server-guardian.sh) | `/data/local/tmp/phone-server-guardian/` | **HIGH**: Android shell permissions | Restarts Termux/Tailscale; restores com.xiaomi.finddevice; NEVER restarts Android. Honors pause marker. |
 | `termux_boot` | Boot & WakeLock Handler | **Boot Trigger** | None (boot receiver) | Boot lifecycle | None | `~/.termux/boot/start-services.sh` | Acquires wake-lock; runs supervisor --ensure | [`scripts/start-services.sh`](../../scripts/start-services.sh) | `$HOME/.termux/boot/start-services.sh` | **LOW**: Boot script | Executed by Termux:Boot and Android JobScheduler on reboot. |
 
 ---
@@ -232,9 +233,13 @@ Authoritative table of all **18 supervisor managed services**, **1 on-demand uti
    - Wallpapers are managed through an admin-only portal section. Themes are extracted via `matugen`.
    - Preparation, verification, and atomic publishing use [`tools/prepare_wallpapers.py`](../../tools/prepare_wallpapers.py) per [`docs/WALLPAPERS.md`](../WALLPAPERS.md).
 
-6. **Xiaomi OS Bootloop Invariant**:
+6. **Xiaomi OS Bootloop Invariant & Phone Guardian Watchdog**:
    - The Nov 20 bootloop incident was resolved by restoring `com.xiaomi.finddevice`. This package is a critical MIUI OS dependency. **Never debloat or disable `com.xiaomi.finddevice`**.
-   - The shell guardian (`phone-server-guardian.sh`) only restarts Termux or Tailscale; it never restarts Android.
+   - **Audit Record (2026-11-20 13:45 IST)**: The live phone guardian was confirmed **inactive** (PID file held stale PID 9242 from Oct 22). It remains inactive until root publication and activation.
+   - **Guardian Logic**: The updated [`scripts/phone-server-guardian.sh`](../../scripts/phone-server-guardian.sh) performs an immediate initial check, then checks `com.xiaomi.finddevice` every 300s via `cmd package list packages -e --user 0 com.xiaomi.finddevice`. If absent or disabled for user 0, it restores and enables it. It restarts Termux or Tailscale; it never restarts Android.
+   - **Planned Laptop USB Rearm**: A laptop-side systemd timer template ([`laptop/phone-guardian.timer`](../../laptop/phone-guardian.timer) invoking [`tools/ensure_phone_guardian.py --ensure`](../../tools/ensure_phone_guardian.py)) runs every 2 minutes while connected via USB ADB, validating and rearming the guardian process under Android shell UID 2000.
+   - **Operational Limitations**: Non-root Android shell UID 2000 processes do not persist across device reboots without an external ADB host trigger. Periodic 300s polling cannot prevent an unrecoverable bootloop if `com.xiaomi.finddevice` is disabled and the phone is rebooted before the next guardian tick.
+   - **Graphify Snapshot Status**: The Graphify knowledge graph (`docs/architecture/graphify-out/`) remains a pre-change baseline snapshot (dated 2026-11-20T13:46:00+05:30) to preserve stability and avoid unnecessary graph bloat for this bounded slice.
 
 ---
 

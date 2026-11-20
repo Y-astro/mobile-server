@@ -127,14 +127,19 @@
     "shell_guardian": {
       "path": "/data/local/tmp/phone-server-guardian.sh",
       "state_dir": "/data/local/tmp/phone-server-guardian",
-      "uid": "shell (independent of Termux)",
+      "uid": "shell (independent of Termux, UID 2000)",
+      "status": "Inactive (audit 2026-11-20 found stale PID 9242 from Oct 22; inactive pending root publication and activation)",
+      "last_audit": "2026-11-20T13:45:00+05:30",
       "monitors": [
         "com.tailscale.ipn",
         "com.termux",
-        "127.0.0.1:8000/healthz"
+        "127.0.0.1:8000/healthz",
+        "com.xiaomi.finddevice (user 0, 300s interval, fail-closed restore)"
       ],
-      "recovery_scope": "Restarts Termux or Tailscale app; NEVER restarts Android OS.",
-      "pause_respect": "Honors /sdcard/.phone-server-paused"
+      "recovery_scope": "Restarts Termux or Tailscale app; restores com.xiaomi.finddevice; NEVER restarts Android OS.",
+      "pause_respect": "Honors /sdcard/.phone-server-paused",
+      "laptop_rearm": "laptop/phone-guardian.timer (every 2min via USB ADB ensure_phone_guardian.py --ensure)",
+      "limitations": "Ephemeral non-root shell process dies on phone reboot; auto-rearms only when USB connected to laptop. Cannot prevent immediate package removal followed by reboot within 300s interval."
     },
     "termux_boot": {
       "path": "$HOME/.termux/boot/start-services.sh",

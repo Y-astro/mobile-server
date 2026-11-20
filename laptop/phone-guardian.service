@@ -1,0 +1,12 @@
+[Unit]
+Description=Ensure phone server guardian is running on connected Redmi K20 Pro
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/repos/mobile-server/tools/ensure_phone_guardian.py --ensure
+TimeoutStartSec=20
+RemainAfterExit=no
+
+[Install]
+WantedBy=default.target

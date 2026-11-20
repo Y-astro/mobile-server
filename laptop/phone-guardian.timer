@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically ensure phone server guardian is running on connected Redmi K20 Pro
+ConditionPathExists=%h/repos/mobile-server/tools/ensure_phone_guardian.py
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=2min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

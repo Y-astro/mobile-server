@@ -1,0 +1,19 @@
+{
+  "device": {
+    "serial": "d7e31d7a",
+    "product": "raphaelin",
+    "required_uid": 2000
+  },
+  "paths": {
+    "repo_script": "scripts/phone-server-guardian.sh",
+    "live_script": "/data/local/tmp/phone-server-guardian.sh",
+    "staged_script": "/data/local/tmp/phone-server-guardian.sh.stage",
+    "state_dir": "/data/local/tmp/phone-server-guardian",
+    "pid_file": "/data/local/tmp/phone-server-guardian/pid",
+    "console_log": "/data/local/tmp/phone-server-guardian-console.log"
+  },
+  "hashes": {
+    "allowed_old_sha256": "a4fe5f29271d250811dcc8473a0af29ff120e6540c5a14ac8ca660a8c01a4bec",
+    "candidate_sha256": "e0cbf9860255cd2ba805ab38e2491eb55a3fac18ac12cd87a9a2dfffabd57e2a"
+  }
+}
