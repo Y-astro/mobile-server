@@ -12,6 +12,12 @@ Phone-side recovery and a private Tailscale-accessible dashboard, FileBrowser, p
 
 See [operations and setup](docs/OPERATIONS.md), [measured performance](docs/PERFORMANCE.md), and [third-party notices](licenses/README.md). Runtime credentials, keys, databases and user files are excluded.
 
+## Architecture map
+
+- System Map & Practical Service Table: [docs/architecture/SYSTEM_MAP.md](docs/architecture/SYSTEM_MAP.md)
+- Navigable Graphify Knowledge Graph: [docs/architecture/graphify-out/](docs/architecture/graphify-out/) (`graph.json`, `GRAPH_REPORT.md`, `graph.html`)
+- Sanitized Live Runtime Snapshot: [docs/architecture/runtime_snapshot.json](docs/architecture/runtime_snapshot.json)
+
 ## Checks
 
 ```sh

@@ -1,0 +1,149 @@
+{
+  "timestamp": "2026-11-20T13:28:31+05:30",
+  "audit_context": "Persistent server architecture map inventory on Redmi K20 Pro via USB SSH",
+  "target_device": {
+    "model": "Redmi K20 Pro (raphaelin)",
+    "os": "Android 11 MIUI 12.5.1",
+    "adb_serial": "d7e31d7a",
+    "termux_uid": 10505,
+    "termux_user": "u0_a505",
+    "termux_home": "/data/data/com.termux/files/home",
+    "termux_prefix": "/data/data/com.termux/files/usr"
+  },
+  "supervisor_state": {
+    "pid": 8075,
+    "paused": false,
+    "supervisor_running": true,
+    "stale": false,
+    "age_seconds": 4.8,
+    "live_supervisor_sha256": "6efb973831e91e65ca33d578fe4cb8d419d3faabf693ebdbf7dda9592fd02760",
+    "source_supervisor_sha256": "6efb973831e91e65ca33d578fe4cb8d419d3faabf693ebdbf7dda9592fd02760",
+    "deployment_manifest_sha256": "286aec0e2e224d3308d6a551d141261b27e674e8590995f2b49379b7b70388cb",
+    "source_to_live_match": true,
+    "deployment_manifest_drift_detected": true
+  },
+  "services": {
+    "ssh": {
+      "state": "healthy",
+      "port": 8022,
+      "protocol": "ssh"
+    },
+    "dashboard": {
+      "state": "healthy",
+      "port": 8001,
+      "probe": "GET /healthz -> 200"
+    },
+    "caddy": {
+      "state": "healthy",
+      "port": 8000,
+      "probe": "GET /healthz -> 200 OK"
+    },
+    "filebrowser": {
+      "state": "healthy",
+      "port": 8085,
+      "probe": "GET /drive/ -> 200"
+    },
+    "transfer_gateway": {
+      "state": "healthy",
+      "port": 8081,
+      "probe": "GET /healthz -> 200"
+    },
+    "adguard": {
+      "state": "healthy",
+      "port": 3000,
+      "probe": "GET / -> 200"
+    },
+    "syncthing": {
+      "state": "disabled",
+      "port": 8384,
+      "reason": "Presence marker in services_disabled/syncthing"
+    },
+    "vaultwarden": {
+      "state": "disabled",
+      "port": 8082,
+      "reason": "Presence marker in services_disabled/vaultwarden"
+    },
+    "terminal": {
+      "state": "disabled",
+      "port": 7681,
+      "reason": "Presence marker in services_disabled/terminal"
+    },
+    "agy": {
+      "state": "healthy",
+      "port": 7682,
+      "probe": "GET /agy/ -> 200"
+    },
+    "laptop_terminal": {
+      "state": "healthy",
+      "port": 7683,
+      "probe": "GET /laptop/ -> 200"
+    },
+    "tor": {
+      "state": "disabled",
+      "port": 9050,
+      "reason": "Presence marker in services_disabled/tor"
+    },
+    "suwayomi": {
+      "state": "healthy",
+      "backend_port": 4569,
+      "probe_endpoint": "http://127.0.0.1:4569/suwayomi/api/graphql",
+      "probe_result": "{\"data\":{\"__typename\":\"Query\"}}",
+      "note": "Listening on 127.0.0.1:4569 with context path /suwayomi. Direct GET / returns 404."
+    },
+    "suwayomi_filter": {
+      "state": "healthy",
+      "port": 4566,
+      "upstream": "http://127.0.0.1:4569",
+      "purpose": "Filters GraphQL queries for Reading category (id: 1) and skips read chapters."
+    },
+    "battery_guard": {
+      "state": "healthy",
+      "status_file": "$HOME/.config/battery_guard/status.json",
+      "status_mtime_fresh": true
+    },
+    "suwayomi_scheduler": {
+      "state": "healthy",
+      "schedule": "00:00 IST daily",
+      "process": "python3 suwayomi_daily_update.py --foreground"
+    },
+    "antra": {
+      "state": "disabled",
+      "queue_db": "$HOME/.local/share/mobile-server/antra/queue.sqlite3",
+      "reason": "Dormant/disabled in services_disabled/antra; preserve intent."
+    },
+    "navidrome": {
+      "state": "healthy",
+      "port": 4533,
+      "container": "Debian PRoot",
+      "probe_endpoint": "GET /music/ping -> 302 Found (redirects to /music/app/)",
+      "sso_header": "Remote-User injected by Caddy based on portal cookie",
+      "libraries": {
+        "default": "Music/Family (shared)",
+        "private": "Music/Astro (Astro only)"
+      }
+    }
+  },
+  "watchdogs": {
+    "shell_guardian": {
+      "path": "/data/local/tmp/phone-server-guardian.sh",
+      "state_dir": "/data/local/tmp/phone-server-guardian",
+      "uid": "shell (independent of Termux)",
+      "monitors": [
+        "com.tailscale.ipn",
+        "com.termux",
+        "127.0.0.1:8000/healthz"
+      ],
+      "recovery_scope": "Restarts Termux or Tailscale app; NEVER restarts Android OS.",
+      "pause_respect": "Honors /sdcard/.phone-server-paused"
+    },
+    "termux_boot": {
+      "path": "$HOME/.termux/boot/start-services.sh",
+      "invoked_by": "Termux:Boot and Android JobScheduler",
+      "action": "termux-wake-lock && python3 server_supervisor.py --ensure"
+    }
+  },
+  "critical_os_invariants": {
+    "com.xiaomi.finddevice": "Restored on Nov 20 to resolve bootloop. MUST NOT BE DEBLOATED OR DISABLED.",
+    "storage_rename_limit": "Android emulated storage rejects atomic directory no-replace renames; single-folder-per-track structure required."
+  }
+}

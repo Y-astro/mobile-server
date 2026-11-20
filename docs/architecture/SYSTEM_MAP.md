@@ -1,0 +1,297 @@
+# Mobile Server Architecture & System Map
+
+Authoritative architectural reference and navigable knowledge map for the Redmi K20 Pro mobile server deployment and its maintained repository source.
+Generated from source AST extraction, configuration contracts, and live verified runtime probes on **2026-11-20T13:28:31+05:30**.
+
+---
+
+## 1. Architectural Overview & System Topologies
+
+The server runs on a dedicated **Xiaomi Redmi K20 Pro (`raphaelin`)** under **Android 11 (MIUI 12.5.1)** within a non-root **Termux** environment (**UID `10505` / `u0_a505`**), backed by an independent **Android shell watchdog** and a **Debian PRoot container**. Ingress traffic is managed by **Caddy** with role-based forward authentication provided by the core **Dashboard**.
+
+### Diagram 1: Ingress, Reverse Proxy & Authentication Routing
+
+```mermaid
+flowchart TD
+    subgraph Clients["Clients & Network Ingress"]
+        Browser["Web Browser (Tailscale / LAN)"]
+        SubsonicClient["Subsonic Native Client (Feishin / Tempus)"]
+        MangaClient["Tachiyomi / Mihon / Tsumiru"]
+        SSHClient["Admin SSH Client"]
+    end
+
+    subgraph CaddyGateway["Caddy Edge Proxy (Ports :8000, :8443, :8444, :4567)"]
+        CaddyHTTP["HTTP Listener :8000"]
+        CaddyHTTPS["HTTPS Listener :8443"]
+        CaddyWealth["Wealth Listener :8444"]
+        CaddyDirect["Suwayomi Client Listener :4567"]
+    end
+
+    subgraph AuthPlane["Authentication Plane"]
+        ForwardAuth["forward_auth /auth/verify"]
+        Dashboard["Dashboard Core :8001 (app/dashboard.py)"]
+        UsersJSON["users.json (PBKDF2 Hashes, 0600)"]
+    end
+
+    subgraph ServiceBackends["Loopback Backend Services (127.0.0.1)"]
+        TransferGW["Transfer Gateway :8081 (gateway/main.go)"]
+        FileBrowser["FileBrowser :8085"]
+        Navidrome["Navidrome :4533 (Debian PRoot)"]
+        SuwayomiFilter["Suwayomi Filter :4566 (scripts/suwayomi_graphql_filter.py)"]
+        SuwayomiBackend["Suwayomi JAR :4569 (scripts/start_suwayomi.sh)"]
+        AdGuard["AdGuard Home :3000 / :5353"]
+        AGY["AGY Terminal :7682 (ttyd + tmux)"]
+        LaptopTerm["Laptop Terminal :7683 (ttyd + ssh)"]
+        LaptopTunnel["Laptop Wealth Tunnel :18930"]
+        SSHDaemon["OpenSSH Daemon :8022"]
+    end
+
+    Browser -->|HTTP / HTTPS| CaddyHTTP
+    Browser -->|HTTPS| CaddyHTTPS
+    CaddyHTTP --> ForwardAuth
+    CaddyHTTPS --> ForwardAuth
+    ForwardAuth -->|Validate Session Cookie| Dashboard
+    Dashboard --> UsersJSON
+
+    ForwardAuth -->|Admin / Family Session| CaddyHTTP
+    CaddyHTTP -->|/drive/*| TransferGW
+    TransferGW -->|Admission Controlled| FileBrowser
+    CaddyHTTP -->|/music/* (Injected Remote-User)| Navidrome
+    CaddyHTTP -->|/suwayomi/* (Admin Only)| SuwayomiBackend
+    CaddyHTTP -->|/adguard/*| AdGuard
+    CaddyHTTP -->|/agy/* (Admin Only)| AGY
+    CaddyHTTP -->|/laptop/* (Admin Only)| LaptopTerm
+
+    SubsonicClient -->|Native Auth Token (No Cookie)| CaddyHTTP
+    MangaClient -->|Direct Sync (No Auth)| CaddyDirect
+    CaddyDirect -->|POST /suwayomi/api/graphql| SuwayomiFilter
+    SuwayomiFilter -->|Filtered Queries| SuwayomiBackend
+    CaddyDirect -->|/suwayomi/* Assets & Covers| SuwayomiBackend
+    CaddyWealth -->|Reverse Proxy| LaptopTunnel
+    SSHClient -->|SSH Key Auth| SSHDaemon
+```
+
+---
+
+### Diagram 2: Process Hierarchy, Watchdogs & Lifecycle Contracts
+
+```mermaid
+flowchart TD
+    subgraph AndroidOS["Android OS Layer (RAPHAELIN / Android 11)"]
+        XiaomiFind["com.xiaomi.finddevice (CRITICAL OS SERVICE - DO NOT DEBLOAT)"]
+        TailscaleApp["com.tailscale.ipn (Tailscale VPN)"]
+        TermuxApp["com.termux (Android App Package, UID 10505)"]
+        JobScheduler["Android JobScheduler"]
+    end
+
+    subgraph ShellWatchdog["Android Shell Watchdog (/data/local/tmp)"]
+        GuardianScript["phone-server-guardian.sh (Runs as shell UID)"]
+        GuardianState["/data/local/tmp/phone-server-guardian/pid"]
+        PauseMarker["/sdcard/.phone-server-paused"]
+    end
+
+    subgraph TermuxBoot["Termux Userspace Boot"]
+        BootScript["~/.termux/boot/start-services.sh"]
+        WakeLock["termux-wake-lock"]
+    end
+
+    subgraph Supervisor["Server Supervisor (scripts/server_supervisor.py)"]
+        SupervisorDaemon["server_supervisor.py --daemon (PID 8075)"]
+        DaemonLock["~/.config/server_recovery/daemon.lock"]
+        ServicesLock["~/.config/server_recovery/services.lock"]
+        DisabledDir["~/.config/services_disabled/"]
+    end
+
+    subgraph ManagedProcesses["Supervised Processes (13 Active, 5 Disabled)"]
+        ActiveProc["Active: sshd, dashboard, caddy, filebrowser, transfer_gateway, adguard, agy, laptop_terminal, suwayomi, suwayomi_filter, battery_guard, suwayomi_scheduler, navidrome"]
+        DisabledProc["Disabled Markers: syncthing, vaultwarden, terminal, tor, antra"]
+    end
+
+    JobScheduler -->|Triggers at boot| BootScript
+    BootScript --> WakeLock
+    BootScript -->|exec python3 server_supervisor.py --ensure| SupervisorDaemon
+
+    GuardianScript -->|Inspects PID & Broadcasts CONNECT_VPN| TailscaleApp
+    GuardianScript -->|Probes GET 127.0.0.1:8000/healthz| CaddyHTTP
+    GuardianScript -->|Cycles Termux on 6 failures| TermuxApp
+    PauseMarker -.->|Suppresses recovery restarts| GuardianScript
+
+    SupervisorDaemon -->|fcntl.flock| DaemonLock
+    SupervisorDaemon -->|fcntl.flock| ServicesLock
+    SupervisorDaemon -->|Inspects flag existence| DisabledDir
+    SupervisorDaemon -->|Launches & monitors| ActiveProc
+    DisabledDir -.->|Skips startup| DisabledProc
+```
+
+---
+
+### Diagram 3: Storage, Libraries & Privacy Boundaries
+
+```mermaid
+flowchart LR
+    subgraph SharedStorage["Android Shared Storage (/storage/emulated/0/)"]
+        SharedRoot["/storage/emulated/0/"]
+        MusicFamily["Music/Family (Shared Default Library)"]
+        MusicAstro["Music/Astro (Private Library - Astro Only)"]
+    end
+
+    subgraph TermuxHome["Termux Home ($HOME = /data/data/com.termux/files/home)"]
+        SuwayomiDownloads["suwayomi/data/downloads (Manga & Covers)"]
+        SuwayomiThumbnails["suwayomi/data/downloads/thumbnails (Cover Cache)"]
+        WallpapersLib["wallpapers/ (Material Palette & Derivatives)"]
+        AntraQueue["~/.local/share/mobile-server/antra/queue.sqlite3"]
+        FileBrowserDB["~/.config/filebrowser/filebrowser.db"]
+    end
+
+    subgraph PRootDebian["Debian PRoot Container ($PREFIX/var/lib/proot-distro/containers/debian)"]
+        NavidromeBin["Navidrome Server Binary"]
+        LibreOfficeBin["Headless LibreOffice Converter"]
+        AGYHistory["/root/.local/state/ (Agent Logs)"]
+    end
+
+    subgraph ExcludedSecrets["Strictly Excluded Secrets (Never in Git / GraphJSON)"]
+        Creds["~/.config/dashboard/users.json (0600)"]
+        SessionKeys["~/.config/dashboard/session.key"]
+        SSHKeys["~/.ssh/authorized_keys & host keys"]
+        LaptopKeys["~/.config/mobile-server-laptop/id_ed25519 (0600)"]
+        CaddyPKI["~/.local/share/caddy/pki/"]
+        AdGuardYAML["~/adguard/data/AdGuardHome.yaml"]
+    end
+
+    NavidromeBin -->|Reads Default| MusicFamily
+    NavidromeBin -->|Reads Astro Profile| MusicAstro
+    FileBrowserDB --> SharedRoot
+    SuwayomiBackend --> SuwayomiDownloads
+    CaddyDirect --> SuwayomiThumbnails
+    Dashboard --> WallpapersLib
+    Dashboard --> Creds
+```
+
+---
+
+## 2. Practical Service & Endpoint Table
+
+Authoritative table of all **18 supervisor managed services**, **1 on-demand utility**, **1 external laptop bridge**, and **2 watchdog layers**.
+
+| Service ID | Display Name & Category | Status (2026-11-20) | Port / Binding | Public Ingress Route | Authentication Plane | Launcher / Process Invocation | Health Probe Criteria | Code / Working Path | Config & Durable Data Paths | Privacy / Secret Level | Update & Restart Instructions |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `dashboard` | Core Web Portal & Auth | **Healthy** (pid 8001) | `127.0.0.1:8001` (HTTP) | `:8000/`, `:8443/` | Session cookie (Admin / Family) | `$PREFIX/bin/python3 -u $PREFIX/bin/dashboard` | `GET /healthz` (supervisor accepts 200, 30x, 401/403) | [`app/dashboard.py`](../../app/dashboard.py), [`app/`](../../app/) | `$HOME/.config/dashboard/users.json`, `notes.json`, `static/` | **CRITICAL**: Holds PBKDF2 user hashes & session signing keys | Update source in repo; deploy via `scripts/install.sh`; restart via `server_supervisor.py --restart dashboard`. |
+| `caddy` | Ingress Reverse Proxy | **Healthy** (pid 8000) | `:8000`, `:8443`, `:8444`, `:4567` | Public edge listeners | None (terminates TLS & enforces forward_auth) | `$PREFIX/bin/caddy run --config $HOME/.config/caddy/Caddyfile` | `GET /healthz` on :8000 (proxies to 8001) | [`config/Caddyfile`](../../config/Caddyfile) | `$HOME/.config/caddy/Caddyfile`, `$HOME/.local/share/caddy/pki/` | **HIGH**: Internal root/intermediate CA private keys | Reload via `caddy reload --config ...` or supervisor restart. |
+| `filebrowser` | Cloud Storage & Media | **Healthy** (pid 8085) | `127.0.0.1:8085` (HTTP) | `:8000/drive/` | Forward auth + FileBrowser token | `$PREFIX/bin/filebrowser -d .../filebrowser.db -a 127.0.0.1 -p 8085 ...` | `GET /drive/` (accepts 200, 30x, 401/403) | Precompiled binary | `$HOME/.config/filebrowser/filebrowser.db`, `fb_config.json` | **HIGH**: Application DB contains user share tokens & metadata | Do not copy DB while running. Restart via `server_supervisor.py`. |
+| `transfer_gateway` | Streaming Admission Proxy | **Healthy** (pid 8081) | `127.0.0.1:8081` (HTTP) | `:8000/drive/` proxy | Forward auth (via Caddy) | `$HOME/bin/mobile-gateway -backend http://127.0.0.1:8085` | `GET /healthz` (accepts 200) | [`gateway/main.go`](../../gateway/main.go) | Stateless admission proxy; no durable DB | **LOW**: Stateless streaming proxy | Rebuild binary via Go toolchain; stage to `.work/mobile-gateway`. |
+| `suwayomi` | Manga Server Backend | **Healthy** (pid 10255) | `127.0.0.1:4569` (HTTP loopback) | `:8000/suwayomi/*` (admin), `:4567/` (direct) | Admin forward auth or direct reader token | `$HOME/bin/start_suwayomi.sh` (Java 21 executing Suwayomi-Server.jar) | `POST /suwayomi/api/graphql` or `GET /suwayomi/` | [`scripts/start_suwayomi.sh`](../../scripts/start_suwayomi.sh) | `$HOME/suwayomi/data/`, `downloads/`, `server.conf` | **MEDIUM**: Downloaded content, reading state | Restart via supervisor; check log in `$HOME/suwayomi/data/logs/`. |
+| `suwayomi_filter` | Manga GraphQL Filter | **Healthy** (pid 10256) | `127.0.0.1:4566` (HTTP) | Direct port :4567 GraphQL route | None (internal transparent proxy) | `$PREFIX/bin/python3 $HOME/bin/suwayomi_graphql_filter.py` | `GET /healthz` (returns 200 OK) | [`scripts/suwayomi_graphql_filter.py`](../../scripts/suwayomi_graphql_filter.py) | Logs: `$HOME/suwayomi/data/logs/graphql_filter.log` | **LOW**: Transparent stream filter | Update Python source in repo; activate via installer. |
+| `suwayomi_scheduler` | Daily Manga Sync | **Healthy** (pid 10262) | None (daemon process) | Internal scheduler | None | `$PREFIX/bin/python3 $HOME/bin/suwayomi_daily_update.py --foreground` | Process match + PID file + held lock | [`scripts/suwayomi_daily_update.py`](../../scripts/suwayomi_daily_update.py) | `$HOME/suwayomi/data/scheduler.pid`, `logs/scheduler_status.json` | **LOW**: Execution logs | Runs daily at 00:00 IST. |
+| `navidrome` | Music Streaming Server | **Healthy** (pid 4533) | `127.0.0.1:4533` (HTTP) | `:8000/music/` | Caddy `Remote-User` header SSO or native token | `$PREFIX/bin/python3 -u $HOME/.local/lib/mobile-server/navidrome.py` | `GET /music/ping` (returns 302 Found) | [`app/navidrome.py`](../../app/navidrome.py), Debian PRoot | `$HOME/.config/navidrome/`, `$HOME/.local/share/navidrome/` | **MEDIUM**: Music metadata & client passwords | Keep metadata during source updates. Restart via supervisor. |
+| `adguard` | Network DNS & Ad-blocker | **Healthy** (pid 3000) | `:3000` (web), `:5353` (DNS) | `:8000/adguard/` | AdGuard internal admin login | `$HOME/adguard/AdGuardHome/AdGuardHome -c .../AdGuardHome.yaml ...` | `GET /` (accepts 200, 30x) | Precompiled binary | `$HOME/adguard/data/AdGuardHome.yaml`, query logs | **HIGH**: Admin password hash & DNS query history | Do not overwrite YAML credentials during updates. |
+| `agy` | Autonomous Agent Shell | **Healthy** (pid 7682) | `127.0.0.1:7682` (ttyd HTTP/WS) | `:8000/agy/` | Admin forward auth | `$PREFIX/bin/ttyd ... -p 7682 -b /agy ... $HOME/bin/agy_session.sh` | `GET /agy/` (accepts 200, 30x) | [`scripts/agy_session.sh`](../../scripts/agy_session.sh) | `$PREFIX/var/run/tmux-10505/default`, Debian `/root/.local/state/` | **HIGH**: Shell session access & command history | Stop runner loops before updating AGY wrappers. |
+| `laptop_terminal` | Laptop Terminal Bridge | **Healthy** (pid 7683) | `127.0.0.1:7683` (ttyd HTTP/WS) | `:8000/laptop/` | Admin forward auth | `$PREFIX/bin/ttyd ... -p 7683 -b /laptop ... laptop_session.py` | `GET /laptop/` (accepts 200, 30x) | [`scripts/laptop_session.py`](../../scripts/laptop_session.py) | `$HOME/.config/mobile-server-laptop/id_ed25519` (0600) | **CRITICAL**: Private SSH key granting shell access to laptop | Retain pairing keys across deployments. |
+| `ssh` | Remote Admin Shell | **Healthy** (pid 8022) | `0.0.0.0:8022` (TCP) | Tailscale / USB / LAN direct | Public key authentication | `$PREFIX/bin/sshd -D` | TCP probe on port 8022 (banner `SSH-`) | Termux OpenSSH package | `$PREFIX/etc/ssh/`, `$HOME/.ssh/authorized_keys` | **CRITICAL**: Root/admin shell access keys | Preserved across global server pauses (`--pause` excludes SSH). |
+| `battery_guard` | Thermal & Power Guard | **Healthy** (daemon) | None (daemon process) | Internal background | None | `$PREFIX/bin/bash $HOME/bin/battery_guard.sh --daemon` | Process match + `$HOME/.config/battery_guard/status.json` mtime < 360s | [`scripts/battery_guard.sh`](../../scripts/battery_guard.sh) | `$HOME/.config/battery_guard/status.json`, logs | **LOW**: Telemetry and voltage logs | Managed by supervisor; restarts automatically. |
+| `syncthing` | Continuous File Sync | **Disabled** (marker) | `127.0.0.1:8384` | Unexposed | Syncthing GUI credentials | `$PREFIX/bin/syncthing serve ...` | `GET /rest/noauth/health` | Termux Syncthing package | `$HOME/.local/state/syncthing/` (`config.xml`, `index-*.db`) | **HIGH**: Sync keys & folder index DB | Marker in `~/.config/services_disabled/syncthing`. Preserve intent. |
+| `vaultwarden` | Password Vault | **Disabled** (marker) | `127.0.0.1:8082` | Unexposed | Bitwarden Master Password | `$PREFIX/bin/proot-distro login debian -- ... vaultwarden` | `GET /alive` | Debian PRoot binary | `$HOME/vaultwarden/data/` (`db.sqlite3`, RSA keys) | **CRITICAL**: Encrypted password vault database | Marker in `~/.config/services_disabled/vaultwarden`. Do not force-enable. |
+| `terminal` | Admin Termux Web Shell | **Disabled** (marker) | `127.0.0.1:7681` | Unexposed | Admin forward auth | `$PREFIX/bin/ttyd ... -p 7681 -b /terminal ... termux_session.sh` | `GET /terminal/` | [`scripts/termux_session.sh`](../../scripts/termux_session.sh) | `$HOME/.config/ttyd/termux_index.html` | **CRITICAL**: Direct raw Termux shell access | Marker in `~/.config/services_disabled/terminal`. Preserve intent. |
+| `tor` | Tor SOCKS Proxy | **Disabled** (marker) | `127.0.0.1:9050` | None (SOCKS5) | None (loopback client) | `$PREFIX/bin/tor -f $HOME/.config/tor/torrc` | SOCKS5 handshake (`\x05\x01\x00` -> `\x05\x00`) | [`config/torrc`](../../config/torrc) | `$HOME/.local/share/mobile-server-tor/` | **MEDIUM**: Onion routing state | Marker in `~/.config/services_disabled/tor`. Preserve intent. |
+| `antra` | Music Downloader | **Disabled** (dormant) | None (worker daemon) | Admin dashboard `/antra/` | Admin role only | `$PREFIX/bin/python3 -u .../antra_worker.py` | Owned worker process | [`app/antra_worker.py`](../../app/antra_worker.py) | `$HOME/.local/share/mobile-server/antra/queue.sqlite3` | **MEDIUM**: Download queue state & provider cookies | Marker in `~/.config/services_disabled/antra`. Preserve intent. |
+| `converter` | Headless PDF Converter | **On-Demand** | None (subprocess batch) | Triggered via dashboard | Admin / Family role | `proot-distro login debian -- libreoffice ... --headless` | Bounded execution (0 MB idle RAM) | [`app/document_conversion.py`](../../app/document_conversion.py) | `$HOME/data/conversions/batch_<id>/` | **LOW**: Temporary scratch conversion files | Ephemeral process; batches cleared after download. |
+| `laptop_bridge` | Wealthfolio Laptop Bridge | **External Bridge** | `127.0.0.1:18930` (tunnel) | `:8444/*` | Laptop reverse tunnel | Laptop reverse SSH tunnel to phone loopback | HTTP probe on :18930 (503 page when offline) | [`config/Caddyfile:217`](../../config/Caddyfile#L217) | No phone-side database; backed by laptop | **LOW**: Proxy tunnel only | Offline fallback handled gracefully by Caddy 503 response. |
+| `phone_guardian`| Android Shell Watchdog | **Active** (shell UID) | None (independent loop) | Internal system monitor | None | `toybox sh /data/local/tmp/phone-server-guardian.sh` | Checks Tailscale & Termux 8000/healthz every 20s | [`scripts/phone-server-guardian.sh`](../../scripts/phone-server-guardian.sh) | `/data/local/tmp/phone-server-guardian/` | **HIGH**: Android shell permissions | Restarts Termux/Tailscale; NEVER restarts Android. Honors pause marker. |
+| `termux_boot` | Boot & WakeLock Handler | **Boot Trigger** | None (boot receiver) | Boot lifecycle | None | `~/.termux/boot/start-services.sh` | Acquires wake-lock; runs supervisor --ensure | [`scripts/start-services.sh`](../../scripts/start-services.sh) | `$HOME/.termux/boot/start-services.sh` | **LOW**: Boot script | Executed by Termux:Boot and Android JobScheduler on reboot. |
+
+---
+
+## 3. Cross-Layer Contracts vs. Observed Live Deployments
+
+### Verified Runtime Observations (2026-11-20 Live Inventory)
+
+1. **Supervisor Hash Alignment & Deployment Manifest Drift**:
+   - The live script at `/data/data/com.termux/files/home/bin/server_supervisor.py` has SHA-256 `6efb973831e91e65ca33d578fe4cb8d419d3faabf693ebdbf7dda9592fd02760`.
+   - This matches the maintained repository file [`scripts/server_supervisor.py`](../../scripts/server_supervisor.py) byte-for-byte.
+   - However, the audited baseline in [`config/deployment-files.json:39-43`](../../config/deployment-files.json#L39-L43) still records an earlier hash (`286aec0e2e224d3308d6a551d141261b27e674e8590995f2b49379b7b70388cb`). Future agent releases must regenerate candidate manifests via [`scripts/release-manifest.py`](../../scripts/release-manifest.py) rather than assuming `deployment-files.json` is fresh.
+
+2. **Suwayomi Port & Routing Architecture**:
+   - **Contract Drift**: Static catalogs list backend port `4569` and client port `4567`. A raw GET on `127.0.0.1:4569/` returns `404 Endpoint GET / not found` because Tachidesk/Suwayomi serves its API under context prefix `/suwayomi`.
+   - **Observed Reality**:
+     - The Java process (`Suwayomi-Server.jar`) binds strictly to `127.0.0.1:4569`. Direct GraphQL queries to `http://127.0.0.1:4569/suwayomi/api/graphql` respond successfully with `{"data":{"__typename":"Query"}}`.
+     - **Port 4567** is bound by **Caddy** (not Java!). Caddy acts as a smart edge router for native clients (Mihon, Tachiyomi, Tsumiru):
+       1. Thumbnail requests (`/suwayomi/api/v1/manga/{id}/thumbnail`) are served directly from disk cache at `$HOME/suwayomi/data/downloads/thumbnails/` via Caddy's `file_server` with immutable 1-year caching.
+       2. GraphQL POST requests (`POST /suwayomi/api/graphql`) are routed to `127.0.0.1:4566` (the Python filter), which enforces Reading Category 1 and skips read chapters.
+       3. All other `/suwayomi*` requests proxy directly to backend `127.0.0.1:4569`.
+
+3. **Navidrome PRoot SSO & Library Separation**:
+   - Navidrome runs inside the Debian PRoot container (`$PREFIX/var/lib/proot-distro/containers/debian/rootfs`).
+   - Caddy injects the `Remote-User` header based on the authenticated portal session (`astro-web` vs `family`).
+   - `Music/Family` is the shared default library. `Music/Astro` is a second, private library with default access disabled for new accounts.
+   - Native Subsonic clients (Feishin, Tempus) connect directly without portal cookies using native credentials. Caddy strips external client proxy headers to prevent spoofing.
+
+4. **Antra Music Storage Limitation**:
+   - Antra is currently dormant and disabled (`services_disabled/antra`).
+   - On this device, Android emulated storage (`/storage/emulated/0/`) rejects atomic directory no-replace renames (`renameat2`). To avoid data loss or unchecked file overwrites, Antra publishes each track inside its own directory. Future maintainers must never replace this logic with a naive file overwrite.
+
+5. **Wallpapers & Appearance Subsystem**:
+   - Wallpapers are managed through an admin-only portal section. Themes are extracted via `matugen`.
+   - Preparation, verification, and atomic publishing use [`tools/prepare_wallpapers.py`](../../tools/prepare_wallpapers.py) per [`docs/WALLPAPERS.md`](../WALLPAPERS.md).
+
+6. **Xiaomi OS Bootloop Invariant**:
+   - The Nov 20 bootloop incident was resolved by restoring `com.xiaomi.finddevice`. This package is a critical MIUI OS dependency. **Never debloat or disable `com.xiaomi.finddevice`**.
+   - The shell guardian (`phone-server-guardian.sh`) only restarts Termux or Tailscale; it never restarts Android.
+
+---
+
+## 4. Path Ownership, Privacy & Namespace Conventions
+
+### Identity & File System Boundaries
+- **Termux UID**: `10505` (`u0_a505`).
+- **Base Paths**: `$HOME` = `/data/data/com.termux/files/home`; `$PREFIX` = `/data/data/com.termux/files/usr`.
+- **Android Shell Watchdog**: Runs as Android `shell` UID in `/data/local/tmp/phone-server-guardian`.
+- **Debian PRoot Rootfs**: `$PREFIX/var/lib/proot-distro/containers/debian/rootfs`.
+
+### Strictly Excluded Sensitive Paths (Never Commit to Git)
+- Credentials & Passwords: `$HOME/.config/dashboard/users.json` (mode 0600), `$HOME/adguard/data/AdGuardHome.yaml`.
+- Session Signing Keys: `$HOME/.config/dashboard/session.key`.
+- SSH & Pairing Keys: `$HOME/.config/mobile-server-laptop/id_ed25519` (mode 0600), `$HOME/.ssh/authorized_keys`, `$PREFIX/etc/ssh/ssh_host_*_key`.
+- TLS Certificates & PKI: `$HOME/.local/share/caddy/pki/`.
+- Private Databases: `$HOME/.config/filebrowser/filebrowser.db`, `$HOME/vaultwarden/data/db.sqlite3`.
+- User Media: `/storage/emulated/0/Music/Astro` (personal music), notes in `$HOME/.config/dashboard/notes.json`.
+
+---
+
+## 5. Future Agent Update & Deployment Instructions
+
+To modify, update, or maintain services on this device, follow these strict rules:
+
+1. **Maintained Source First**:
+   - Author and test all changes in this repository (`/home/astro/repos/mobile-server`).
+   - Never apply uncommitted, ad-hoc edits directly to the phone filesystem.
+
+2. **Verification Suite**:
+   - Run focused unit tests before proposing a release:
+     ```bash
+     python3 -m unittest discover -s tests -p 'test_*.py'
+     ```
+
+3. **Transactional Deployment Preparation**:
+   - Generate candidate manifests using [`scripts/release-manifest.py`](../../scripts/release-manifest.py).
+   - Use [`scripts/install.sh`](../../scripts/install.sh) or [`scripts/release_activation.py`](../../scripts/release_activation.py) to validate manifest hashes and stage transaction bundles.
+
+4. **Phone Publication Boundary**:
+   - Autonomous agents do NOT have permission to write directly to live phone services or trigger live deployments.
+   - Stage release artifacts with SHA-256 checksums and hand off publication to the human root user.
+   - Proposed target path for architecture documentation on the phone: `~/server-architecture/` (mode `0600`, private, never web-served).
+
+---
+
+## 6. Machine-Readable Knowledge Graph & Visualization
+
+The persistent knowledge graph and interactive visualization are generated in [`docs/architecture/graphify-out/`](graphify-out/):
+- **GraphRAG JSON**: [`graphify-out/graph.json`](graphify-out/graph.json) (860 nodes, 1824 edges, machine-queryable via Graphify CLI).
+- **Cluster & Cohesion Report**: [`graphify-out/GRAPH_REPORT.md`](graphify-out/GRAPH_REPORT.md) (56 communities, hub node metrics, surprising connections).
+- **Interactive Visualizer**: [`graphify-out/graph.html`](graphify-out/graph.html) (self-contained HTML visualizer).
+- **Runtime Snapshot**: [`runtime_snapshot.json`](runtime_snapshot.json) (sanitized live probe evidence from 2026-11-20).
+
+To query the knowledge graph using the local Graphify CLI:
+```bash
+graphify god-nodes --graph docs/architecture/graphify-out/graph.json
+graphify path "Service: Caddy (Edge Reverse Proxy)" "Service: Navidrome (Debian PRoot Music)" --undirected --graph docs/architecture/graphify-out/graph.json
+graphify explain "Service: Suwayomi Server (Manga Backend)" --graph docs/architecture/graphify-out/graph.json
+```
