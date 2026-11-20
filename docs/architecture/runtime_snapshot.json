@@ -128,7 +128,7 @@
       "path": "/data/local/tmp/phone-server-guardian.sh",
       "state_dir": "/data/local/tmp/phone-server-guardian",
       "uid": "shell (independent of Termux, UID 2000)",
-      "status": "Inactive (audit 2026-11-20 found stale PID 9242 from Oct 22; inactive pending root publication and activation)",
+      "status": "Active; committed candidate published and scheduled laptop timer rearm verified",
       "last_audit": "2026-11-20T13:45:00+05:30",
       "monitors": [
         "com.tailscale.ipn",
@@ -139,7 +139,13 @@
       "recovery_scope": "Restarts Termux or Tailscale app; restores com.xiaomi.finddevice; NEVER restarts Android OS.",
       "pause_respect": "Honors /sdcard/.phone-server-paused",
       "laptop_rearm": "laptop/phone-guardian.timer (every 2min via USB ADB ensure_phone_guardian.py --ensure)",
-      "limitations": "Ephemeral non-root shell process dies on phone reboot; auto-rearms only when USB connected to laptop. Cannot prevent immediate package removal followed by reboot within 300s interval."
+      "limitations": "Ephemeral non-root shell process dies on phone reboot; auto-rearms only when USB connected to laptop. Cannot prevent immediate package removal followed by reboot within 300s interval.",
+      "verified_at": "2026-11-20T14:12:13+05:30",
+      "guardian_pid": 19930,
+      "candidate_sha256": "502ba5e714254384a2d70b4775c5734068ab4d3417b88de6d4b31071715a62c2",
+      "laptop_timer_enabled": true,
+      "scheduled_rearm_verified": true,
+      "rearm_test": "Terminated only the verified guardian process; normal timer schedule started a new guardian. No phone reboot or critical-app disable."
     },
     "termux_boot": {
       "path": "$HOME/.termux/boot/start-services.sh",

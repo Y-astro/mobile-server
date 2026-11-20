@@ -397,5 +397,35 @@ sys.exit(0)
             self.assertIn("uncommitted changes", str(cm.exception))
 
 
+class TestGuardianShutdownBoundary(unittest.TestCase):
+    def test_shutdown_allows_android_shell_to_finish_sleep(self):
+        from unittest.mock import patch
+        from tools import ensure_phone_guardian as guardian
+        alive_checks = 0
+
+        def shell(adb, serial, command):
+            nonlocal alive_checks
+            output = ""
+            if command.startswith("cat "):
+                output = "12345\n"
+            elif command.startswith("kill -0 "):
+                alive_checks += 1
+                output = "alive\n" if alive_checks <= 13 else ""
+            elif command.startswith("tr "):
+                output = "/system/bin/sh /data/local/tmp/phone-server-guardian.sh"
+            return subprocess.CompletedProcess([], 0, output, "")
+
+        with patch.object(guardian, "run_adb_shell", side_effect=shell), patch.object(guardian.time, "sleep"):
+            guardian.stop_proven_guardian("adb", "test-serial", "/owned/pid", "/data/local/tmp/phone-server-guardian.sh")
+        self.assertGreater(alive_checks, 11)
+
+    def test_same_script_name_in_another_directory_is_not_owned(self):
+        from tools.ensure_phone_guardian import is_verified_guardian_cmdline
+        self.assertFalse(is_verified_guardian_cmdline(
+            "/system/bin/sh /another/phone-server-guardian.sh",
+            "/data/local/tmp/phone-server-guardian.sh",
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -149,20 +149,19 @@ def is_verified_guardian_cmdline(cmdline_str, expected_script_path):
     if not tokens:
         return False
 
-    script_name = Path(expected_script_path).name  # "phone-server-guardian.sh"
     argv0 = tokens[0]
 
     # Direct execution as argv[0]
-    if argv0 == expected_script_path or Path(argv0).name == script_name:
+    if argv0 == expected_script_path:
         return True
 
     # Execution as argument to verified shell: sh <script> or toybox sh <script>
     shell_names = {"sh", "bash", "mksh", "toybox", "/system/bin/sh", "/bin/sh", "/system/bin/toybox"}
     if argv0 in shell_names or Path(argv0).name in {"sh", "bash", "mksh", "toybox"}:
-        if len(tokens) >= 2 and (tokens[1] == expected_script_path or Path(tokens[1]).name == script_name):
+        if len(tokens) >= 2 and tokens[1] == expected_script_path:
             return True
         if len(tokens) >= 3 and tokens[1] in {"sh", "bash", "mksh"}:
-            if tokens[2] == expected_script_path or Path(tokens[2]).name == script_name:
+            if tokens[2] == expected_script_path:
                 return True
 
     return False
@@ -212,7 +211,8 @@ def stop_proven_guardian(adb_bin, target_serial, pid_file, expected_script_path)
         )
 
     run_adb_shell(adb_bin, target_serial, f"kill -TERM {pid}")
-    for _ in range(10):
+    # Android shell may defer its TERM trap until the current 20-second sleep ends.
+    for _ in range(60):
         time.sleep(0.5)
         res_check = run_adb_shell(adb_bin, target_serial, f"kill -0 {pid} 2>/dev/null && echo alive || true")
         if res_check.stdout.strip() != "alive":

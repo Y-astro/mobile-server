@@ -62,3 +62,7 @@ python3 -m unittest tests/test_phone_server_guardian.py tests/test_ensure_phone_
 2. **Disable-and-Reboot Window**: Periodic 300s polling cannot prevent a bootloop if an actor uninstalls or disables `com.xiaomi.finddevice` and immediately reboots the phone before the next guardian tick.
 3. **USB Connection Dependency**: The automatic rearm mechanism depends on an authorized USB connection between the phone and the laptop.
 4. **Target Isolation**: All ADB automation strictly pins serial `d7e31d7a` and refuses to touch secondary devices (e.g. OPPO `SK7L7TDQKNBM9HW4`).
+
+## Verified Deployment (2026-11-20)
+
+The committed guardian is deployed on the Redmi, and the laptop user timer is enabled. A controlled test terminated only the guardian; the next scheduled timer invocation started a new verified guardian. The phone was not rebooted and no critical package was disabled for this test. Recovery after an actual phone reboot remains untested.
