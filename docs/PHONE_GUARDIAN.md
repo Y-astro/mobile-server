@@ -7,7 +7,7 @@ Its primary duties are:
 1. **MIUI FindDevice Watchdog (every 300s)**:
    - Queries `cmd package list packages -e --user 0 com.xiaomi.finddevice`.
    - If missing or disabled, restores via `cmd package install-existing --user 0 com.xiaomi.finddevice` and enables via `cmd package enable --user 0 com.xiaomi.finddevice`.
-   - Prevents `system_server` crash loops (`SecurityManagerService.enforceAppSignature`) and RescueParty bootloops.
+   - Restores this package while Android package manager remains usable; may avert recurrence (subject to the 300s polling interval and boot ephemerality limits).
 2. **Tailscale & Termux Watchdog (every 20s)**:
    - Reconnects Tailscale VPN if absent.
    - Cycles Termux app if port 8000 `/healthz` fails repeatedly.
@@ -15,9 +15,9 @@ Its primary duties are:
 
 ---
 
-## 2. Publication & Deployment Commands (Root Authority)
+## 2. Publication & Deployment Commands (Coordinating Agent Authority)
 
-Per repository contributor rules, root reviews and executes live deployment.
+Per repository contributor rules, "root reviews / root owns live deployment" denotes the coordinating agent holding deployment authority, not requiring Linux root permissions on the host or phone. The deployment helper runs with ordinary ADB authorization (Android shell UID 2000 on device, standard user on laptop).
 
 ### A. Publish & Activate via ADB Helper
 From the repository root on the laptop:
@@ -28,8 +28,9 @@ This command:
 - Verifies that `scripts/phone-server-guardian.sh` matches the committed `HEAD` and manifest sha256.
 - Confirms target serial `d7e31d7a`, product `raphaelin`, and shell UID `2000`.
 - Validates live hash precondition (only reviewed old hash `a4fe5f29...` or candidate allowed).
-- Stops running guardian via proven PID identity (`SIGTERM`).
-- Pushes to `.stage` file, verifies staged sha256, atomically renames to mode `0700`.
+- Pushes candidate to `.stage` file and verifies staged sha256 BEFORE stopping any existing guardian.
+- Stops running guardian only after verified candidate via proven PID identity (`SIGTERM`).
+- Atomically renames staged candidate to live path with mode `0700` (ensuring cleanup on any failure).
 - Launches detached under `nohup` and verifies new running PID.
 
 ### B. Manual Verification on Device

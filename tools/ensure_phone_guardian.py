@@ -37,15 +37,19 @@ def load_manifest():
     return json.loads(MANIFEST_PATH.read_text())
 
 
-def check_device_status(adb_bin, target_serial):
+def check_device_status(adb_bin, target_serial, timeout=10):
     """Check device status from adb devices. Returns 'device', 'unauthorized', etc. or None."""
-    res = subprocess.run(
-        [adb_bin, "devices"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
+    try:
+        res = subprocess.run(
+            [adb_bin, "devices"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return None
     if res.returncode != 0:
         return None
     for line in res.stdout.splitlines():
@@ -55,16 +59,21 @@ def check_device_status(adb_bin, target_serial):
     return None
 
 
-def run_adb_shell(adb_bin, target_serial, command_str):
-    """Execute command in adb shell strictly targeting the configured serial."""
+def run_adb_shell(adb_bin, target_serial, command_str, timeout=10):
+    """Execute command in adb shell strictly targeting the configured serial with timeout."""
     cmd = [adb_bin, "-s", target_serial, "shell", command_str]
-    return subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        # Return synthetic failure on timeout
+        return subprocess.CompletedProcess(cmd, returncode=124, stdout="", stderr=f"Timed out after {timeout}s: {e}")
 
 
 def validate_device_identity(adb_bin, target_serial, expected_product, expected_uid):
@@ -101,6 +110,7 @@ def verify_source_committed(repo_root, rel_script_path, expected_candidate_sha):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
+        timeout=10,
     )
     if git_res.returncode != 0:
         raise RuntimeError(
@@ -127,26 +137,59 @@ def get_live_sha256(adb_bin, target_serial, remote_path):
     return out.split()[0]
 
 
-def get_running_guardian_pid(adb_bin, target_serial, pid_file):
+def is_verified_guardian_cmdline(cmdline_str, expected_script_path):
+    """Verify that process cmdline executes guardian script as argv[0] or argv[1] of verified shell.
+
+    Rejects spoof attempts such as: sh -c 'echo phone-server-guardian.sh'
+    """
+    if "\0" in cmdline_str:
+        tokens = [t for t in cmdline_str.split("\0") if t]
+    else:
+        tokens = cmdline_str.strip().split()
+    if not tokens:
+        return False
+
+    script_name = Path(expected_script_path).name  # "phone-server-guardian.sh"
+    argv0 = tokens[0]
+
+    # Direct execution as argv[0]
+    if argv0 == expected_script_path or Path(argv0).name == script_name:
+        return True
+
+    # Execution as argument to verified shell: sh <script> or toybox sh <script>
+    shell_names = {"sh", "bash", "mksh", "toybox", "/system/bin/sh", "/bin/sh", "/system/bin/toybox"}
+    if argv0 in shell_names or Path(argv0).name in {"sh", "bash", "mksh", "toybox"}:
+        if len(tokens) >= 2 and (tokens[1] == expected_script_path or Path(tokens[1]).name == script_name):
+            return True
+        if len(tokens) >= 3 and tokens[1] in {"sh", "bash", "mksh"}:
+            if tokens[2] == expected_script_path or Path(tokens[2]).name == script_name:
+                return True
+
+    return False
+
+
+def get_running_guardian_pid(adb_bin, target_serial, pid_file, expected_script_path):
     """Return verified running guardian PID, or None."""
     res = run_adb_shell(adb_bin, target_serial, f"cat {pid_file} 2>/dev/null || true")
     pid_str = res.stdout.strip()
     if not pid_str.isdigit():
         return None
     pid = int(pid_str)
+    if pid <= 1:
+        return None
 
     res_alive = run_adb_shell(adb_bin, target_serial, f"kill -0 {pid} 2>/dev/null && echo alive || true")
     if res_alive.stdout.strip() != "alive":
         return None
 
     res_cmd = run_adb_shell(adb_bin, target_serial, f"tr '\\000' ' ' < /proc/{pid}/cmdline 2>/dev/null || true")
-    if "phone-server-guardian.sh" not in res_cmd.stdout:
+    if not is_verified_guardian_cmdline(res_cmd.stdout, expected_script_path):
         return None
 
     return pid
 
 
-def stop_proven_guardian(adb_bin, target_serial, pid_file):
+def stop_proven_guardian(adb_bin, target_serial, pid_file, expected_script_path):
     """Stop guardian process only if proven to match phone-server-guardian.sh."""
     res = run_adb_shell(adb_bin, target_serial, f"cat {pid_file} 2>/dev/null || true")
     pid_str = res.stdout.strip()
@@ -154,16 +197,18 @@ def stop_proven_guardian(adb_bin, target_serial, pid_file):
         return
 
     pid = int(pid_str)
+    if pid <= 1:
+        raise RuntimeError(f"Invalid PID {pid} in {pid_file}; refusing to signal PID <= 1")
+
     res_alive = run_adb_shell(adb_bin, target_serial, f"kill -0 {pid} 2>/dev/null && echo alive || true")
     if res_alive.stdout.strip() != "alive":
         run_adb_shell(adb_bin, target_serial, f"rm -f {pid_file}")
         return
 
     res_cmd = run_adb_shell(adb_bin, target_serial, f"tr '\\000' ' ' < /proc/{pid}/cmdline 2>/dev/null || true")
-    cmdline = res_cmd.stdout.strip()
-    if "phone-server-guardian.sh" not in cmdline:
+    if not is_verified_guardian_cmdline(res_cmd.stdout, expected_script_path):
         raise RuntimeError(
-            f"PID {pid} does not match phone-server-guardian.sh (cmdline: {cmdline!r}); refusing to kill unknown PID"
+            f"PID {pid} does not match verified guardian cmdline (got {res_cmd.stdout.strip()!r}); refusing to kill unknown PID"
         )
 
     run_adb_shell(adb_bin, target_serial, f"kill -TERM {pid}")
@@ -183,7 +228,7 @@ def launch_guardian(adb_bin, target_serial, live_path, console_log, pid_file):
     cmd_launch = f"nohup {live_path} </dev/null >{console_log} 2>&1 &"
     run_adb_shell(adb_bin, target_serial, cmd_launch)
     time.sleep(1)
-    pid = get_running_guardian_pid(adb_bin, target_serial, pid_file)
+    pid = get_running_guardian_pid(adb_bin, target_serial, pid_file, live_path)
     if not pid:
         raise RuntimeError("Failed to verify phone guardian PID after launch")
     return pid
@@ -210,7 +255,7 @@ def handle_ensure(adb_bin, target_serial, manifest):
         )
         return 1
 
-    pid = get_running_guardian_pid(adb_bin, target_serial, paths["pid_file"])
+    pid = get_running_guardian_pid(adb_bin, target_serial, paths["pid_file"], paths["live_script"])
     if pid:
         print(f"Phone server guardian is active and verified (PID {pid}).")
         return 0
@@ -228,7 +273,7 @@ def handle_ensure(adb_bin, target_serial, manifest):
 
 
 def handle_apply(adb_bin, target_serial, manifest):
-    """Apply mode: explicit reviewed publication."""
+    """Apply mode: explicit reviewed publication. Stage+verify first, stop ONLY before atomic mv."""
     status = check_device_status(adb_bin, target_serial)
     if status != "device":
         raise RuntimeError(f"Target device {target_serial} not available (status: {status})")
@@ -251,20 +296,18 @@ def handle_apply(adb_bin, target_serial, manifest):
             f"Precondition failed: live sha256 {live_sha} is not in allowed reviewed hashes {allowed_hashes}"
         )
 
-    # 4. Stop existing guardian if running
-    stop_proven_guardian(adb_bin, target_serial, paths["pid_file"])
-
-    # 5. Staged push
     local_script = str(REPO_ROOT / paths["repo_script"])
     staged_script = paths["staged_script"]
     live_script = paths["live_script"]
 
+    # 4. Stage push and verify BEFORE stopping any existing guardian
     push_res = subprocess.run(
         [adb_bin, "-s", target_serial, "push", local_script, staged_script],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         check=False,
+        timeout=15,
     )
     if push_res.returncode != 0:
         run_adb_shell(adb_bin, target_serial, f"rm -f {staged_script}")
@@ -275,22 +318,29 @@ def handle_apply(adb_bin, target_serial, manifest):
         run_adb_shell(adb_bin, target_serial, f"rm -f {staged_script}")
         raise RuntimeError(f"Staged file sha256 mismatch: got {staged_sha}, expected {hashes['candidate_sha256']}")
 
-    # 6. Atomic rename and chmod
-    rename_res = run_adb_shell(adb_bin, target_serial, f"mv {staged_script} {live_script} && chmod 0700 {live_script}")
-    if rename_res.returncode != 0:
-        run_adb_shell(adb_bin, target_serial, f"rm -f {staged_script}")
-        raise RuntimeError(f"Failed to activate live guardian: {rename_res.stderr}")
+    # Candidate is verified in staging; now proceed to stop, swap, and launch
+    try:
+        # 5. Stop existing guardian if running
+        stop_proven_guardian(adb_bin, target_serial, paths["pid_file"], live_script)
 
-    # 7. Launch and verify
-    new_pid = launch_guardian(
-        adb_bin,
-        target_serial,
-        live_script,
-        paths["console_log"],
-        paths["pid_file"],
-    )
-    print(f"Phone server guardian published and started (PID {new_pid}, SHA256: {hashes['candidate_sha256'][:16]}...).")
-    return 0
+        # 6. Atomic rename and chmod
+        rename_res = run_adb_shell(adb_bin, target_serial, f"mv {staged_script} {live_script} && chmod 0700 {live_script}")
+        if rename_res.returncode != 0:
+            raise RuntimeError(f"Failed to activate live guardian: {rename_res.stderr}")
+
+        # 7. Launch and verify
+        new_pid = launch_guardian(
+            adb_bin,
+            target_serial,
+            live_script,
+            paths["console_log"],
+            paths["pid_file"],
+        )
+        print(f"Phone server guardian published and started (PID {new_pid}, SHA256: {hashes['candidate_sha256'][:16]}...).")
+        return 0
+    finally:
+        # Cleanup staged file if any post-push step failed before or during move
+        run_adb_shell(adb_bin, target_serial, f"rm -f {staged_script}")
 
 
 def main():

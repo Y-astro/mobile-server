@@ -22,6 +22,18 @@ class TestEnsurePhoneGuardian(unittest.TestCase):
         self.calls_file = self.test_dir / "adb_calls.log"
         self.adb_state = self.test_dir / "adb_state.json"
 
+        # Setup fake git wrapper in bin_dir to return current working copy for git show HEAD
+        self.fake_git = self.bin_dir / "git"
+        git_content = f"""#!/bin/sh
+if [ "$1" = "show" ]; then
+    cat "{REPO_ROOT}/scripts/phone-server-guardian.sh"
+    exit 0
+fi
+exec /usr/bin/git "$@"
+"""
+        self.fake_git.write_text(git_content)
+        self.fake_git.chmod(self.fake_git.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
         # Initialize mock state
         self.manifest = json.loads(MANIFEST_FILE.read_text())
         self.target_serial = self.manifest["device"]["serial"]
@@ -33,7 +45,7 @@ class TestEnsurePhoneGuardian(unittest.TestCase):
             "product": "raphaelin",
             "uid": "2000",
             "live_sha": self.candidate_sha,
-            "staged_sha": self.candidate_sha,
+            "staged_sha": "",
             "pid_content": "1234",
             "pid_alive": True,
             "cmdline": "sh /data/local/tmp/phone-server-guardian.sh",
@@ -46,10 +58,12 @@ class TestEnsurePhoneGuardian(unittest.TestCase):
         self.adb_state.write_text(json.dumps(state_dict))
         self._write_fake_adb()
 
+    def _get_mock_state(self):
+        return json.loads(self.adb_state.read_text())
+
     def _write_fake_adb(self):
-        # Python script wrapped as executable shell script for full mocking capability
         content = f"""#!/usr/bin/env python3
-import sys, json, os
+import sys, json, os, hashlib
 
 calls_file = "{self.calls_file}"
 state_file = "{self.adb_state}"
@@ -125,6 +139,12 @@ if subargs[0] == "shell":
         sys.exit(0)
     elif "mv /data/local/tmp/phone-server-guardian.sh.stage" in cmd_str:
         state["live_sha"] = state.get("staged_sha", "")
+        state["staged_sha"] = ""
+        with open(state_file, "w") as f:
+            json.dump(state, f)
+        sys.exit(0)
+    elif "rm -f /data/local/tmp/phone-server-guardian.sh.stage" in cmd_str:
+        state["staged_sha"] = ""
         with open(state_file, "w") as f:
             json.dump(state, f)
         sys.exit(0)
@@ -134,7 +154,14 @@ if subargs[0] == "shell":
         sys.exit(0)
 
 if subargs[0] == "push":
-    state["staged_sha"] = state.get("live_sha", "")
+    if state.get("push_fail", False):
+        sys.stderr.write("Simulated push failure\\n")
+        sys.exit(1)
+    src_file = subargs[1]
+    if os.path.exists(src_file):
+        with open(src_file, "rb") as f:
+            file_hash = hashlib.sha256(f.read()).hexdigest()
+        state["staged_sha"] = state.get("override_staged_sha", file_hash)
     with open(state_file, "w") as f:
         json.dump(state, f)
     sys.exit(0)
@@ -158,33 +185,26 @@ sys.exit(0)
         )
 
     def test_disconnected_noop(self):
-        # Only OPPO is connected, target d7e31d7a is absent
         self._set_mock_state({
             "devices": "SK7L7TDQKNBM9HW4\tdevice\n",
         })
         res = self._run_cli(["--ensure"])
         self.assertEqual(res.returncode, 0)
-        self.assertIn("quiet exit", res.stdout.lower() + res.stderr.lower() + "quiet exit")
-        # Ensure OPPO was never targeted
         if self.calls_file.exists():
             calls = self.calls_file.read_text()
             self.assertNotIn("SK7L7TDQKNBM9HW4", calls)
 
     def test_healthy_ensure_idempotent(self):
-        # Target device is present, matches candidate sha, and PID is running
         res = self._run_cli(["--ensure"])
         self.assertEqual(res.returncode, 0)
         calls = self.calls_file.read_text().splitlines()
-        # Verify all adb calls target serial d7e31d7a
         for call in calls:
             if call.startswith("devices"):
                 continue
             self.assertTrue(call.startswith(f"-s {self.target_serial}"), f"Call did not target serial: {call}")
-        # Verify nohup launch was NOT called because already running
         self.assertFalse(any("nohup" in call for call in calls))
 
     def test_missing_ensure_starts_guardian(self):
-        # Target device present, matches candidate sha, but PID is dead
         self._set_mock_state({
             "devices": f"{self.target_serial}\tdevice\n",
             "product": "raphaelin",
@@ -200,7 +220,6 @@ sys.exit(0)
         self.assertTrue(any("nohup" in call for call in calls))
 
     def test_ensure_never_overwrites_old_or_unknown_live_version(self):
-        # Live sha is old sha
         self._set_mock_state({
             "devices": f"{self.target_serial}\tdevice\n",
             "product": "raphaelin",
@@ -211,13 +230,11 @@ sys.exit(0)
             "cmdline": "",
         })
         res = self._run_cli(["--ensure"])
-        # Should fail and refuse to push or overwrite
         self.assertNotEqual(res.returncode, 0)
         calls = self.calls_file.read_text().splitlines() if self.calls_file.exists() else []
         self.assertFalse(any("push" in call for call in calls))
 
     def test_wrong_precondition_hash_fail_stops_no_push_start(self):
-        # Unknown live hash
         self._set_mock_state({
             "devices": f"{self.target_serial}\tdevice\n",
             "product": "raphaelin",
@@ -233,7 +250,6 @@ sys.exit(0)
         self.assertFalse(any("nohup" in call for call in calls))
 
     def test_unknown_pid_not_killed(self):
-        # Running process has different cmdline
         self._set_mock_state({
             "devices": f"{self.target_serial}\tdevice\n",
             "product": "raphaelin",
@@ -248,6 +264,113 @@ sys.exit(0)
         calls = self.calls_file.read_text().splitlines() if self.calls_file.exists() else []
         self.assertFalse(any("kill -TERM" in call for call in calls))
 
+    def test_apply_complete_success_from_old_hash(self):
+        # Starts with old reviewed hash and active running PID 1234
+        self._set_mock_state({
+            "devices": f"{self.target_serial}\tdevice\n",
+            "product": "raphaelin",
+            "uid": "2000",
+            "live_sha": self.old_sha,
+            "staged_sha": "",
+            "pid_content": "1234",
+            "pid_alive": True,
+            "cmdline": "sh /data/local/tmp/phone-server-guardian.sh",
+        })
+
+        res = self._run_cli(["--apply"])
+        self.assertEqual(res.returncode, 0, f"Expected 0, got {res.returncode}. Stderr: {res.stderr}")
+
+        calls = self.calls_file.read_text().splitlines()
+        # Verify push happened BEFORE kill -TERM
+        push_indices = [i for i, c in enumerate(calls) if "push" in c]
+        term_indices = [i for i, c in enumerate(calls) if "kill -TERM" in c]
+        mv_indices = [i for i, c in enumerate(calls) if "mv /data/local/tmp/phone-server-guardian.sh.stage" in c]
+        launch_indices = [i for i, c in enumerate(calls) if "nohup" in c]
+
+        self.assertTrue(len(push_indices) >= 1)
+        self.assertTrue(len(term_indices) >= 1)
+        self.assertTrue(len(mv_indices) >= 1)
+        self.assertTrue(len(launch_indices) >= 1)
+
+        # Stage push must happen before kill -TERM
+        self.assertLess(push_indices[0], term_indices[0], "Push must happen BEFORE stopping old guardian")
+        # Kill -TERM must happen before mv
+        self.assertLess(term_indices[0], mv_indices[0], "Stopping old guardian must happen before atomic mv")
+
+        final_state = self._get_mock_state()
+        self.assertEqual(final_state["live_sha"], self.candidate_sha)
+        self.assertEqual(final_state["pid_content"], "5678")
+        self.assertTrue(final_state["pid_alive"])
+
+    def test_staged_push_fail_does_not_kill_running_guardian(self):
+        # Running old guardian
+        self._set_mock_state({
+            "devices": f"{self.target_serial}\tdevice\n",
+            "product": "raphaelin",
+            "uid": "2000",
+            "live_sha": self.old_sha,
+            "pid_content": "1234",
+            "pid_alive": True,
+            "cmdline": "sh /data/local/tmp/phone-server-guardian.sh",
+            "push_fail": True,
+        })
+
+        res = self._run_cli(["--apply"])
+        self.assertNotEqual(res.returncode, 0)
+
+        calls = self.calls_file.read_text().splitlines() if self.calls_file.exists() else []
+        self.assertFalse(any("kill -TERM" in c for c in calls), "Push failure must NOT kill running guardian")
+
+        final_state = self._get_mock_state()
+        self.assertTrue(final_state["pid_alive"], "Running guardian must remain alive on push failure")
+
+    def test_staged_bad_sha_does_not_kill_running_guardian(self):
+        # Running old guardian, but staged push results in corrupted hash
+        self._set_mock_state({
+            "devices": f"{self.target_serial}\tdevice\n",
+            "product": "raphaelin",
+            "uid": "2000",
+            "live_sha": self.old_sha,
+            "pid_content": "1234",
+            "pid_alive": True,
+            "cmdline": "sh /data/local/tmp/phone-server-guardian.sh",
+            "override_staged_sha": "corrupted_staged_hash_9999",
+        })
+
+        res = self._run_cli(["--apply"])
+        self.assertNotEqual(res.returncode, 0)
+
+        calls = self.calls_file.read_text().splitlines() if self.calls_file.exists() else []
+        self.assertFalse(any("kill -TERM" in c for c in calls), "Staged hash mismatch must NOT kill running guardian")
+
+        final_state = self._get_mock_state()
+        self.assertTrue(final_state["pid_alive"], "Running guardian must remain alive on staged hash mismatch")
+        self.assertEqual(final_state.get("staged_sha"), "", "Staged file must be cleaned up on failure")
+
+    def test_reject_spoofed_cmdline_and_pid_0_1(self):
+        from tools.ensure_phone_guardian import is_verified_guardian_cmdline, get_running_guardian_pid
+
+        script = "/data/local/tmp/phone-server-guardian.sh"
+
+        # Valid cmdlines
+        self.assertTrue(is_verified_guardian_cmdline("/data/local/tmp/phone-server-guardian.sh", script))
+        self.assertTrue(is_verified_guardian_cmdline("sh /data/local/tmp/phone-server-guardian.sh", script))
+        self.assertTrue(is_verified_guardian_cmdline("/system/bin/sh /data/local/tmp/phone-server-guardian.sh", script))
+        self.assertTrue(is_verified_guardian_cmdline("toybox sh /data/local/tmp/phone-server-guardian.sh", script))
+
+        # Spoofed cmdline: sh -c 'echo phone-server-guardian.sh'
+        self.assertFalse(is_verified_guardian_cmdline("sh -c echo phone-server-guardian.sh", script))
+        self.assertFalse(is_verified_guardian_cmdline("/bin/sh -c 'phone-server-guardian.sh'", script))
+        self.assertFalse(is_verified_guardian_cmdline("grep phone-server-guardian.sh", script))
+
+        # PID 0 and 1 rejection
+        self._set_mock_state({
+            "devices": f"{self.target_serial}\tdevice\n",
+            "pid_content": "1",
+            "pid_alive": True,
+            "cmdline": "sh /data/local/tmp/phone-server-guardian.sh",
+        })
+        self.assertIsNone(get_running_guardian_pid(str(self.fake_adb), self.target_serial, "/data/local/tmp/phone-server-guardian/pid", script))
 
     def test_apply_source_uncommitted_check_fails(self):
         from tools.ensure_phone_guardian import verify_source_committed

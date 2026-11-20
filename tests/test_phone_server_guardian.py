@@ -23,13 +23,27 @@ class TestPhoneServerGuardian(unittest.TestCase):
     def tearDown(self):
         self.tmp_dir.cleanup()
 
-    def _create_fake_cmd(self, list_output="package:com.xiaomi.finddevice\n", exit_code=0):
+    def _create_fake_cmd(
+        self,
+        list_output="package:com.xiaomi.finddevice\n",
+        exit_code=0,
+        install_output="Package com.xiaomi.finddevice installed for user: 0\n",
+        install_code=0,
+        enable_output="Package com.xiaomi.finddevice new state: enabled\n",
+        enable_code=0,
+    ):
         cmd_script = self.bin_dir / "cmd"
         content = f"""#!/bin/sh
 echo "$@" >> "{self.calls_file}"
 if [ "$1" = "package" ] && [ "$2" = "list" ]; then
     printf "{list_output}"
     exit {exit_code}
+elif [ "$1" = "package" ] && [ "$2" = "install-existing" ]; then
+    printf "{install_output}"
+    exit {install_code}
+elif [ "$1" = "package" ] && [ "$2" = "enable" ]; then
+    printf "{enable_output}"
+    exit {enable_code}
 fi
 exit 0
 """
@@ -130,7 +144,7 @@ exit 0
 
     def test_no_other_package_writes(self):
         self._create_fake_service()
-        self._create_fake_cmd(list_output="package:com.xiaomi.other\n", exit_code=0)
+        self._create_fake_cmd(list_output="", exit_code=0)
 
         res = self._run_check()
         self.assertEqual(res.returncode, 0)
@@ -140,6 +154,51 @@ exit 0
             if "install-existing" in call or "enable" in call:
                 self.assertIn("com.xiaomi.finddevice", call)
                 self.assertNotIn("other", call)
+
+    def test_failed_install_existing_propagates_and_skips_enable(self):
+        self._create_fake_service()
+        self._create_fake_cmd(list_output="", exit_code=0, install_output="Failure [INSTALL_FAILED]\n", install_code=1)
+
+        res = self._run_check()
+        self.assertNotEqual(res.returncode, 0, "Failed install must propagate non-zero exit")
+
+        calls = self.calls_file.read_text().splitlines() if self.calls_file.exists() else []
+        self.assertTrue(any("install-existing" in c for c in calls))
+        self.assertFalse(any("enable" in c for c in calls), "Must NOT attempt enable after failed install")
+
+        self.assertTrue(self.log_file.exists())
+        log_content = self.log_file.read_text()
+        self.assertIn("Failed to install-existing com.xiaomi.finddevice", log_content)
+
+    def test_failed_enable_propagates(self):
+        self._create_fake_service()
+        self._create_fake_cmd(list_output="", exit_code=0, install_code=0, enable_output="Error: could not enable\n", enable_code=1)
+
+        res = self._run_check()
+        self.assertNotEqual(res.returncode, 0, "Failed enable must propagate non-zero exit")
+
+        calls = self.calls_file.read_text().splitlines() if self.calls_file.exists() else []
+        self.assertTrue(any("install-existing" in c for c in calls))
+        self.assertTrue(any("enable" in c for c in calls))
+
+        self.assertTrue(self.log_file.exists())
+        log_content = self.log_file.read_text()
+        self.assertIn("Failed to enable com.xiaomi.finddevice", log_content)
+
+    def test_unexpected_nonempty_error_output_fails_closed(self):
+        self._create_fake_service()
+        self._create_fake_cmd(list_output="Error: unexpected framework warning\n", exit_code=0)
+
+        res = self._run_check()
+        self.assertNotEqual(res.returncode, 0, "Unexpected non-empty output must fail-closed")
+
+        calls = self.calls_file.read_text().splitlines() if self.calls_file.exists() else []
+        self.assertFalse(any("install-existing" in c for c in calls), "Must NOT restore on unexpected output")
+        self.assertFalse(any("enable" in c for c in calls))
+
+        self.assertTrue(self.log_file.exists())
+        log_content = self.log_file.read_text()
+        self.assertIn("Package framework query returned unexpected output", log_content)
 
     def test_log_rotation_helper(self):
         self.state_dir.mkdir(parents=True, exist_ok=True)

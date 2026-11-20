@@ -32,10 +32,30 @@ check_finddevice() {
         return 0
     fi
 
+    # Unexpected non-empty query output must fail-closed without attempting restore
+    if [ -n "$pkg_out" ]; then
+        rotate_log_if_needed
+        echo "$(date '+%F %T') Package framework query returned unexpected output: $pkg_out" >> "$STATE/events.log"
+        return 1
+    fi
+
     rotate_log_if_needed
     echo "$(date '+%F %T') OS-critical FindDevice absent or disabled for user 0; restoring" >> "$STATE/events.log"
-    cmd package install-existing --user 0 com.xiaomi.finddevice >> "$STATE/events.log" 2>&1
-    cmd package enable --user 0 com.xiaomi.finddevice >> "$STATE/events.log" 2>&1
+    inst_out=$(cmd package install-existing --user 0 com.xiaomi.finddevice 2>&1)
+    inst_rc=$?
+    if [ $inst_rc -ne 0 ]; then
+        rotate_log_if_needed
+        echo "$(date '+%F %T') Failed to install-existing com.xiaomi.finddevice (exit $inst_rc): $inst_out" >> "$STATE/events.log"
+        return 1
+    fi
+
+    enable_out=$(cmd package enable --user 0 com.xiaomi.finddevice 2>&1)
+    enable_rc=$?
+    if [ $enable_rc -ne 0 ]; then
+        rotate_log_if_needed
+        echo "$(date '+%F %T') Failed to enable com.xiaomi.finddevice (exit $enable_rc): $enable_out" >> "$STATE/events.log"
+        return 1
+    fi
     return 0
 }
 
