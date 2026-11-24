@@ -13,207 +13,242 @@
   </style>
 </head>
 <body class="p-4 sm:p-6 min-h-screen">
+  <svg style="display:none" xmlns="http://www.w3.org/2000/svg"><defs>
+    <symbol id="bolt" viewbox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 10-12h-7z"></path></symbol>
+    <symbol id="home" viewbox="0 0 24 24"><rect height="8" rx="2" width="8" x="3" y="3"></rect><rect height="8" rx="2" width="8" x="13" y="3"></rect><rect height="8" rx="2" width="8" x="3" y="13"></rect><rect height="8" rx="2" width="8" x="13" y="13"></rect></symbol>
+    <symbol id="services" viewbox="0 0 24 24"><rect height="7" rx="2" width="18" x="3" y="3"></rect><rect height="7" rx="2" width="18" x="3" y="14"></rect><path d="M7 6.5h.1M7 17.5h.1M12 6.5h5M12 17.5h5"></path></symbol>
+    <symbol id="wifi" viewbox="0 0 24 24"><path d="M3 8a14 14 0 0 1 18 0M6 12a9 9 0 0 1 12 0M9 16a4.5 4.5 0 0 1 6 0M12 20h.01"></path></symbol>
+    <symbol id="terminal" viewbox="0 0 24 24"><rect height="16" rx="3" width="18" x="3" y="4"></rect><path d="m7 8 4 4-4 4m7 0h3"></path></symbol>
+    <symbol id="palette" viewbox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3 1.5 1.5 0 0 1 1.1-2.7H18a3 3 0 0 0 3-3 9 9 0 0 0-9-9zM7.5 9h.01M11.5 6.5h.01M16.5 8h.01M6.5 13.5h.01"></path></symbol>
+    <symbol id="logout" viewbox="0 0 24 24"><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5m4-12 4 4-4 4m-5-4h12"></path></symbol>
+    <symbol id="battery" viewbox="0 0 24 24"><rect height="10" rx="3" width="18" x="2" y="7"></rect><path d="M22 10v4M11 9l-3 4h4l-1 3"></path></symbol>
+    <symbol id="ram" viewbox="0 0 24 24"><rect height="12" rx="2" width="18" x="3" y="6"></rect><path d="M7 6V3m5 3V3m5 3V3M7 18v3m5-3v3m5-3v3M7 10h3v4H7zm7 0h3v4h-3z"></path></symbol>
+    <symbol id="disk" viewbox="0 0 24 24"><rect height="16" rx="3" width="18" x="3" y="4"></rect><path d="M3 14h18m-5 3h2m-5 0h.01"></path></symbol>
+    <symbol id="cpu" viewbox="0 0 24 24"><rect height="14" rx="2" width="14" x="5" y="5"></rect><rect height="6" rx="1" width="6" x="9" y="9"></rect><path d="M9 2v3m6-3v3m-6 14v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3"></path></symbol>
+    <symbol id="folder" viewbox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></symbol>
+    <symbol id="book" viewbox="0 0 24 24"><path d="M12 6c-3-3-7-3-9-2v15c3-1 6 0 9 2 3-2 6-3 9-2V4c-2-1-6-1-9 2zm0 0v15"></path></symbol>
+    <symbol id="sync" viewbox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5 9a8 8 0 0 1 13-4l2 3M19 15a8 8 0 0 1-13 4l-2-3"></path></symbol>
+    <symbol id="music" viewbox="0 0 24 24"><path d="M9 18V5l11-2v12M9 8l11-2"></path><ellipse cx="6" cy="18" rx="3" ry="2.5"></ellipse><ellipse cx="17" cy="15" rx="3" ry="2.5"></ellipse></symbol>
+    <symbol id="play" viewbox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="m10 8 6 4-6 4z"></path></symbol>
+    <symbol id="file" viewbox="0 0 24 24"><path d="M5 3h9l5 5v13H5zM14 3v6h5M8 13h8m-8 4h6"></path></symbol>
+    <symbol id="arrow" viewbox="0 0 24 24"><path d="M6 18 18 6M8 6h10v10"></path></symbol>
+    <symbol id="sort" viewbox="0 0 24 24"><path d="M4 6h16M4 12h11M4 18h6m8-5v8m-3-3 3 3 3-3"></path></symbol>
+    <symbol id="plus" viewbox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></symbol>
+    <symbol id="close" viewbox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"></path></symbol>
+    <symbol id="copy" viewbox="0 0 24 24"><rect height="12" rx="2" width="12" x="8" y="8"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"></path></symbol>
+    <symbol id="up" viewbox="0 0 24 24"><path d="m6 14 6-6 6 6"></path></symbol>
+    <symbol id="down" viewbox="0 0 24 24"><path d="m6 10 6 6 6-6"></path></symbol>
+    <symbol id="grip" viewbox="0 0 24 24"><path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01" stroke-linecap="round" stroke-width="3.5"></path></symbol>
+  </defs></svg>
 
-  <div class="dashboard-container mx-auto space-y-6">
-    <!-- Header -->
-    <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-white/10">
-      <div class="flex items-center gap-3">
-        <div class="brand-mark">
-          <svg class="w-6 h-6 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-        </div>
-        <div>
-          <div class="flex items-center gap-2">
-            <span class="text-xs font-medium text-secondary">Master Console</span>
-            <span class="m3-badge badge-neutral">Admin &bull; astro</span>
-          </div>
-          <h1 class="text-xl sm:text-2xl font-semibold text-white tracking-tight">K20 Pro Server Manager</h1>
-        </div>
+  <div class="shell dashboard-container mx-auto space-y-6">
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="crumb">
+        <svg class="glyph"><use href="#bolt"/></svg>
+        <span class="mono font-semibold">K20·PRO</span>
+        <span class="sep">/</span>
+        <span>SERVER</span>
+        <span class="chip chip-accent">ADMIN</span>
       </div>
 
-      <div class="flex flex-wrap items-center gap-2.5">
-        <div class="m3-badge badge-neutral flex flex-wrap items-center gap-2">
-          <span>TS: <span id="header-ts-ip" class="mono font-semibold text-accent">100.75.159.53</span></span>
-          <span class="text-muted">&bull;</span>
-          <span>Wi-Fi: <a id="header-local-ip" class="mono font-semibold text-accent hover:underline touch-target" aria-label="Open Wi-Fi website">Detecting…</a></span>
-          <span class="text-muted">&bull;</span>
-          <span>Uptime: <span id="header-uptime" class="mono text-white font-medium">...</span></span>
-        </div>
+      <div class="top-actions">
+        <span class="chip mono">TS: <span id="header-ts-ip" class="mono font-semibold text-accent">100.75.159.53</span></span>
+        <span class="chip mono">Wi-Fi: <a id="header-local-ip" class="mono font-semibold text-accent hover:underline touch-target" aria-label="Open Wi-Fi website">Detecting…</a></span>
         <button id="btn-appearance" type="button" aria-label="Open appearance settings" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5" style="display: none;">
           <svg class="w-4 h-4 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21a4 4 0 01-4-4 4 4 0 014-4c.7 0 1.37.18 1.96.5L18.4 4.07a2.5 2.5 0 013.53 3.53L12.5 17.04A4 4 0 017 21z"></path></svg>
           <span>Appearance</span>
         </button>
-        <button onclick="handleLogout()" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition flex items-center gap-1.5">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
-          <span>Sign Out</span>
+        <div class="user-chip">
+          <span class="avatar">A</span>
+          <span class="mono">astro</span>
+        </div>
+        <button onclick="handleLogout()" class="m3-btn m3-btn-outlined touch-target icon-btn" title="Sign out" aria-label="Sign out">
+          <svg class="glyph"><use href="#logout"/></svg>
         </button>
       </div>
     </header>
 
-    <!-- Telemetry Cards -->
-    <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
-      <!-- Battery -->
-      <div class="m3-card golden-glass-card p-4 rounded-xl flex flex-col justify-between">
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-medium text-soft">Battery</span>
-          <span id="battery-status-badge" class="m3-badge badge-neutral">...</span>
+    <!-- Intro / Overview Header -->
+    <section class="intro" id="overview">
+      <div>
+        <div class="eyebrow">
+          <span class="dot"></span>
+          <span id="telemetry-state">Live telemetry</span>
         </div>
-        <div class="my-3">
-          <div class="flex items-baseline gap-2">
-            <span id="battery-pct" class="text-2xl sm:text-3xl font-semibold text-white mono">...%</span>
-            <span id="battery-temp" class="text-xs mono text-muted">...°C</span>
-          </div>
-          <div class="w-full progress-track mt-2">
-            <div id="battery-bar" class="progress-fill" style="width: 0%"></div>
-          </div>
-        </div>
-        <span class="text-xs text-muted">Hardware UPS &bull; Battery protection</span>
+        <h1>K20 Pro Server Manager</h1>
       </div>
-
-      <!-- RAM -->
-      <div class="m3-card golden-glass-card p-4 rounded-xl flex flex-col justify-between">
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-medium text-soft">RAM memory</span>
-          <span class="text-xs mono text-accent" id="ram-pct">...%</span>
-        </div>
-        <div class="my-3">
-          <div class="flex items-baseline gap-1.5">
-            <span id="ram-used" class="text-2xl sm:text-3xl font-semibold text-white mono">...</span>
-            <span class="text-xs text-muted">/ <span id="ram-total">N/A</span> GB</span>
-          </div>
-          <div class="w-full progress-track mt-2">
-            <div id="ram-bar" class="progress-fill" style="width: 0%"></div>
-          </div>
-        </div>
-        <span class="text-xs text-muted">LPDDR4X high-speed</span>
-      </div>
-
-      <!-- Storage -->
-      <div class="m3-card golden-glass-card p-4 rounded-xl flex flex-col justify-between">
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-medium text-soft">UFS storage</span>
-          <span class="text-xs mono text-accent" id="storage-pct">...%</span>
-        </div>
-        <div class="my-3">
-          <div class="flex items-baseline gap-1.5">
-            <span id="storage-free" class="text-2xl sm:text-3xl font-semibold text-white mono">...</span>
-            <span class="text-xs text-muted">GB free</span>
-          </div>
-          <div class="w-full progress-track mt-2">
-            <div id="storage-bar" class="progress-fill" style="width: 0%"></div>
-          </div>
-        </div>
-        <span class="text-xs text-muted">UFS 2.1 flash</span>
-      </div>
-
-      <!-- CPU -->
-      <div class="m3-card golden-glass-card p-4 rounded-xl flex flex-col justify-between">
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-medium text-soft">Snapdragon 855</span>
-          <span class="text-xs mono text-accent" id="cpu-temp">...°C</span>
-        </div>
-        <div class="my-3">
-          <div class="flex items-baseline gap-2">
-            <span class="text-2xl sm:text-3xl font-semibold text-white">8 Cores</span>
-            <span class="text-xs text-muted">Octa-core</span>
-          </div>
-          <div class="text-xs text-muted mt-1">1x Prime &bull; 3x Gold &bull; 4x Silver</div>
-        </div>
-        <span class="text-xs text-muted">Kryo 485 &bull; Up to 2.84 GHz</span>
+      <div class="uptime">
+        <span>Uptime</span>
+        <b id="header-uptime" class="mono">...</b>
       </div>
     </section>
 
-    <!-- Live Network Monitor -->
-    <section class="m3-card golden-glass-card p-5 rounded-xl space-y-3">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2.5">
-          <div class="service-icon-box">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path></svg>
+    <!-- Telemetry Cards & Live Network Monitor -->
+    <section class="instrument" aria-label="Telemetry">
+      <div class="health" aria-label="Hardware health">
+        <!-- Battery -->
+        <div class="metric m3-card golden-glass-card" data-metric="battery">
+          <div class="metric-head">
+            <div class="metric-title">
+              <svg class="glyph"><use href="#battery"/></svg>
+              <span>Battery</span>
+            </div>
+            <span id="battery-status-badge" class="m3-badge badge-neutral">...</span>
           </div>
-          <div>
-            <h3 class="font-semibold text-white text-sm">Live network & bandwidth monitor</h3>
-            <p class="text-xs text-muted">Measured every 30 seconds; unavailable readings show N/A</p>
+          <div class="metric-val mono">
+            <span id="battery-pct">...%</span>
+            <span id="battery-temp" class="unit">...°C</span>
           </div>
+          <div class="progress-track"><div id="battery-bar" class="progress-fill" style="width: 0%"></div></div>
+          <div class="metric-sub">Battery health &bull; Level monitor</div>
         </div>
-        <span class="flex items-center gap-1.5 m3-badge badge-neutral">
-          <span class="w-2 h-2 rounded-full bg-emerald-400"></span><span id="telemetry-state">Waiting for sample</span>
-        </span>
+
+        <!-- RAM -->
+        <div class="metric m3-card golden-glass-card" data-metric="ram">
+          <div class="metric-head">
+            <div class="metric-title">
+              <svg class="glyph"><use href="#ram"/></svg>
+              <span>RAM memory</span>
+            </div>
+            <span class="metric-chip mono" id="ram-pct">...%</span>
+          </div>
+          <div class="metric-val mono">
+            <span id="ram-used">...</span>
+            <span class="unit">/ <span id="ram-total">N/A</span> GB</span>
+          </div>
+          <div class="progress-track"><div id="ram-bar" class="progress-fill" style="width: 0%"></div></div>
+          <div class="metric-sub">LPDDR4X high-speed</div>
+        </div>
+
+        <!-- Storage -->
+        <div class="metric m3-card golden-glass-card" data-metric="storage">
+          <div class="metric-head">
+            <div class="metric-title">
+              <svg class="glyph"><use href="#disk"/></svg>
+              <span>UFS storage</span>
+            </div>
+            <span class="metric-chip mono" id="storage-pct">...%</span>
+          </div>
+          <div class="metric-val mono">
+            <span id="storage-free">...</span>
+            <span class="unit">GB free</span>
+          </div>
+          <div class="progress-track"><div id="storage-bar" class="progress-fill" style="width: 0%"></div></div>
+          <div class="metric-sub">UFS 2.1 flash</div>
+        </div>
+
+        <!-- CPU -->
+        <div class="metric m3-card golden-glass-card" data-metric="cpu">
+          <div class="metric-head">
+            <div class="metric-title">
+              <svg class="glyph"><use href="#cpu"/></svg>
+              <span>Snapdragon 855</span>
+            </div>
+            <span class="metric-chip mono" id="cpu-temp">...°C</span>
+          </div>
+          <div class="metric-val mono">
+            <span>8 Cores</span>
+            <span class="unit">Octa-core</span>
+          </div>
+          <div class="metric-sub">1x Prime &bull; 3x Gold &bull; 4x Silver</div>
+        </div>
       </div>
 
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
-        <!-- Wi-Fi Link Speed -->
-        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
-          <span class="text-xs font-medium text-muted">Wi-Fi link speed</span>
-          <div class="text-xl font-semibold text-white mt-0.5">
-            <span id="net-wifi-speed" class="mono">N/A</span> <span class="text-xs text-muted">Mbps</span>
+      <!-- Live Network Monitor -->
+      <section class="network" id="network" aria-label="Network monitor">
+        <div class="section-head">
+          <div class="lead">
+            <svg class="glyph"><use href="#wifi"/></svg>
+            <div class="network-heading">
+              <h3>Live network</h3>
+              <p class="small">wlan0 &bull; RSSI measured &bull; Cloudflare ping</p>
+            </div>
           </div>
-          <div class="text-xs text-muted mt-1">Interface: <span class="mono">wlan0</span></div>
-        </div>
-
-        <!-- Signal Strength -->
-        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
-          <span class="text-xs font-medium text-muted">Signal strength</span>
-          <div class="text-xl font-semibold text-white mt-0.5">
-            <span id="net-wifi-rssi" class="mono">N/A</span> <span class="text-xs text-muted">dBm</span>
+          <div class="live">
+            <span class="dot"></span>
+            <span id="telemetry-state-net">Live telemetry</span>
           </div>
-          <div class="text-xs text-positive mt-1 font-medium">Measured RSSI</div>
         </div>
-
-        <!-- WAN Ping (Cloudflare) -->
-        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
-          <span class="text-xs font-medium text-muted">Internet latency</span>
-          <div class="text-xl font-semibold text-white mt-0.5">
-            <span id="net-wan-ping" class="mono">N/A</span> <span class="text-xs text-muted">ms</span>
+        <div class="network-grid">
+          <div class="net">
+            <div class="small">Wi-Fi link</div>
+            <div class="value mono"><span id="net-wifi-speed">N/A</span> <span class="unit">Mbps</span></div>
+            <div class="small text-muted">wlan0</div>
           </div>
-          <div class="text-xs text-muted mt-1">Target: Cloudflare 1.1.1.1</div>
-        </div>
 
-        <!-- DNS Filter Status -->
-        <div class="p-3.5 rounded-lg bg-surface-raised border border-white/5">
-          <span class="text-xs font-medium text-muted">AdGuard DNS</span>
-          <div class="text-xl font-semibold text-white mt-0.5">Port 5353</div>
-          <div class="text-xs text-positive mt-1 font-medium"><span id="adguard-state">Checking interface…</span></div>
+          <div class="net">
+            <div class="small">Signal</div>
+            <div class="value mono"><span id="net-wifi-rssi">N/A</span> <span class="unit">dBm</span></div>
+            <div class="small text-muted">RSSI</div>
+          </div>
+
+          <div class="net">
+            <div class="small">Internet</div>
+            <div class="value mono"><span id="net-wan-ping">N/A</span> <span class="unit">ms</span></div>
+            <div class="small text-muted">1.1.1.1</div>
+          </div>
+
+          <div class="net">
+            <div class="small">AdGuard DNS</div>
+            <div class="value mono" style="font-size: 15px; margin: 6px 0;"><span id="adguard-state">Checking interface…</span></div>
+            <div class="small text-muted">Port 5353</div>
+          </div>
         </div>
-      </div>
+      </section>
     </section>
 
-    <!-- Main Workstation Layout: 2-Column Split on Desktop, Single-Column on Mobile -->
-    <div class="workstation-layout">
-      <!-- Left Column: Core Operations & System Services (fluid flex/grid column) -->
-      <div class="workstation-col">
-        <!-- System Services & Dynamic RAM Manager -->
+    <!-- Main Workstation Layout: 2-Column Split on Desktop, Stacks Responsively -->
+    <div class="work workstation-layout">
+      <!-- Left Column: Core Operations & System Services -->
+      <div class="services workstation-col" id="services">
         <section class="space-y-3">
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div class="section-head">
             <div>
-              <div class="flex items-center gap-2">
-                <h2 class="text-base font-semibold text-white">System services & RAM optimizer</h2>
-                <span class="m3-badge badge-neutral">Dynamic</span>
-              </div>
-              <p class="text-xs text-muted mt-0.5">Control background services and monitor active memory footprint</p>
+              <h2>Workstation services</h2>
+              <span class="sub"><span id="svc-active-mem">-- MB</span> active</span>
             </div>
 
-            <!-- Controls: RAM Summary Pill, Arrange Toggle & Order Reset -->
-            <div class="flex items-center gap-2">
-              <div class="flex items-center gap-1.5 bg-surface-raised border border-white/10 px-3 py-1.5 rounded-lg text-xs text-positive font-medium">
-                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-                <span class="mono" id="svc-active-mem">-- MB</span> <span class="text-muted">active</span>
+            <div class="layout-actions">
+              <div class="column-control">
+                <label for="service-columns">Columns</label>
+                <select id="service-columns" aria-label="Service grid columns">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3" selected>3</option>
+                  <option value="4">4</option>
+                </select>
               </div>
-              <button type="button" id="btn-toggle-arrange" onclick="toggleArrangeServices()" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition" aria-pressed="false" title="Toggle service reordering controls">
-                <span>Arrange services</span>
+              <button type="button" id="btn-toggle-arrange" onclick="toggleArrangeServices()" class="m3-btn m3-btn-outlined touch-target" aria-pressed="false" title="Toggle service reordering controls">
+                <svg class="glyph"><use href="#sort"/></svg>
+                <span>Arrange</span>
               </button>
-              <button type="button" id="btn-reset-service-order" onclick="resetServiceOrder()" class="m3-btn m3-btn-outlined touch-target text-xs text-soft hover:text-white font-medium transition" title="Reset service order to default" style="display: none;">
+              <button type="button" id="btn-reset-service-order" onclick="resetServiceOrder()" class="m3-btn m3-btn-outlined touch-target" title="Reset service order to default" style="display: none;">
                 <span>Reset Order</span>
               </button>
             </div>
           </div>
 
+          <!-- Filter Pills -->
+          <div class="segmented" role="tablist" aria-label="Service filter">
+            <button type="button" class="active" data-filter="all" onclick="setServiceFilter('all')">All</button>
+            <button type="button" data-filter="active" onclick="setServiceFilter('active')">Running</button>
+            <button type="button" data-filter="off" onclick="setServiceFilter('off')">Disabled</button>
+          </div>
+
+          <div class="arrange-hint" id="arrange-hint" hidden>
+            <span>Drag cards by the handle or use Up / Down buttons to rearrange.</span>
+          </div>
+          <div id="reorder-announcer" class="sr-only" role="status" aria-live="polite"></div>
+
           <!-- Services Grid Container -->
-          <div id="services-grid" class="services-subgrid">
+          <div id="services-grid" class="service-list services-subgrid">
             <!-- Live rendered services -->
           </div>
         </section>
 
         <!-- Wealthfolio Card -->
-        <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mt-4">
           <div class="space-y-1">
             <div class="flex items-center gap-2">
               <span class="text-xs font-medium text-muted">Private finance</span>
@@ -224,18 +259,18 @@
           </div>
           <a href="/wealth/" target="_blank" rel="noopener noreferrer" class="m3-btn m3-btn-outlined btn-secondary px-5 py-2 text-xs font-medium flex items-center gap-1.5 shrink-0">
             <span>Unlock Wealthfolio</span>
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+            <svg class="glyph"><use href="#arrow"/></svg>
           </a>
         </div>
 
         <!-- Shared repertoire finder -->
-        <section aria-label="Repertoire Finder" class="m3-card golden-glass-card p-4 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <section aria-label="Repertoire Finder" class="m3-card golden-glass-card p-4 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mt-4">
           <div class="space-y-1"><h3 class="text-base font-semibold text-white">Repertoire Finder</h3><p class="text-xs text-soft">Find compositions by raga, tala, composer, and more.</p></div>
           <a href="/repertoire/" class="m3-btn m3-btn-outlined btn-secondary px-5 py-2 text-xs font-medium shrink-0">Find compositions →</a>
         </section>
 
         <!-- Tor SOCKS Proxy -->
-        <section class="m3-card golden-glass-card p-5 rounded-xl space-y-4">
+        <section class="m3-card golden-glass-card p-5 rounded-xl space-y-4 mt-4">
           <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div class="space-y-1">
               <div class="flex items-center gap-2">
@@ -282,13 +317,18 @@
         </section>
       </div>
 
-      <!-- Right Column: Terminals, Agents & Quick Notes (~340-360px width) -->
-      <div class="workstation-col">
-        <!-- Laptop Terminals Section -->
-        <section class="m3-card golden-glass-card p-5 rounded-xl space-y-3" aria-labelledby="laptop-heading">
+      <!-- Right Column: Terminals, Agents, Quick Notes & Connection Details (~320-360px width) -->
+      <aside class="remote workstation-col" id="remote">
+        <h2 class="sr-only">Remote access</h2>
+        <!-- 1. Laptop Terminals Section -->
+        <section class="remote-card terminal m3-card golden-glass-card p-5 rounded-xl space-y-3" aria-labelledby="laptop-heading">
           <div class="flex flex-col gap-3">
             <div class="flex flex-col gap-3">
               <div class="min-w-0">
+                <div class="remote-tag">
+                  <svg class="glyph"><use href="#terminal"/></svg>
+                  <span>REMOTE &bull; LAPTOP</span>
+                </div>
                 <h2 id="laptop-heading" class="text-base font-semibold text-white">Laptop terminals</h2>
                 <p class="text-xs text-muted mt-0.5">Control Kitty terminal sessions streamed over Tailscale from the laptop.</p>
               </div>
@@ -311,13 +351,13 @@
         <script src="/static/portal-polling.js"></script>
         <script src="/static/laptop.js" defer></script>
 
-        <!-- AGY Agent Instances Section -->
-        <section class="m3-card golden-glass-card p-5 rounded-xl space-y-4" aria-labelledby="agy-heading">
+        <!-- 2. AGY Agent Instances Section -->
+        <section class="remote-card m3-card golden-glass-card p-5 rounded-xl space-y-4" aria-labelledby="agy-heading">
           <div class="flex flex-col gap-3">
             <div class="flex flex-col gap-3">
               <div class="flex items-start gap-2.5 min-w-0">
                 <div class="service-icon-box shrink-0 mt-0.5">
-                  <svg class="w-5 h-5 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                  <svg class="glyph"><use href="#bolt"/></svg>
                 </div>
                 <div class="min-w-0">
                   <div class="flex items-center gap-2 flex-wrap">
@@ -337,7 +377,7 @@
             </div>
             <div>
               <button type="button" id="agy-new" disabled onclick="createNewAgySession()" class="m3-btn m3-btn-filled gold-gradient-btn px-4 py-2 text-xs font-medium flex items-center gap-1.5 select-none shrink-0">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                <svg class="glyph"><use href="#plus"/></svg>
                 <span>New AGY Instance</span>
               </button>
             </div>
@@ -350,12 +390,12 @@
           </div>
         </section>
 
-        <!-- Quick Notes Card -->
-        <div class="m3-card golden-glass-card p-5 rounded-xl space-y-3">
+        <!-- 3. Quick Notes Card -->
+        <div class="remote-card notes-panel m3-card golden-glass-card p-5 rounded-xl space-y-3">
           <div class="flex items-center justify-between pb-3 border-b border-white/5">
             <div class="flex items-center gap-2.5">
               <div class="p-2 rounded-lg bg-surface-raised border border-white/10 text-white">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                <svg class="glyph"><use href="#file"/></svg>
               </div>
               <div>
                 <h3 class="text-sm font-semibold text-white leading-none">Quick notes</h3>
@@ -390,7 +430,32 @@
             ></textarea>
           </div>
         </div>
-      </div>
+
+        <!-- 4. Connection Details -->
+        <section class="connection m3-card golden-glass-card p-5 rounded-xl space-y-3" aria-label="Connection details">
+          <div class="flex items-center justify-between pb-3 border-b border-white/5">
+            <h3 class="text-sm font-semibold text-white leading-none">Connection details</h3>
+            <button type="button" data-copy onclick="copySSH()" class="m3-btn m3-btn-tonal text-xs px-3 py-1.5 touch-target flex items-center gap-1.5">
+              <svg class="glyph"><use href="#copy"/></svg>
+              <span>Copy SSH</span>
+            </button>
+          </div>
+          <div class="conn-list space-y-2 text-xs">
+            <div class="flex items-center justify-between">
+              <span class="text-muted">Tailscale IP</span>
+              <span class="mono font-semibold text-white">100.75.159.53</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-muted">SSH Port</span>
+              <span class="mono text-soft">8022 (Termux)</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-muted">User</span>
+              <span class="mono text-soft">u0_a505</span>
+            </div>
+          </div>
+        </section>
+      </aside>
     </div>
 
     <!-- Footer -->
@@ -406,7 +471,6 @@
   </div>
 
   <script>
-
     function metric(value, suffix = '') {
       return typeof value === 'number' && Number.isFinite(value) ? value + suffix : 'N/A';
     }
@@ -423,18 +487,21 @@
         if (!res.ok) throw new Error('Telemetry unavailable');
         const data = await res.json();
         if (signal && signal.aborted) return;
-        setText('telemetry-state', data.stale ? 'Stale / unavailable' : 'Active sample');
+        setText('telemetry-state', data.stale ? 'Stale / unavailable' : 'Live telemetry');
+        setText('telemetry-state-net', data.stale ? 'Stale' : 'Live telemetry');
         setText('header-ts-ip', data.tailscale_ip);
         const lanLink = document.getElementById('header-local-ip');
-        if (typeof data.local_ip === 'string' && /^(?:[0-9]{1,3}[.]){3}[0-9]{1,3}$/.test(data.local_ip)) {
-          const isHttps = window.location.protocol === 'https:';
-          const port = isHttps ? '8443' : '8000';
-          const scheme = isHttps ? 'https://' : 'http://';
-          lanLink.textContent = data.local_ip + ':' + port;
-          lanLink.href = scheme + data.local_ip + ':' + port + '/';
-        } else {
-          lanLink.textContent = data.local_ip || 'N/A';
-          lanLink.removeAttribute('href');
+        if (lanLink) {
+          if (typeof data.local_ip === 'string' && /^(?:[0-9]{1,3}[.]){3}[0-9]{1,3}$/.test(data.local_ip)) {
+            const isHttps = window.location.protocol === 'https:';
+            const port = isHttps ? '8443' : '8000';
+            const scheme = isHttps ? 'https://' : 'http://';
+            lanLink.textContent = data.local_ip + ':' + port;
+            lanLink.href = scheme + data.local_ip + ':' + port + '/';
+          } else {
+            lanLink.textContent = data.local_ip || 'N/A';
+            lanLink.removeAttribute('href');
+          }
         }
         setText('header-uptime', data.uptime);
         setText('battery-pct', metric(data.battery?.percentage, '%'));
@@ -460,6 +527,7 @@
         setText('telemetry-state', 'Unavailable');
       }
     }
+
     let torEnabled = false;
     async function fetchVPN(signal) {
       try {
@@ -513,10 +581,7 @@
           } else if (typeof fetchVPN === 'function') {
             await fetchVPN();
           }
-        } catch (e) {
-          // preserve approved polling fresh-after-mutation behavior without turning
-          // a successful POST followed by a failed refresh into a false failed-toggle claim
-        }
+        } catch (e) {}
       }
     }
 
@@ -527,13 +592,69 @@
     }
 
     const SERVICE_ORDER_KEY = 'mobile.services.order.v1';
+    const LAYOUT_PREF_KEY = 'k20-v6-layout';
     let lastKnownServices = [];
     let isArrangingServices = false;
+    let currentServiceFilter = 'all';
+
+    function setServiceFilter(filter) {
+      currentServiceFilter = filter;
+      document.querySelectorAll('.segmented [data-filter]').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-filter') === filter);
+      });
+      applyServiceFilter();
+    }
+
+    function applyServiceFilter() {
+      const cards = document.querySelectorAll('#services-grid .svc');
+      cards.forEach(card => {
+        const id = card.getAttribute('data-service-id');
+        const svc = lastKnownServices.find(s => s && s.id === id);
+        if (!svc) return;
+        const isRunning = Boolean(svc.running);
+        if (currentServiceFilter === 'all') {
+          card.style.display = '';
+        } else if (currentServiceFilter === 'active') {
+          card.style.display = isRunning ? '' : 'none';
+        } else if (currentServiceFilter === 'off') {
+          card.style.display = isRunning ? 'none' : '';
+        }
+      });
+    }
+
+    function initColumnControl() {
+      const colSelect = document.getElementById('service-columns');
+      const grid = document.getElementById('services-grid');
+      if (!colSelect || !grid) return;
+      let saved = '3';
+      try {
+        const raw = localStorage.getItem(LAYOUT_PREF_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.columns) saved = String(parsed.columns);
+        }
+      } catch (e) {}
+      colSelect.value = saved;
+      grid.style.setProperty('--columns', saved);
+      colSelect.addEventListener('change', () => {
+        const cols = colSelect.value;
+        grid.style.setProperty('--columns', cols);
+        try {
+          localStorage.setItem(LAYOUT_PREF_KEY, JSON.stringify({ columns: cols }));
+        } catch (e) {}
+      });
+    }
+
+    function announceReorder(msg) {
+      const el = document.getElementById('reorder-announcer');
+      if (el) el.textContent = msg;
+    }
 
     function toggleArrangeServices() {
       isArrangingServices = !isArrangingServices;
       const toggleBtn = document.getElementById('btn-toggle-arrange');
       const resetBtn = document.getElementById('btn-reset-service-order');
+      const hint = document.getElementById('arrange-hint');
       const grid = document.getElementById('services-grid');
       if (toggleBtn) {
         toggleBtn.setAttribute('aria-pressed', isArrangingServices ? 'true' : 'false');
@@ -541,6 +662,10 @@
       }
       if (resetBtn) {
         resetBtn.style.display = isArrangingServices ? 'inline-flex' : 'none';
+      }
+      if (hint) {
+        if (isArrangingServices) hint.removeAttribute('hidden');
+        else hint.setAttribute('hidden', '');
       }
       if (grid) {
         grid.classList.toggle('arranging-services', isArrangingServices);
@@ -606,6 +731,7 @@
       stored[newIdx] = temp;
       saveStoredServiceOrder(stored);
       renderServices(lastKnownServices);
+      announceReorder(`${id} moved to position ${newIdx + 1} of ${stored.length}`);
 
       const targetAction = direction === -1 ? 'move-earlier' : 'move-later';
       const targetCard = document.querySelector(`.m3-card[data-service-id="${id}"]`);
@@ -625,6 +751,7 @@
         localStorage.removeItem(SERVICE_ORDER_KEY);
       } catch (e) {}
       renderServices(lastKnownServices);
+      announceReorder('Service order reset to default');
       const resetBtn = document.getElementById('btn-reset-service-order');
       if (resetBtn) resetBtn.focus();
     }
@@ -704,15 +831,17 @@
       const orderedServices = reconcileServicesOrder(lastKnownServices);
 
       const icons = {
-        'filebrowser': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>',
-        'suwayomi': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>',
-        'vaultwarden': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>',
-        'adguard': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>',
-        'terminal': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>',
-        'agy': '<svg class="w-5 h-5 text-gold" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>',
-        'converter': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>',
-        'syncthing': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>',
-        'battery_guard': '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>'
+        'filebrowser': '<svg class="glyph"><use href="#folder"/></svg>',
+        'suwayomi': '<svg class="glyph"><use href="#book"/></svg>',
+        'vaultwarden': '<svg class="glyph"><use href="#bolt"/></svg>',
+        'adguard': '<svg class="glyph"><use href="#wifi"/></svg>',
+        'terminal': '<svg class="glyph"><use href="#terminal"/></svg>',
+        'agy': '<svg class="glyph"><use href="#bolt"/></svg>',
+        'converter': '<svg class="glyph"><use href="#file"/></svg>',
+        'syncthing': '<svg class="glyph"><use href="#sync"/></svg>',
+        'battery_guard': '<svg class="glyph"><use href="#battery"/></svg>',
+        'navidrome': '<svg class="glyph"><use href="#music"/></svg>',
+        'antra': '<svg class="glyph"><use href="#play"/></svg>'
       };
 
       const existingCards = Array.from(grid.querySelectorAll(':scope > .m3-card[data-service-id]'));
@@ -723,6 +852,11 @@
         orderedServices.forEach((svc, idx) => {
           const card = existingCards[idx];
           const isRunning = svc.running;
+          card.setAttribute('data-state', isRunning ? 'running' : 'stopped');
+          card.classList.toggle('running', isRunning);
+          card.classList.toggle('stopped', !isRunning);
+          const dot = card.querySelector('.dot');
+          if (dot) dot.className = 'dot ' + (isRunning ? 'dot-active' : 'dot-disabled');
           const badgeEl = card.querySelector('.service-status-badge');
           if (badgeEl) {
             badgeEl.textContent = svc.status_badge || (isRunning ? 'Active' : 'Disabled');
@@ -756,6 +890,7 @@
           const nextBtn = card.querySelector('button[data-action="move-later"]');
           if (nextBtn) nextBtn.disabled = (idx === orderedServices.length - 1);
         });
+        applyServiceFilter();
         return;
       }
 
@@ -773,15 +908,14 @@
       const total = orderedServices.length;
       grid.innerHTML = orderedServices.map((svc, idx) => {
         const isRunning = svc.running;
-        const iconSvg = icons[svc.id] || icons['filebrowser'];
-        const badgeClass = isRunning
-          ? 'badge-positive'
-          : 'badge-neutral text-muted';
+        const iconSvg = icons[svc.id] || '<svg class="glyph"><use href="#bolt"/></svg>';
+        const badgeClass = isRunning ? 'badge-positive' : 'badge-neutral text-muted';
         const isFirst = (idx === 0);
         const isLast = (idx === total - 1);
+        const svcState = isRunning ? 'running' : 'stopped';
 
         const toggleHtml = svc.can_toggle ? `
-          <label class="switch m3-switch">
+          <label class="switch m3-switch" aria-label="Toggle ${svc.name}">
             <input type="checkbox" data-action="toggle" ${isRunning ? 'checked' : ''} onchange="toggleService('${svc.id}', this)">
             <span class="slider"></span>
           </label>
@@ -798,55 +932,56 @@
           : '';
 
         const openBtn = `
-          <a href="${svc.open_url}" ${openOnClick} ${svc.open_url.startsWith('http') || svc.open_url.startsWith('/') ? 'target="_blank"' : ''} class="service-open-btn m3-btn m3-btn-filled gold-gradient-btn w-full text-xs font-medium flex items-center justify-center gap-1.5 ${!isRunning && svc.can_toggle ? 'opacity-40 pointer-events-none' : ''}">
+          <a href="${svc.open_url}" ${openOnClick} ${svc.open_url.startsWith('http') || svc.open_url.startsWith('/') ? 'target="_blank"' : ''} class="service-open-btn launch m3-btn m3-btn-filled gold-gradient-btn ${!isRunning && svc.can_toggle ? 'opacity-40 pointer-events-none' : ''}">
             <span>${openBtnLabel}</span>
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+            <svg class="glyph"><use href="#arrow"/></svg>
           </a>
         `;
 
         return `
-          <div class="m3-card golden-glass-card p-5 rounded-xl flex flex-col justify-between gap-4" data-service-id="${svc.id}">
-            <div class="space-y-3">
-              <div class="flex items-start justify-between">
-                <div class="service-icon-box">
-                  ${iconSvg}
-                </div>
-                <div class="flex items-center gap-2">
-                  <span class="service-status-badge px-2 py-0.5 rounded text-xs font-medium ${badgeClass}">
-                    ${svc.status_badge || (isRunning ? 'Active' : 'Disabled')}
-                  </span>
-                  ${toggleHtml}
-                </div>
-              </div>
-              <div>
-                ${svc.category ? `<span class='text-xs font-medium text-muted'>${svc.category}</span>` : ''}
-                <h3 class="font-semibold text-sm text-white mt-0.5">${svc.name}</h3>
-                <p class="service-desc text-xs text-soft mt-1 leading-relaxed">${svc.desc || ''}</p>
-                ${svc.id === 'syncthing' ? `
-                  <div class="mt-2 p-2 rounded-lg bg-surface-raised border border-white/5 text-xs text-soft flex items-center justify-between">
-                    <span class="mono">Sync: PES/Sem3 &harr; PC</span>
-                    <span class="text-accent font-medium">Port 8384</span>
-                  </div>
-                ` : ''}
-              </div>
+          <article class="svc m3-card golden-glass-card ${isRunning ? 'running' : 'stopped'}" data-service-id="${svc.id}" data-id="${svc.id}" data-state="${svcState}">
+            <div class="svc-icon service-icon-box">
+              ${iconSvg}
             </div>
-            <div class="pt-3 border-t border-white/5 flex flex-col gap-2.5">
+            <div>
+              ${svc.category ? `<span class='text-xs font-medium text-muted'>${svc.category}</span>` : ''}
+              <h3 class="svc-title font-semibold text-sm text-white mt-0.5">${svc.name}</h3>
+              <div class="svc-status">
+                <span class="dot ${isRunning ? 'dot-active' : 'dot-disabled'}"></span>
+                <span class="service-status-badge ${badgeClass}">${svc.status_badge || (isRunning ? 'Active' : 'Disabled')}</span>
+              </div>
+              <p class="service-desc text-xs text-soft mt-1 leading-relaxed">${svc.desc || ''}</p>
+              ${svc.id === 'syncthing' ? `
+                <div class="mt-2 p-2 rounded-lg bg-surface-raised border border-white/5 text-xs text-soft flex items-center justify-between">
+                  <span class="mono">Sync: PES/Sem3 &harr; PC</span>
+                  <span class="text-accent font-medium">Port 8384</span>
+                </div>
+              ` : ''}
+            </div>
+            <div class="svc-actions">
               ${openBtn}
-              <div class="service-order-row flex items-center justify-between text-xs text-muted pt-1">
-                <span>Order</span>
-                <div class="service-order-actions flex items-center gap-1.5" role="group" aria-label="Reorder ${svc.name}">
-                  <button type="button" class="service-order-btn touch-target" data-action="move-earlier" onclick="moveService('${svc.id}', -1)" aria-label="Move ${svc.name} earlier" ${isFirst ? 'disabled' : ''}>
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
-                  </button>
-                  <button type="button" class="service-order-btn touch-target" data-action="move-later" onclick="moveService('${svc.id}', 1)" aria-label="Move ${svc.name} later" ${isLast ? 'disabled' : ''}>
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
-                  </button>
-                </div>
+              <div class="svc-ctrl">
+                ${toggleHtml}
               </div>
             </div>
-          </div>
+            <div class="service-order-row reorder" role="group" aria-label="Reorder ${svc.name}">
+              <button type="button" class="drag-handle touch-target" data-drag aria-label="Drag to reorder ${svc.name}" title="Drag to reorder">
+                <svg class="glyph"><use href="#grip"/></svg>
+              </button>
+              <div class="service-order-actions flex items-center gap-1.5">
+                <button type="button" class="service-order-btn touch-target" data-action="move-earlier" data-up onclick="moveService('${svc.id}', -1)" aria-label="Move ${svc.name} earlier" ${isFirst ? 'disabled' : ''}>
+                  <svg class="glyph"><use href="#up"/></svg>
+                </button>
+                <button type="button" class="service-order-btn touch-target" data-action="move-later" data-down onclick="moveService('${svc.id}', 1)" aria-label="Move ${svc.name} later" ${isLast ? 'disabled' : ''}>
+                  <svg class="glyph"><use href="#down"/></svg>
+                </button>
+              </div>
+            </div>
+          </article>
         `;
       }).join('');
+
+      applyServiceFilter();
 
       if (activeServiceId && activeAction) {
         const card = grid.querySelector(`.m3-card[data-service-id="${activeServiceId}"]`);
@@ -855,6 +990,49 @@
           if (el && !el.disabled) el.focus();
         }
       }
+    }
+
+    function initDragAndDrop() {
+      const grid = document.getElementById('services-grid');
+      if (!grid) return;
+      let draggedCard = null;
+
+      grid.addEventListener('pointerdown', (e) => {
+        if (!isArrangingServices) return;
+        const handle = e.target.closest('[data-drag]');
+        if (!handle) return;
+        const card = handle.closest('.svc');
+        if (!card) return;
+        draggedCard = card;
+        card.classList.add('drag-ghost');
+        try { card.setPointerCapture(e.pointerId); } catch (err) {}
+      });
+
+      grid.addEventListener('pointermove', (e) => {
+        if (!draggedCard) return;
+        const targetCard = document.elementFromPoint(e.clientX, e.clientY)?.closest('.svc');
+        if (targetCard && targetCard !== draggedCard && targetCard.parentNode === grid) {
+          const rect = targetCard.getBoundingClientRect();
+          const mid = rect.top + rect.height / 2;
+          if (e.clientY < mid) {
+            grid.insertBefore(draggedCard, targetCard);
+          } else {
+            grid.insertBefore(draggedCard, targetCard.nextSibling);
+          }
+        }
+      });
+
+      const endDrag = () => {
+        if (!draggedCard) return;
+        draggedCard.classList.remove('drag-ghost');
+        const newOrder = Array.from(grid.querySelectorAll('.svc')).map(c => c.getAttribute('data-service-id')).filter(Boolean);
+        saveStoredServiceOrder(newOrder);
+        announceReorder(`Service reordered to position ${newOrder.indexOf(draggedCard.getAttribute('data-service-id')) + 1}`);
+        draggedCard = null;
+      };
+
+      grid.addEventListener('pointerup', endDrag);
+      grid.addEventListener('pointercancel', endDrag);
     }
 
     function openVaultHTTPS() {
@@ -938,7 +1116,7 @@
 
     function getModalFocusableElements(modal) {
       if (!modal) return [];
-      const selector = 'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+      const selector = 'button:not([disabled]), a[href], area[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
       return Array.from(modal.querySelectorAll(selector)).filter(el => {
         if (el.disabled) return false;
         if (el.offsetParent === null && el.offsetWidth === 0 && el.offsetHeight === 0) return false;
@@ -1030,7 +1208,7 @@
                   </div>
                 </div>
                 <button type="button" onclick="removeConvertFile(${idx})" aria-label="Remove ${escapeHtml(file.name)}" class="touch-target p-1 rounded text-muted hover:text-red-400 hover:bg-red-500/10 transition shrink-0 ml-2">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 18L18 6M6 6l12 12"></path></svg>
+                  <svg class="glyph"><use href="#close"/></svg>
                 </button>
               </div>
             `;
@@ -1089,7 +1267,6 @@
           }
         });
       }
-      // Keyboard focus trap & Escape dismissal
       document.addEventListener('keydown', (e) => {
         const modal = document.getElementById('converter-modal');
         if (!modal || modal.classList.contains('hidden')) return;
@@ -1190,8 +1367,8 @@
         const text = textarea.value;
         const lineStart = text.lastIndexOf(String.fromCharCode(10), start - 1) + 1;
         const currentLine = text.substring(lineStart, start);
-        const bulletMatch = currentLine.match(/^([ 	]*)([-•*])[ 	]+/);
-        const numberMatch = currentLine.match(/^([ 	]*)([0-9]+)\.[ 	]+/);
+        const bulletMatch = currentLine.match(/^([ \t]*)([-•*])[ \t]+/);
+        const numberMatch = currentLine.match(/^([ \t]*)([0-9]+)\.[ \t]+/);
 
         if (bulletMatch) {
           e.preventDefault();
@@ -1274,7 +1451,7 @@
           lastSavedNotes = textarea.value;
           autoResizeNotes(textarea);
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) {}
     }
 
     async function executeConversion() {
@@ -1379,7 +1556,7 @@
               <div class="flex items-center gap-2 flex-wrap">
                 <a data-agy-url="${openUrl}" ${window.agyServiceRunning === false ? '' : `href="${openUrl}"`} target="_blank" rel="noopener noreferrer" class="m3-btn m3-btn-tonal text-xs font-medium flex items-center gap-1.5 ${window.agyServiceRunning === false ? 'opacity-40 pointer-events-none' : ''}" ${window.agyServiceRunning === false ? 'aria-disabled="true"' : ''}>
                   <span>Open / Reconnect</span>
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                  <svg class="glyph"><use href="#arrow"/></svg>
                 </a>
                 ${isPrimary ? `
                   <span class="px-3 py-1.5 rounded-md text-xs text-muted font-medium select-none">Protected</span>
@@ -1456,7 +1633,6 @@
       servicesLoop = window.PortalPolling.createPolling((signal) => fetchServices(signal), 4000, { name: 'services' });
       agyLoop = window.PortalPolling.createPolling((signal) => fetchAgySessions(signal), 5000, { name: 'agy' });
     } else {
-      // Degraded static fallback: execute bounded initial sample without unmanaged recurring intervals
       const pollText = document.querySelector('footer .mono');
       if (pollText) pollText.textContent = 'Manual refresh mode';
       const fallbackCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -1474,6 +1650,8 @@
 
     document.addEventListener('DOMContentLoaded', () => {
       initConverter();
+      initColumnControl();
+      initDragAndDrop();
       const textarea = document.getElementById('user-notes-input');
       if (textarea) {
         textarea.addEventListener('input', () => {
@@ -1484,18 +1662,16 @@
       }
       loadNotes();
     });
-  
   </script>
 
   <!-- Document to PDF Converter Modal -->
   <div id="converter-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title-admin">
     <div class="m3-card golden-glass max-w-lg w-full p-5 sm:p-6 rounded-xl space-y-4 relative max-h-[90vh] flex flex-col justify-between">
-
       <!-- Modal Header -->
       <div class="flex items-start justify-between">
         <div class="flex items-center gap-2.5">
           <div class="service-icon-box">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+            <svg class="glyph"><use href="#file"/></svg>
           </div>
           <div>
             <h3 id="modal-title-admin" class="text-base font-semibold text-white">Document to PDF</h3>
@@ -1503,7 +1679,7 @@
           </div>
         </div>
         <button onclick="closeConverterModal()" aria-label="Close converter dialog" class="touch-target text-muted hover:text-white p-2 rounded-lg hover:bg-white/5 transition">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M6 18L18 6M6 6l12 12"></path></svg>
+          <svg class="glyph"><use href="#close"/></svg>
         </button>
       </div>
 
@@ -1559,9 +1735,7 @@
           Convert & Download PDF
         </button>
       </div>
-
     </div>
   </div>
-
 </body>
 </html>

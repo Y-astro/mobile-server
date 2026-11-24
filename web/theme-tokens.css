@@ -54,17 +54,27 @@
   --md-shape-corner-extra-large: 24px;
   --md-shape-corner-full: 9999px;
 
-  /* --- Backward Compatibility Aliases --- */
+  /* --- Expressive Workbench & Backward Compatibility Aliases --- */
   --bg: var(--md-sys-color-surface);
   --bg2: var(--md-sys-color-surface-container-low);
   --surface: var(--md-sys-color-surface-container);
   --surface-2: var(--md-sys-color-surface-container-high);
   --surface-3: var(--md-sys-color-surface-container-highest);
-  --line: var(--md-sys-color-outline-variant);
-  --line-subtle: #272c2d;
+  --low: var(--md-sys-color-surface-container-low);
+  --high: var(--md-sys-color-surface-container-high);
+  --highest: var(--md-sys-color-surface-container-highest);
+  --text: var(--md-sys-color-on-surface);
   --text-primary: var(--md-sys-color-on-surface);
   --text-secondary: var(--md-sys-color-on-surface-variant);
+  --muted: var(--md-sys-color-on-surface-variant);
   --text-muted: var(--md-sys-color-outline);
+  --line: var(--md-sys-color-outline-variant);
+  --line-subtle: #272c2d;
+  --accent: var(--md-sys-color-primary);
+  --onaccent: var(--md-sys-color-on-primary);
+  --accentbox: var(--md-sys-color-primary-container);
+  --onbox: var(--md-sys-color-on-primary-container);
+  --green: var(--md-sys-color-positive);
   --teal: var(--md-sys-color-primary);
   --teal-deep: var(--md-sys-color-primary-container);
   --teal-ink: var(--md-sys-color-on-primary);
@@ -81,4 +91,6 @@
   --app-panel-alpha: 0.65;
   --app-tint-alpha: 0.78;
   --app-wallpaper-image: none;
+  --glass: calc(var(--app-panel-alpha, 0.65) * 100%);
+  --blur: var(--app-blur, 15px);
 }

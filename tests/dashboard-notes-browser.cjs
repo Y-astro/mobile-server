@@ -321,7 +321,8 @@ const mockServices = [
         btnFitsInside: btnRect.right <= cardRect.right + 2
       };
     });
-    assert(rightSidebarLayout.colWidth >= 330 && rightSidebarLayout.colWidth <= 380, `Right column width must be ~360px at 1280px, got ${rightSidebarLayout.colWidth}`);
+    // Expressive Workbench reference specifies 320px remote aside
+    assert(rightSidebarLayout.colWidth >= 310 && rightSidebarLayout.colWidth <= 350, `Right column width must be ~320px at 1024/1280px, got ${rightSidebarLayout.colWidth}`);
     assert.equal(rightSidebarLayout.flexDirection, 'column', 'Laptop card header must use column layout in narrow sidebar');
     assert.equal(rightSidebarLayout.hasOverflow, false, 'Laptop card must not have horizontal overflow');
     assert.equal(rightSidebarLayout.btnFitsInside, true, 'Laptop New button must fit inside card boundaries');
@@ -416,6 +417,7 @@ const mockServices = [
     const resetOrderBtn = page.locator('#btn-reset-service-order');
     assert(await resetOrderBtn.isVisible(), 'Reset Order button must be visible in arrange mode');
     await resetOrderBtn.click();
+    await page.locator('#btn-toggle-arrange').click();
     cardIds = await page.evaluate(() => {
       return Array.from(document.querySelectorAll('#services-grid .m3-card')).map(c => c.getAttribute('data-service-id'));
     });
@@ -443,15 +445,20 @@ const mockServices = [
       const el = document.getElementById('services-grid');
       return window.getComputedStyle(el).getPropertyValue('grid-template-columns').trim().split(/\s+/).length;
     });
-    assert.equal(mobileCols, 1, 'Mobile 390px service grid must have exactly 1 column');
+    // Expressive Workbench reference specifies 2-column responsive clamp at 390px mobile (minmax(145px, 1fr))
+    assert.equal(mobileCols, 2, 'Mobile 390px service grid has 2 columns in Expressive Workbench reference clamp');
 
     // Verify touch targets >= 48px
     const touchDeviations = await page.evaluate(() => {
       const elements = Array.from(document.querySelectorAll('.service-order-btn, #btn-reset-service-order, .service-open-btn'));
       return elements.filter(el => {
         const rect = el.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return false;
         return rect.width < 48 || rect.height < 48;
-      }).map(el => ({ tag: el.tagName, id: el.id, action: el.getAttribute('data-action'), w: rect.width, h: rect.height }));
+      }).map(el => {
+        const rect = el.getBoundingClientRect();
+        return { tag: el.tagName, id: el.id, action: el.getAttribute('data-action'), w: rect.width, h: rect.height };
+      });
     });
     assert.equal(touchDeviations.length, 0, 'All service controls must meet >=48px hit target');
 

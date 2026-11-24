@@ -43,11 +43,11 @@
 
 **Interfaces:** Preserve the existing telemetry IDs, `services-grid`, `data-service-id`, `data-action`, session containers, notes controls, and current public action functions. Reuse existing `/api/stats`, `/api/services`, toggle, notes, AGY and laptop endpoints. No new backend API is required for this visual stage.
 
-- [ ] Establish the existing relevant browser baseline and add failing assertions for the new header, instrument grouping, desktop service/tools split, responsive columns, service filters, and role-specific controls.
-- [ ] Implement the reference surfaces, SVG glyph treatment, typography, grid geometry, and Matugen token mappings in shared styles.
-- [ ] Adapt both account templates, preserving all current actions and role differences. Keep one AGY panel with multiple sessions, one laptop panel, and the permitted notes interface.
-- [ ] Integrate filtering/column preferences and accessible arrangement with stored order and polling; do not replace live behavior with prototype mocks.
-- [ ] Run layout, toggle error/403, persistence, keyboard, mobile overflow, and account-boundary checks on the actual templates. Capture representative admin/family screenshots, review, and commit.
+- [x] Establish the existing relevant browser baseline and add failing assertions for the new header, instrument grouping, desktop service/tools split, responsive columns, service filters, and role-specific controls.
+- [x] Implement the reference surfaces, SVG glyph treatment, typography, grid geometry, and Matugen token mappings in shared styles.
+- [x] Adapt both account templates, preserving all current actions and role differences. Keep one AGY panel with multiple sessions, one laptop panel, and the permitted notes interface.
+- [x] Integrate filtering/column preferences and accessible arrangement with stored order and polling; do not replace live behavior with prototype mocks.
+- [x] Run layout, toggle error/403, persistence, keyboard, mobile overflow, and account-boundary checks on the actual templates. Capture representative admin/family screenshots, review, and commit.
 
 ## Task 3: Login, dialogs, and portal-owned service pages
 

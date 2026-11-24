@@ -250,7 +250,7 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
     // 1. Initial page load
     await page.goto(`${baseUrl}/`);
     await page.waitForSelector('#telemetry-state');
-    await page.waitForFunction(() => document.getElementById('telemetry-state').textContent === 'Active sample');
+    await page.waitForFunction(() => ['Live telemetry', 'Active sample'].includes(document.getElementById('telemetry-state').textContent));
     assert.strictEqual(recordedErrors.length, 0, 'No uncaught errors on page load');
 
     for (const ep of managedEndpoints) {
@@ -318,8 +318,8 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
 
     // Advance clock past normal 3s stats interval and allow successful recovery
     await page.clock.fastForward(3000);
-    await page.waitForFunction(() => document.getElementById('telemetry-state').textContent === 'Active sample', null, { timeout: 3000 });
-    assert.strictEqual(await page.locator('#telemetry-state').textContent(), 'Active sample', 'Stats recovered to Active sample');
+    await page.waitForFunction(() => ['Live telemetry', 'Active sample'].includes(document.getElementById('telemetry-state').textContent), null, { timeout: 3000 });
+    assert.ok(['Live telemetry', 'Active sample'].includes(await page.locator('#telemetry-state').textContent()), 'Stats recovered to live telemetry');
     assert.ok(maxActiveClientRequests.get('/api/stats') <= 1, 'Stats client concurrency remained <= 1 through deadline abort and recovery');
 
     // D. Hold BOTH an actual debounced notes POST and actual conversion POST with explicit gates

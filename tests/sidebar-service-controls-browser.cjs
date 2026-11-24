@@ -252,7 +252,8 @@ const initialMockServices = [
       const col = document.querySelectorAll('.workstation-col')[1];
       return col.getBoundingClientRect().width;
     });
-    assert(rightColWidth >= 330 && rightColWidth <= 380, `Right column width should be ~340-360px at 1280px, got ${rightColWidth}`);
+    // Expressive Workbench reference specifies 320px remote aside
+    assert(rightColWidth >= 310 && rightColWidth <= 350, `Right column width should be ~320px at 1280px, got ${rightColWidth}`);
     const noOverflow1280 = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
     assert(noOverflow1280, '1280px viewport must have 0 horizontal overflow');
 
