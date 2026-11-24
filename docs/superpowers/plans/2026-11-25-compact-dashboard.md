@@ -13,3 +13,7 @@ The user asked for denser laptop/AGY dashboard panels and identified the top hea
 Two AGY High attempts produced partial panel edits but stopped on headless permissions and then quota exhaustion. Root inspected the partial changes, removed the scratch test from source, completed the reference corrections, and owns verification and deployment. No native application interfaces are included in this follow-up.
 
 The root audit ledger and before/after screenshots remain outside Git in `/home/astro/server-audit/2026-11-24/expressive-redesign/`. Live publication evidence will be appended to the deployment report after successful activation.
+
+## Completed publication
+
+Committed source `804c875d7e72` was activated as `act_44783c524b6d`: four replacements, 58 untouched entries, dashboard restart only. Root verified all 62 hashes, disabled-marker metadata, preserved process identities, both role boundaries, actual browser layouts and served CSS/JS bytes. The deployment report records test counts, live geometry and limits.

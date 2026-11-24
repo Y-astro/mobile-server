@@ -305,7 +305,7 @@ graphify explain "Service: Suwayomi Server (Manga Backend)" --graph docs/archite
 
 ## 7. Current UI Ownership and Release (2026-11-25)
 
-The expressive redesign is live from source commit `11def743320a185b1a1433056b277a7af1603ee5`, transaction `act_e9558e013ace` (`COMPLETED`). All 62 manifest destinations matched after activation: 13 replacements and 49 untouched entries. Dashboard and laptop terminal restarted; the supervisor refreshed its catalog. Caddy, the exact gateway binary, and all observed Suwayomi/AdGuard process identities were preserved.
+The initial expressive redesign was activated from source commit `11def743320a185b1a1433056b277a7af1603ee5`, transaction `act_e9558e013ace` (`COMPLETED`). All 62 manifest destinations matched after activation: 13 replacements and 49 untouched entries. Dashboard and laptop terminal restarted; the supervisor refreshed its catalog. Caddy, the exact gateway binary, and all observed Suwayomi/AdGuard process identities were preserved.
 
 | Surface | Maintained owner | Runtime hook and access |
 | --- | --- | --- |
@@ -324,3 +324,9 @@ Existing live changes were reconciled into maintained source before release: `sc
 Live disabled markers: `agy`, `antra`, `navidrome`, `syncthing`, `terminal`, `tor`, `vaultwarden`. Publication preserved their content, mode, owner, inode, and timestamp. Do not enable them to test visual changes.
 
 Validation and operational limits are recorded in [the deployment report](../superpowers/expressive-workbench-deployment.md). The Nov 20 machine graph and runtime snapshot remain historical artifacts; this current human-readable map is published alongside them privately at `~/server-architecture/`.
+
+### Compact dashboard correction
+
+Current UI assets are from `804c875d7e724d2f5360c1c7aa4577308895f81e`, transaction `act_44783c524b6d`. The follow-up replaced only admin/family templates, `portal.css`, and `laptop.js`; only dashboard restarted. Session control APIs, all seven disabled markers, Caddy routes, supervisor catalog, and excluded service processes remain unchanged.
+
+The header now contains compact brand/actions/profile controls. Live LAN/Tailscale fields retain their existing IDs in connection details. Metric percentages/status remain live in their footers; CPU temperature is the main CPU value. Column selection specifies an intrinsic maximum, with a three-column default and 1–4 preference. Service descriptions live in launch hints and accessible text. Laptop/AGY controls use compact session rows, full-ID titles and Session details disclosures; creation, reconnect, close and toggle semantics remain unchanged. See the deployment report for observed geometry and verification boundaries.
