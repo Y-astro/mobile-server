@@ -150,6 +150,8 @@
         "7683",
         "-b",
         "/laptop",
+        "-I",
+        "/data/data/com.termux/files/home/.config/ttyd/termux_index.html",
         "/data/data/com.termux/files/usr/bin/python3",
         "/data/data/com.termux/files/home/bin/laptop_session.py"
       ]
@@ -337,6 +339,8 @@
         "7683",
         "-b",
         "/laptop",
+        "-I",
+        "/custom/home/.config/ttyd/termux_index.html",
         "/custom/usr/bin/python3",
         "/custom/home/bin/laptop_session.py"
       ]

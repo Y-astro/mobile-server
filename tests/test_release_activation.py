@@ -496,6 +496,13 @@ class TestReleaseActivation(unittest.TestCase):
         self.assertFalse(supervisor_affected)
         self.assertEqual(changed_destinations, ["/data/data/com.termux/files/home/.config/ttyd/agy_index.html"])
 
+    def test_termux_index_maps_to_terminal_and_laptop_terminal(self):
+        fake_entry = [{"remote": "/data/data/com.termux/files/home/.config/ttyd/termux_index.html", "action": ra.rt.ACTION_REPLACE}]
+        affected_services, supervisor_affected, changed_destinations = ra.map_changed_destinations(fake_entry)
+        self.assertEqual(affected_services, {"terminal", "laptop_terminal"})
+        self.assertFalse(supervisor_affected)
+        self.assertEqual(changed_destinations, ["/data/data/com.termux/files/home/.config/ttyd/termux_index.html"])
+
     def test_agy_runtime_asset_modifications_refused(self):
         prohibited_remotes = [
             "/data/data/com.termux/files/home/bin/agy_session.sh",

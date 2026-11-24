@@ -480,7 +480,11 @@ def map_changed_destinations(
             if is_sw:
                 raise ActivationError("Suwayomi launcher/filter/scheduler sources must be unchanged in this release")
 
-            if comp == "cli_only":
+            norm = remote.replace("\\", "/").rstrip("/")
+            if norm == "/data/data/com.termux/files/home/.config/ttyd/termux_index.html":
+                affected_services.add("terminal")
+                affected_services.add("laptop_terminal")
+            elif comp == "cli_only":
                 continue
             elif comp == "service_catalog":
                 affected_services.add("dashboard")

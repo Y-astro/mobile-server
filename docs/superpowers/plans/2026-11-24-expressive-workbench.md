@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Exclude standalone Suwayomi, Wealthfolio, and Navidrome UIs; include their dashboard cards.
+- Scope Addendum: Exclude all SIX standalone native app UIs (Suwayomi, Wealthfolio, Navidrome, AdGuard Home, Syncthing, and Vaultwarden). All six preserve existing interfaces and service commands; their dashboard cards remain in scope.
 - Match the rendered reference without obsolete navigation rails, prototype data, palette presets, or embedded prototype wallpaper.
 - Keep appearance customization admin-only and preserve all existing role/data boundaries.
 - Preserve current service enablement, current live Repertoire features, session semantics, notes, queues, and workbooks.
@@ -63,17 +64,19 @@
 
 **Files:** `web/filebrowser.css`, `web/filebrowser.js`, `web/filebrowser-entry.js`, `web/agy_index.html`, `web/termux_index.html`; change `config/Caddyfile` only if the verified current static hook requires it. Preserve terminal protocol/bundle code and service authentication.
 
-- [ ] Add failing checks for the reference surface/control treatment across FileBrowser listing, toolbar, settings/dialogs and both role contexts, plus terminal wrapper chrome.
-- [ ] Apply the design through existing native CSS/branding and wrapper hooks. Preserve file operations, uploads/downloads, account visibility, native appearance role restrictions, and terminal/session transport.
-- [ ] Run Cloud appearance and session/browser regressions, inspect accessible active pages or isolated wrapper fixtures, and commit.
+- [x] Add failing checks for the reference surface/control treatment across FileBrowser listing, toolbar, settings/dialogs and both role contexts, plus terminal wrapper chrome.
+- [x] Apply the design through existing native CSS/branding and wrapper hooks. Preserve file operations, uploads/downloads, account visibility, native appearance role restrictions, and terminal/session transport.
+- [x] Run Cloud appearance and session/browser regressions, inspect accessible active pages or isolated wrapper fixtures, and commit.
 
-## Task 5: Native AdGuard, Syncthing, and Vaultwarden interfaces
+## Task 5: Native AdGuard, Syncthing, and Vaultwarden interfaces [CANCELLED BY USER]
 
-- [ ] Review `service-ui-scope.md` from the runtime inventory and write a separate implementation plan with exact supported asset hooks, owned source files, route mappings, isolated preview tests, version/hash preconditions, and recovery steps.
-- [ ] Implement and review that subproject using native branding or narrowly scoped static assets. Do not introduce a new daemon or generic proxy unless evidence proves it necessary.
-- [ ] Verify disabled services using isolated installed-asset previews. Preserve disabled intent throughout. Record concrete limits instead of silently skipping a service.
+> **Scope Addendum:** User explicitly cancelled native AdGuard Home, Syncthing, and Vaultwarden redesign. All three retain their existing interfaces and service commands. Do not read or integrate their isolated branch. All six standalone application UIs (Suwayomi, Wealthfolio, Navidrome, AdGuard Home, Syncthing, Vaultwarden) remain excluded from custom standalone UI redesign; their dashboard cards remain in scope.
 
-## Task 6: Integrated verification and controlled publication
+- [x] Cancelled by user: separate implementation plan and asset hooks for AdGuard Home, Syncthing, and Vaultwarden are not pursued.
+- [x] Cancelled by user: native branding or static asset hooks for these three services are excluded. Existing service interfaces and commands are preserved.
+- [x] Cancelled by user: disabled service intent and existing standalone interfaces preserved without modification.
+
+## Task 6: Integrated verification and controlled publication [DEPLOYMENT PENDING]
 
 **Files:** Release ownership/fixtures as needed, committed source assets, deployment evidence outside the repository, and `docs/architecture/` updates reflecting the final owned assets.
 

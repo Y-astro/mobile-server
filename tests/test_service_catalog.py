@@ -142,6 +142,50 @@ class ServiceCatalogTests(unittest.TestCase):
         self.assertNotIn('path', services['antra'])
         self.assertNotIn('protocol', services['antra'])
 
+    def test_laptop_terminal_runtime_command_includes_index_hook(self):
+        """Laptop runtime command must include -I ${home}/.config/ttyd/termux_index.html preserving argv."""
+        rt_default = service_catalog.runtime_services('/data/data/com.termux/files/home', '/data/data/com.termux/files/usr')
+        self.assertEqual(rt_default['laptop_terminal']['cmd'], [
+            '/data/data/com.termux/files/usr/bin/ttyd',
+            '-W',
+            '-a',
+            '-m',
+            '8',
+            '-i',
+            '127.0.0.1',
+            '-p',
+            '7683',
+            '-b',
+            '/laptop',
+            '-I',
+            '/data/data/com.termux/files/home/.config/ttyd/termux_index.html',
+            '/data/data/com.termux/files/usr/bin/python3',
+            '/data/data/com.termux/files/home/bin/laptop_session.py',
+        ])
+        self.assertEqual(rt_default['laptop_terminal']['port'], 7683)
+        self.assertEqual(rt_default['laptop_terminal']['path'], '/laptop/')
+
+        rt_alt = service_catalog.runtime_services('/custom/home', '/custom/usr')
+        self.assertEqual(rt_alt['laptop_terminal']['cmd'], [
+            '/custom/usr/bin/ttyd',
+            '-W',
+            '-a',
+            '-m',
+            '8',
+            '-i',
+            '127.0.0.1',
+            '-p',
+            '7683',
+            '-b',
+            '/laptop',
+            '-I',
+            '/custom/home/.config/ttyd/termux_index.html',
+            '/custom/usr/bin/python3',
+            '/custom/home/bin/laptop_session.py',
+        ])
+        self.assertEqual(rt_alt['laptop_terminal']['port'], 7683)
+        self.assertEqual(rt_alt['laptop_terminal']['path'], '/laptop/')
+
     def test_dashboard_services_characterization_and_order(self):
         """Preserve all 9 dashboard cards, order, IDs, URLs, and verify absence of start_cmd/env."""
         char_file = ROOT / 'tests/fixtures/service-catalog-baseline.json'

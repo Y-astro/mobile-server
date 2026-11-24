@@ -53,3 +53,7 @@ Before live publication, commit maintained source and validate a reviewed releas
 - Verify keyboard access, visible focus, native dialog labelling and dismissal, reorder announcements, reduced motion, and readable surfaces across supported wallpaper settings.
 - Verify native service styles on accessible live pages or isolated installed-asset previews for disabled services, without changing their enabled state.
 - Complete role-boundary and deployment checks, then verify the published pages and refresh architecture documentation. Report any surface that cannot be verified rather than claiming universal coverage.
+
+## Scope Addendum: Standalone Native Application UI Exclusions
+
+Following explicit user cancellation, the native redesign for AdGuard Home, Syncthing, and Vaultwarden is cancelled. All six standalone native application UIs (Suwayomi, Wealthfolio, Navidrome, AdGuard Home, Syncthing, and Vaultwarden) are excluded from custom standalone UI redesign. All six retain their existing interfaces and service commands. Dashboard cards and remote controls linking to these services remain fully in scope.

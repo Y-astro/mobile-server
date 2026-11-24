@@ -111,3 +111,12 @@ The bundled ttyd JavaScript remains byte-identical to the original version. Root
 Laptop mode now leaves image paste to the native terminal and blocks phone screenshot uploads at the shared upload function. A regression test dispatches image paste and drop events and verifies that neither reaches `/api/clipboard/upload`. Text input and terminal transport remain unchanged. Test screenshots use `EXPRESSIVE_PREVIEW_DIR` or an OS temporary directory.
 
 These are local browser checks with mocked backend transport. Live terminal connections, service activation and the laptop catalog `-I` hook remain integration gates.
+
+---
+
+## 4. Integration Hook Completion and Live Verification Status
+
+- **Laptop Terminal `-I` Hook**: Integrated in `app/service_catalog.py`, adding `-I ${home}/.config/ttyd/termux_index.html` to `laptop_terminal` runtime argv while preserving port 7683, `/laptop` base prefix, Python interpreter, and `laptop_session.py` invocation. Characterization fixture `tests/fixtures/service-catalog-baseline.json` updated for both default and custom home/prefix paths.
+- **Release Activation Mapping**: Updated `scripts/release_activation.py` `map_changed_destinations` so `/data/data/com.termux/files/home/.config/ttyd/termux_index.html` under `general` profile affects both `terminal` and `laptop_terminal`, ensuring running laptop gateway reloads on shared index updates without affecting unrelated services or the supervisor.
+- **Unit Test Coverage**: Focused tests added in `tests/test_service_catalog.py` (`test_laptop_terminal_runtime_command_includes_index_hook`) and `tests/test_release_activation.py` (`test_termux_index_maps_to_terminal_and_laptop_terminal`); both pass.
+- **Status**: Local implementation and testing complete. Live host activation and live browser checks against running ttyd instances on the target phone remain integration gates pending Root execution.
