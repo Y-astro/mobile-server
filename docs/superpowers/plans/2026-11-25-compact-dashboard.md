@@ -17,3 +17,9 @@ The root audit ledger and before/after screenshots remain outside Git in `/home/
 ## Completed publication
 
 Committed source `804c875d7e72` was activated as `act_44783c524b6d`: four replacements, 58 untouched entries, dashboard restart only. Root verified all 62 hashes, disabled-marker metadata, preserved process identities, both role boundaries, actual browser layouts and served CSS/JS bytes. The deployment report records test counts, live geometry and limits.
+
+## Neutral remote panels and state highlight refinement
+
+The user supplied two screenshots and requested matching neutral laptop/AGY surfaces, denser session rows, and accent highlights for active services. Remove the terminal-specific fill, keep the Matugen palette and glass controls, and let the verified running state own the accent tint. Ready on-demand utilities and cards without a live running state remain neutral. Put New and native Session details on one toolbar, make each session label reconnect, and retain its Close action and lifecycle guidance. Preserve 48px targets, session protection, role boundaries and existing service intent. Root is executing directly because the requested AGY High workers reached their quota.
+
+Regression acceptance covers the previous glass override hiding the state tint, on/off transitions, equal remote surfaces, compact rows, keyboard disclosure, laptop create/reconnect/close and failure recovery, and responsive account boundaries. Deploy only committed owned assets through the existing complete-manifest release mechanism.

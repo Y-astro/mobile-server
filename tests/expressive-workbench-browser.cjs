@@ -563,6 +563,22 @@ const mockServices = [
     assert.equal(runningDotColor, 'rgb(112, 214, 197)', 'Running service card must display active positive dot');
     assert.equal(stoppedDotColor, 'rgb(194, 199, 206)', 'Disabled service card must display disabled muted dot');
 
+    const cardSurfaces = await page.evaluate(() => {
+      const background=id=>getComputedStyle(document.querySelector(`[data-service-id="${id}"]`)).backgroundColor;
+      return { active:background('filebrowser'), disabled:background('vaultwarden'), ready:background('converter') };
+    });
+    assert.notEqual(cardSurfaces.active, cardSurfaces.disabled, 'Active service must show the wallpaper accent tint');
+    assert.equal(cardSurfaces.ready, cardSurfaces.disabled, 'Ready on-demand utility must retain a neutral surface');
+    const driveToggle = page.locator('[data-service-id="filebrowser"] input[data-action="toggle"]');
+    await driveToggle.locator('..').click();
+    await page.waitForFunction(() => document.querySelector('[data-service-id="filebrowser"]').dataset.state === 'stopped');
+    await page.waitForFunction(color => getComputedStyle(document.querySelector('[data-service-id="filebrowser"]')).backgroundColor === color, cardSurfaces.disabled);
+    assert.equal(await page.locator('[data-service-id="filebrowser"]').evaluate(el=>getComputedStyle(el).backgroundColor), cardSurfaces.disabled,
+      'Turning a service off must remove the state tint');
+    await driveToggle.locator('..').click();
+    await page.waitForFunction(() => document.querySelector('[data-service-id="filebrowser"]').dataset.state === 'running');
+
+
     // Click Running filter
     await filterActive.click();
     await page.waitForTimeout(100);
@@ -680,10 +696,26 @@ const mockServices = [
     const laptopPanel = page.locator('[aria-labelledby="laptop-heading"]');
     const agyPanel = page.locator('[aria-labelledby="agy-heading"]');
     console.log('Compact panel heights:', JSON.stringify({laptop:(await laptopPanel.boundingBox()).height, agy:(await agyPanel.boundingBox()).height}));
-    assert((await laptopPanel.boundingBox()).height <= 300, 'One-session laptop panel must stay compact');
-    assert((await agyPanel.boundingBox()).height <= 350, 'Two-session AGY panel must stay compact');
-    assert((await page.locator('#laptop-sessions > .session').first().boundingBox()).height <= 74,
+    assert.equal(await laptopPanel.evaluate(el=>getComputedStyle(el).backgroundColor), await agyPanel.evaluate(el=>getComputedStyle(el).backgroundColor),
+      'Both remote panels must use the same neutral surface');
+    assert((await laptopPanel.boundingBox()).height <= 235, 'One-session laptop panel must stay compact');
+    assert((await agyPanel.boundingBox()).height <= 290, 'Two-session AGY panel must stay compact');
+    assert((await page.locator('#laptop-sessions > .session').first().boundingBox()).height <= 52,
       'Laptop session name and actions should share one row');
+    for (const [panel, newId] of [[laptopPanel, '#laptop-new'], [agyPanel, '#agy-new']]) {
+      const details = panel.locator('details');
+      const summary = details.locator('summary');
+      const actionBox = await panel.locator(newId).boundingBox();
+      const summaryBox = await summary.boundingBox();
+      assert(Math.abs(actionBox.y - summaryBox.y) <= 4, 'New and Session details must share a compact toolbar');
+      await summary.focus();
+      await summary.press('Enter');
+      assert.equal(await details.evaluate(el=>el.open), true, 'Keyboard must open lifecycle guidance');
+      assert(await details.locator('p').last().isVisible(), 'Lifecycle guidance must remain available');
+      assert((await details.boundingBox()).width <= (await panel.boundingBox()).width, 'Expanded help must stay inside panel');
+      await summary.press('Enter');
+      assert.equal(await details.evaluate(el=>el.open), false);
+    }
     const longLabel = page.locator('#agy-sessions-container .session-label .mono').last();
     const originalLabel = await longLabel.textContent();
     await longLabel.evaluate(el => { el.textContent = 'AGY Instance: ' + 'long-session-name-'.repeat(12); });

@@ -49,8 +49,10 @@
       const controls = document.createElement('div');
       controls.className = 'flex items-center gap-1.5 flex-wrap';
       const open = document.createElement('a');
-      open.className = 'm3-btn m3-btn-tonal text-xs font-medium' + (!gwActive ? ' opacity-40 pointer-events-none' : '');
-      open.innerHTML = '<span class="sr-only">Reconnect</span><svg class="glyph"><use href="#arrow"/></svg>';
+      open.className = 'session-open text-xs font-medium' + (!gwActive ? ' opacity-40 pointer-events-none' : '');
+      open.innerHTML = '<svg class="glyph" aria-hidden="true"><use href="#terminal"/></svg>';
+      open.append(label);
+      open.setAttribute('aria-label', 'Reconnect terminal ' + session.id.slice(0,8));
       open.title = 'Reconnect terminal ' + session.id.slice(0,8);
       if (gwActive) {
         open.href = '/laptop/?arg=' + session.id;
@@ -72,7 +74,7 @@
         catch (error) { status.textContent = error.message; }
         finally { changing = false; await (laptopLoop ? laptopLoop.refreshAfterMutation() : refresh()); }
       });
-      controls.append(open,close); row.append(label,controls); list.append(row);
+      controls.append(close); row.append(open,controls); list.append(row);
     }
     if (data.online && !data.sessions.length) {
       list.textContent = gwActive ? 'No laptop terminals open.' : 'No laptop terminals open (Gateway Off).';

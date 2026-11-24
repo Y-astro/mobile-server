@@ -325,14 +325,14 @@
                 <svg class="glyph"><use href="#plus"/></svg>
                 <span>New Terminal</span>
               </button>
-              <div id="laptop-sessions" class="sessions text-xs"></div>
-            </div>
-            <p id="laptop-status" class="remote-note" role="status" aria-live="polite">Checking laptop…</p>
             <details class="remote-details">
               <summary class="cursor-pointer text-xs text-muted hover:text-white select-none">Session details</summary>
               <p class="text-xs text-muted mt-1">Open Kitty terminal sessions over Tailscale.</p>
               <p class="text-xs text-muted remote-note mt-1">Laptop must be awake and logged in. Turning off web access keeps terminal commands running; closing a session terminates it.</p>
             </details>
+              <div id="laptop-sessions" class="sessions text-xs"></div>
+            </div>
+            <p id="laptop-status" class="remote-note" role="status" aria-live="polite">Checking laptop…</p>
           </div>
         </section>
         <script src="/static/portal-polling.js"></script>
@@ -363,6 +363,11 @@
                 <svg class="glyph"><use href="#plus"/></svg>
                 <span>New AGY</span>
               </button>
+            <details class="remote-details">
+              <summary class="cursor-pointer text-xs text-muted hover:text-white select-none">Session details</summary>
+              <p class="text-xs text-muted mt-1">Multi-session access</p>
+              <p class="text-xs text-muted remote-note mt-1">Closing a tab keeps commands running. Turning off AGY stops its sessions.</p>
+            </details>
               <div id="agy-sessions-container" class="sessions text-xs">
                 <div class="text-xs text-muted flex items-center gap-2 p-2">
                   <svg class="w-4 h-4 animate-spin text-teal" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
@@ -370,11 +375,6 @@
                 </div>
               </div>
             </div>
-            <details class="remote-details">
-              <summary class="cursor-pointer text-xs text-muted hover:text-white select-none">Session details</summary>
-              <p class="text-xs text-muted mt-1">Multi-session access</p>
-              <p class="text-xs text-muted remote-note mt-1">Closing a tab keeps commands running. Turning off AGY stops its sessions.</p>
-            </details>
           </div>
         </section>
 
@@ -1576,16 +1576,11 @@
           const openUrl = '/agy/?arg=' + encodeURIComponent(safeId);
           return `
             <div class="session flex items-center justify-between flex-wrap gap-2 p-2 rounded-lg bg-surface-raised border border-white/5 hover:border-white/15 transition">
-              <div class="session-label flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
-                <span class="font-medium text-white mono text-xs" title="${label} · ${badgeText}">${label}</span>
-                <span class="sr-only">${badgeText}</span>
-              </div>
-              <div class="flex items-center gap-1.5 flex-wrap">
-                <a data-agy-url="${openUrl}" ${window.agyServiceRunning === false ? '' : `href="${openUrl}"`} target="_blank" rel="noopener noreferrer" class="m3-btn m3-btn-tonal text-xs font-medium flex items-center gap-1.5 ${window.agyServiceRunning === false ? 'opacity-40 pointer-events-none' : ''}" ${window.agyServiceRunning === false ? 'aria-disabled="true"' : ''}>
-                  <span class="sr-only">Open / Reconnect ${label}</span>
-                  <svg class="glyph"><use href="#arrow"/></svg>
+                <a data-agy-url="${openUrl}" ${window.agyServiceRunning === false ? '' : `href="${openUrl}"`} target="_blank" rel="noopener noreferrer" class="session-open session-label text-xs ${window.agyServiceRunning === false ? 'opacity-40 pointer-events-none' : ''}" aria-label="Open / Reconnect ${label}" title="Reconnect ${label} · ${badgeText}" ${window.agyServiceRunning === false ? 'aria-disabled="true"' : ''}>
+                  <svg class="glyph" aria-hidden="true"><use href="#bolt"/></svg>
+                  <span class="mono text-xs" title="${label} · ${badgeText}">${label}</span>
                 </a>
+              <div class="flex items-center gap-1.5 flex-wrap">
                 ${isPrimary ? `
                   <span class="px-2 py-1 rounded-md text-xs text-muted font-medium select-none">Protected</span>
                 ` : `
