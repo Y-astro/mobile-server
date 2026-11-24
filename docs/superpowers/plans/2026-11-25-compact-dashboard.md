@@ -25,3 +25,7 @@ The user supplied two screenshots and requested matching neutral laptop/AGY surf
 Regression acceptance covers the previous glass override hiding the state tint, on/off transitions, equal remote surfaces, compact rows, keyboard disclosure, laptop create/reconnect/close and failure recovery, and responsive account boundaries. Deploy only committed owned assets through the existing complete-manifest release mechanism.
 
 Published as `f69d7e8ffac0`, completed transaction `act_c991a2f2df2e`. Root verified live colours, 62 hashes, unchanged disabled markers and non-dashboard process identities. See the deployment report for the focused tests and live geometry.
+
+## Reference button sizing
+
+The user explicitly requested smaller controls after seeing the prior 48px version. Dashboard controls now use a scoped density value: 34px standard/New buttons, 36px header icons, and 32px square launch/close icons. Toggle visuals and readable labels remain. Standalone application pages and dialogs retain their existing defaults; keyboard focus and accessible names remain. This explicit reference-size request supersedes the earlier 48px dashboard target preference.

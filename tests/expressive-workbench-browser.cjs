@@ -539,7 +539,8 @@ const mockServices = [
     assert((await firstTile.boundingBox()).height <= 150, 'Descriptions must not expand service tiles');
     const firstLaunch = firstTile.locator('.service-open-btn');
     assert((await firstLaunch.getAttribute('title')).includes(' · '), 'Launch hint must retain service description');
-    assert((await firstLaunch.boundingBox()).width >= 48, 'Compact launch must keep a usable target');
+    assert.equal((await firstLaunch.boundingBox()).width, 32, 'Service launch must match the 32px reference');
+    assert.equal((await firstLaunch.boundingBox()).height, 32, 'Service launch must be a compact square');
 
     // -----------------------------------------------------------------------
     // ASSERTION 3: Service Filtering & Status Dot Binding
@@ -683,6 +684,8 @@ const mockServices = [
     // Laptop panel has switch and new button
     assert(await page.locator('label:has(#laptop-service-toggle)').isVisible(), 'Laptop switch must exist');
     assert(await page.locator('#laptop-new').isVisible(), 'Laptop New Terminal button must exist');
+    assert.equal((await page.locator('#laptop-new').boundingBox()).height, 34, 'New Terminal must match reference density');
+    assert.equal((await page.locator('#agy-new').boundingBox()).height, 34, 'New AGY must match reference density');
 
     // Laptop session ID display in 320px aside
     const laptopLabelText = await page.locator('#laptop-sessions .mono').first().textContent();

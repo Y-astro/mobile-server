@@ -398,17 +398,17 @@ h3 {
   flex-shrink: 0;
 }
 
-/* --- Material 3 Buttons & Actions (Minimum 48px hit area) --- */
+/* --- Material 3 Buttons & Actions (Dashboard density; 48px elsewhere) --- */
 .m3-btn, .gold-gradient-btn, .btn-secondary, #submit-btn, #convert-btn, #laptop-new, #agy-new, #vpn-toggle-btn {
-  min-height: 48px;
-  min-width: 48px;
-  padding: 0 20px;
+  min-height: var(--dashboard-control-size, 48px);
+  min-width: var(--dashboard-control-size, 48px);
+  padding: 0 var(--dashboard-button-padding, 20px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--dashboard-button-font-size, 13px);
   font-weight: 500;
   text-decoration: none;
   border-radius: var(--md-shape-corner-full);
@@ -455,14 +455,14 @@ h3 {
   border-color: var(--md-sys-color-primary);
 }
 
-/* Touch Targets for Small / Icon / Text Controls (Strict 48x48 min) */
+/* Small controls follow dashboard density; standalone controls retain 48px defaults. */
 .touch-target,
 #header-local-ip,
 button[onclick="closeConverterModal()"],
 button[onclick="handleLogout()"],
 .notes-toolbar-btn {
-  min-height: 48px;
-  min-width: 48px;
+  min-height: var(--dashboard-control-size, 48px);
+  min-width: var(--dashboard-control-size, 48px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -482,14 +482,14 @@ button[onclick="closeConverterModal()"]:hover {
   background-color: rgba(255, 255, 255, 0.05);
 }
 
-/* --- Material 3 Switch (Authentic toggle with 48px hit area) --- */
+/* --- Material 3 Switch (Dashboard density; 48px standalone hit area) --- */
 .m3-switch, .switch {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 52px;
-  height: 48px;
+  height: var(--dashboard-control-size, 48px);
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -610,6 +610,12 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
 }
 
 /* --- Expressive Workbench Shell & Topbar --- */
+.shell {
+  --dashboard-control-size: 34px;
+  --dashboard-button-padding: 12px;
+  --dashboard-button-font-size: 12px;
+  --dashboard-header-size: 36px;
+}
 .shell, .dashboard-container {
   display: block;
   max-width: 1480px;
@@ -662,8 +668,8 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   max-width: 100%;
 }
 .top-actions button, .iconbtn {
-  height: 48px;
-  min-width: 48px;
+  height: var(--dashboard-header-size, 48px);
+  min-width: var(--dashboard-header-size, 48px);
   border-radius: 50%;
   background: var(--high);
   display: inline-flex;
@@ -1035,7 +1041,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 48px;
+  min-height: calc(var(--dashboard-control-size, 44px) + 4px);
   padding: 0 10px 0 14px;
   border: 1px solid var(--line);
   border-radius: 100px;
@@ -1072,8 +1078,8 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   border-radius: 100px;
   color: var(--muted);
   font-size: 12px;
-  min-height: 48px;
-  min-width: 48px;
+  min-height: var(--dashboard-control-size, 48px);
+  min-width: var(--dashboard-control-size, 48px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1241,10 +1247,11 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   gap: 6px;
 }
 .svc-actions .launch, .svc-actions a.service-open-btn {
-  width: 48px;
-  height: 48px;
-  min-width: 48px;
-  border-radius: 12px;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  min-width: 32px;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1254,7 +1261,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   border: 1px solid var(--line);
   font-size: 12px;
   font-weight: 500;
-  padding: 0 12px;
+  padding: 0;
 }
 .svc-actions .launch:hover, .svc-actions a.service-open-btn:hover {
   background: var(--highest);
@@ -1285,8 +1292,8 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   margin-right: auto;
   cursor: grab;
   touch-action: none;
-  min-width: 48px;
-  min-height: 48px;
+  min-width: var(--dashboard-control-size, 48px);
+  min-height: var(--dashboard-control-size, 48px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1312,15 +1319,15 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   display: flex !important;
 }
 #btn-reset-service-order {
-  min-width: 48px;
-  min-height: 48px;
+  min-width: var(--dashboard-control-size, 48px);
+  min-height: var(--dashboard-control-size, 48px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 .service-order-btn {
-  min-width: 48px;
-  min-height: 48px;
+  min-width: var(--dashboard-control-size, 48px);
+  min-height: var(--dashboard-control-size, 48px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1461,7 +1468,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   gap: 6px;
   flex: 1;
   min-width: 0;
-  min-height: 48px;
+  min-height: var(--dashboard-control-size, 48px);
   color: var(--muted);
   text-decoration: none;
 }
@@ -1472,7 +1479,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   color: var(--muted);
 }
 .remote-details summary {
-  min-height: 48px;
+  min-height: var(--dashboard-control-size, 48px);
   align-content: center;
   cursor: pointer;
   opacity: 0.8;
@@ -1510,8 +1517,8 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   color: var(--accent);
 }
 .conn-row button {
-  min-width: 48px;
-  min-height: 48px;
+  min-width: var(--dashboard-control-size, 48px);
+  min-height: var(--dashboard-control-size, 48px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1608,10 +1615,12 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   min-width: 0;
 }
 #laptop-sessions .m3-btn, #agy-sessions-container .m3-btn {
-  min-width: 48px;
-  min-height: 48px;
-  padding: 0 10px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
   font-size: 11px;
+  width: 32px;
+  height: 32px;
 }
 
 /* Animation utilities */

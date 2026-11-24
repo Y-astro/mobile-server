@@ -4,7 +4,7 @@
  * Exercises:
  * 1. Grid isolation: NO agy or laptop cards in services grid; exactly 1 right
  *    AGY panel and 1 right Laptop panel.
- * 2. 48px accessible switches and status badges on right panels.
+ * 2. Reference-sized switches and status badges on right panels.
  * 3. AGY service toggle off/on: explicit enable false/true POST, guards New
  *    instance and session open links without closing sessions.
  * 4. Laptop gateway toggle off/on: explicit enable false/true POST, guards New
@@ -219,7 +219,7 @@ const initialMockServices = [
     assert.equal(agyPanels, 1, 'Must have exactly ONE right AGY panel');
     assert.equal(laptopPanels, 1, 'Must have exactly ONE right Laptop panel');
 
-    // Verify Accessible 48px switches and badges
+    // Verify the user-requested compact switches and status badges
     const agyToggle = page.locator('#agy-service-toggle');
     const laptopToggle = page.locator('#laptop-service-toggle');
     const agySwitch = page.locator('label:has(#agy-service-toggle)');
@@ -231,9 +231,9 @@ const initialMockServices = [
 
     const agySwitchRect = await agySwitch.boundingBox();
     const laptopSwitchRect = await laptopSwitch.boundingBox();
-    assert(agySwitchRect.height >= 48, `AGY switch hit target height must be >= 48px, got ${agySwitchRect.height}`);
+    assert(agySwitchRect.height === 34, `AGY switch height must match 34px dashboard density, got ${agySwitchRect.height}`);
     assert(agySwitchRect.width >= 48, `AGY switch hit target width must be >= 48px, got ${agySwitchRect.width}`);
-    assert(laptopSwitchRect.height >= 48, `Laptop switch hit target height must be >= 48px, got ${laptopSwitchRect.height}`);
+    assert(laptopSwitchRect.height === 34, `Laptop switch height must match 34px dashboard density, got ${laptopSwitchRect.height}`);
     assert(laptopSwitchRect.width >= 48, `Laptop switch hit target width must be >= 48px, got ${laptopSwitchRect.width}`);
 
     // Verify initial badge text
