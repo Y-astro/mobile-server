@@ -547,7 +547,7 @@ html, body {
 <script>
 (function() {
 
-  const isLaptop = window.location.pathname.startsWith('/laptop');
+  const isLaptop = window.location.pathname === '/laptop' || window.location.pathname.startsWith('/laptop/');
   if (isLaptop) {
     document.title = 'Laptop Terminal';
     const badgeText = document.querySelector('.agy-badge-text');
@@ -787,7 +787,7 @@ html, body {
   };
 
   async function uploadImageFile(file) {
-    if (!file) return;
+    if (isLaptop || !file) return;
 
     const loadingToast = showToast({
       type: "loading",
@@ -845,6 +845,7 @@ html, body {
 
   // 6. Clipboard Paste Event
   window.addEventListener("paste", async function(e) {
+    if (isLaptop) return;
     if (e.target === promptInput) {
       const text = e.clipboardData?.getData("text");
       if (text) return;

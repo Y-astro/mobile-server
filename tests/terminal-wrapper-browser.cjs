@@ -22,11 +22,7 @@ const crypto = require('crypto');
 const assert = require('node:assert/strict');
 
 const rootDir = path.resolve(__dirname, '..');
-const previewDir = process.env.EXPRESSIVE_PREVIEW_DIR || (
-  fs.existsSync('/home/astro/server-audit/2026-11-24/expressive-redesign/task4-preview')
-    ? '/home/astro/server-audit/2026-11-24/expressive-redesign/task4-preview'
-    : path.join(require('os').tmpdir(), 'task4-preview')
-);
+const previewDir = process.env.EXPRESSIVE_PREVIEW_DIR || path.join(require('os').tmpdir(), 'task4-preview');
 fs.mkdirSync(previewDir, { recursive: true });
 
 (async () => {
@@ -340,6 +336,22 @@ fs.mkdirSync(previewDir, { recursive: true });
         assert.equal(laptopState.uploadBtnVisible, false, 'Laptop mode must hide phone upload button');
         assert.equal(laptopState.dropOverlayExists, false, 'Laptop mode must remove drop overlay');
         assert.equal(laptopState.fileInputExists, false, 'Laptop mode must remove file input');
+
+        const phoneUploads = [];
+        page.on('request', request => {
+          if (new URL(request.url()).pathname === '/api/clipboard/upload') phoneUploads.push(request.url());
+        });
+        const pastePrevented = await page.evaluate(() => {
+          const transfer = new DataTransfer();
+          transfer.items.add(new File(['image fixture'], 'laptop.png', { type: 'image/png' }));
+          const paste = new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true });
+          window.dispatchEvent(paste);
+          window.dispatchEvent(new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true }));
+          return paste.defaultPrevented;
+        });
+        await page.waitForTimeout(100);
+        assert.equal(pastePrevented, false, 'Laptop paste must not be intercepted by phone image upload');
+        assert.deepEqual(phoneUploads, [], 'Laptop paste/drop must never upload images to phone storage');
 
         await page.close();
       }

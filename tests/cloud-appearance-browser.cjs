@@ -14,11 +14,7 @@ const { chromium } = require('@playwright/test');
 
 const rootDir = path.resolve(__dirname, '..');
 const sddDir = path.resolve(rootDir, '.superpowers/sdd');
-const previewDir = process.env.EXPRESSIVE_PREVIEW_DIR || (
-  fs.existsSync('/home/astro/server-audit/2026-11-24/expressive-redesign/task4-preview')
-    ? '/home/astro/server-audit/2026-11-24/expressive-redesign/task4-preview'
-    : path.join(require('os').tmpdir(), 'task4-preview')
-);
+const previewDir = process.env.EXPRESSIVE_PREVIEW_DIR || path.join(require('os').tmpdir(), 'task4-preview');
 [sddDir, previewDir].forEach(d => {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 });

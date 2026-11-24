@@ -103,3 +103,11 @@ Portable preview artifacts generated in `EXPRESSIVE_PREVIEW_DIR` (or OS temp):
 - `terminal-termux-desktop-1440.png`: Termux terminal wrapper on desktop.
 - `terminal-termux-mobile-390.png`: Termux terminal wrapper on mobile.
 - `terminal-termux-overlay-desktop.png`: Termux drop screenshot overlay.
+
+## Root acceptance and laptop clipboard boundary
+
+The bundled ttyd JavaScript remains byte-identical to the original version. Root reran the terminal wrapper suite across desktop, mobile, short-height and laptop modes, and the seven-phase native FileBrowser suite; both passed.
+
+Laptop mode now leaves image paste to the native terminal and blocks phone screenshot uploads at the shared upload function. A regression test dispatches image paste and drop events and verifies that neither reaches `/api/clipboard/upload`. Text input and terminal transport remain unchanged. Test screenshots use `EXPRESSIVE_PREVIEW_DIR` or an OS temporary directory.
+
+These are local browser checks with mocked backend transport. Live terminal connections, service activation and the laptop catalog `-I` hook remain integration gates.
