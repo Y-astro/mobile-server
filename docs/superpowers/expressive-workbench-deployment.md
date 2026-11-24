@@ -58,3 +58,13 @@ The user's two screenshots requested neutral laptop/AGY surfaces, tighter sessio
 - Runtime service flags, native interfaces, notes/files, shell-session transport and lifecycle rules were preserved. No live terminal session was created or closed during verification. AGY remained quota-limited; root completed this bounded correction directly.
 
 Private evidence: `neutral-before.log`, `neutral-browser.log`, `neutral-sidebar.log`, `neutral-laptop.log`, `neutral-python.log`, screenshots in `neutral-preview/`, and complete release/live receipts in `neutral-release/` under the same audit directory. A hard refresh may be needed for existing CSS caches.
+
+## Reference button sizes (2026-11-25)
+
+The user explicitly requested the reference's smaller controls after reviewing the 48px dashboard version. Source `7edf70a08525151a1fb5bc3a6b9ba1cd647259a4` is live through completed transaction `act_7133077a9487`: only `web/portal.css` replaced, 61 manifest destinations untouched, dashboard restart only.
+
+Dashboard `.shell` owns compact density variables: 34px standard/New buttons, 36px header buttons, 32px launch/close squares. The same density controls sidebar rows and disclosures, filters and reorder controls. Standalone pages and dialogs retain their existing 48px defaults; login, appearance/converter dialogs, Antra and Repertoire checks confirm that boundary. Neutral remote panels and verified running-state Matugen fills remain intact. The explicit compact-size request supersedes earlier dashboard 48px acceptance values.
+
+The actual-template browser suite passed all 12 blocks, including 320–1440px layouts, exact 32px launch and 34px New targets, native keyboard disclosure and role boundaries. All seven sidebar checks and the dedicated laptop create/reconnect/close/failure-recovery browser suite passed with the revised reference-size contract. Live admin/family and Cloud checks passed. Live launch measured 32×32px; New Terminal/New AGY measured 34px high. One-session laptop measured about 165px; disabled AGY about 141px.
+
+All 62 live hashes match, including the preserved symlink target. Seven disabled markers and all observed non-dashboard PID/start identities remain unchanged. No live shell session was created or closed. Private receipts and masked screenshots are in `button-release/`, with local UI evidence in `button-preview/` and `button-*.log`. Existing CSS caches may need one hard refresh.

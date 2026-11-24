@@ -29,3 +29,5 @@ Published as `f69d7e8ffac0`, completed transaction `act_c991a2f2df2e`. Root veri
 ## Reference button sizing
 
 The user explicitly requested smaller controls after seeing the prior 48px version. Dashboard controls now use a scoped density value: 34px standard/New buttons, 36px header icons, and 32px square launch/close icons. Toggle visuals and readable labels remain. Standalone application pages and dialogs retain their existing defaults; keyboard focus and accessible names remain. This explicit reference-size request supersedes the earlier 48px dashboard target preference.
+
+Published as `7edf70a08525`, transaction `act_7133077a9487`. Root verified exact served sizes, both role layouts, 62 hashes and preserved disabled/service state. Browser tests retain 48px defaults outside the dashboard and enforce the user's compact reference contract within it.

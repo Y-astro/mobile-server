@@ -333,6 +333,10 @@ The header now contains compact brand/actions/profile controls. Live LAN/Tailsca
 
 ### Current neutral remote panels and service state colours
 
-Current UI assets are from `f69d7e8ffac0a944af6c775c394d8e9cfac11c4c`, transaction `act_c991a2f2df2e`: three asset replacements, 59 untouched entries, dashboard restart only. Laptop and AGY use the same neutral surface. The service-card tint is owned by `.svc.running[data-state="running"]` with the converter excluded; its scoped override must win against the shared glass surface rule. Matugen and the existing transparency setting supply the colour. Unknown/static family navigation state and on-demand Ready remain neutral.
+Neutral-surface refinements used `f69d7e8ffac0a944af6c775c394d8e9cfac11c4c`, transaction `act_c991a2f2df2e`: three asset replacements, 59 untouched entries, dashboard restart only. Laptop and AGY use the same neutral surface. The service-card tint is owned by `.svc.running[data-state="running"]` with the converter excluded; its scoped override must win against the shared glass surface rule. Matugen and the existing transparency setting supply the colour. Unknown/static family navigation state and on-demand Ready remain neutral.
 
 New and native Session details share a compact toolbar. Session labels are reconnect links, separate Close actions preserve lifecycle rules, primary AGY protection remains, and full IDs are retained in titles. These are dashboard presentation changes; ttyd wrappers, APIs, catalogue, disabled markers, shell sessions and all standalone applications keep their previous ownership and runtime contracts.
+
+### Current dashboard control density
+
+Current UI assets are from `7edf70a08525151a1fb5bc3a6b9ba1cd647259a4`, transaction `act_7133077a9487`. Only `web/portal.css` changed from the neutral-panel release. `.shell` defines dashboard control density: 34px standard/New controls, 36px header icons, and 32px launch/close squares. Standalone pages and dialogs retain existing 48px defaults. The user explicitly requested these compact reference sizes; older 48px dashboard acceptance values are superseded. Native focus, accessible names, role gating, state tints and session lifecycle behaviour remain.
