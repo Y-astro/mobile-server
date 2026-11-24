@@ -45,3 +45,16 @@ User feedback identified the top header, dynamic service columns, service descri
 - HTTP responses for `/portal.css` and `/static/laptop.js` matched committed bytes. The JS response carries `no-cache`; existing browser caches may require a hard refresh for CSS.
 
 Private evidence is in the audit's `compact-release/` directory: candidate manifest, local/remote plans, completed transaction status, `live-browser-result.json`, `final-proof.json`, HTTP asset hashes and masked live screenshots. Local UI screenshots are in `compact-preview/`. AGY's second attempt reached its quota; root completed, reviewed and verified its partial edits. Disabled AGY/Termux and excluded native interfaces remain unexercised as running applications.
+
+## Neutral remote panels and running-state tint (2026-11-25)
+
+The user's two screenshots requested neutral laptop/AGY surfaces, tighter session presentation and accent fills for active service cards. Source `f69d7e8ffac0a944af6c775c394d8e9cfac11c4c` is live through completed transaction `act_c991a2f2df2e`.
+
+- Three assets replaced: admin template, laptop session renderer, shared portal CSS. All 59 other manifest entries stayed untouched. Only dashboard restarted.
+- Removed the terminal-specific colour fill. Both remote panels now resolve to the same neutral surface. New and native Session details share one toolbar; clicking the session label reconnects, while Close and protected-primary semantics remain intact. Action targets remain 48px.
+- The old shared glass `!important` rule masked active service backgrounds. A narrowly scoped running-state selector now applies the Matugen accent container with the existing translucency value. Ready converter cards and cards without a verified live running state stay neutral. Family's static navigation cards do not invent backend availability.
+- Root reproduced the missing tint before the fix. The updated actual-template browser suite passes active/disabled/Ready colours, on/off tint transitions, matching remote surfaces, denser rows, keyboard disclosure, long names, responsive layouts and account boundaries. All seven sidebar checks, the dedicated laptop create/reconnect/close and failure-recovery browser suite, and 28 role/laptop/AGY Python tests passed.
+- Live checks passed for admin/family portal, Cloud, role gates, colours, compact layout and keyboard disclosure. At 1440px, the laptop panel measured about 207px with one session; disabled AGY measured 168px. All 62 destination hashes matched, seven disabled-marker records were identical, and every observed process except dashboard retained its PID/start identity.
+- Runtime service flags, native interfaces, notes/files, shell-session transport and lifecycle rules were preserved. No live terminal session was created or closed during verification. AGY remained quota-limited; root completed this bounded correction directly.
+
+Private evidence: `neutral-before.log`, `neutral-browser.log`, `neutral-sidebar.log`, `neutral-laptop.log`, `neutral-python.log`, screenshots in `neutral-preview/`, and complete release/live receipts in `neutral-release/` under the same audit directory. A hard refresh may be needed for existing CSS caches.

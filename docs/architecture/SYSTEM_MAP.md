@@ -327,6 +327,12 @@ Validation and operational limits are recorded in [the deployment report](../sup
 
 ### Compact dashboard correction
 
-Current UI assets are from `804c875d7e724d2f5360c1c7aa4577308895f81e`, transaction `act_44783c524b6d`. The follow-up replaced only admin/family templates, `portal.css`, and `laptop.js`; only dashboard restarted. Session control APIs, all seven disabled markers, Caddy routes, supervisor catalog, and excluded service processes remain unchanged.
+The first compact follow-up used `804c875d7e724d2f5360c1c7aa4577308895f81e`, transaction `act_44783c524b6d`. The follow-up replaced only admin/family templates, `portal.css`, and `laptop.js`; only dashboard restarted. Session control APIs, all seven disabled markers, Caddy routes, supervisor catalog, and excluded service processes remain unchanged.
 
 The header now contains compact brand/actions/profile controls. Live LAN/Tailscale fields retain their existing IDs in connection details. Metric percentages/status remain live in their footers; CPU temperature is the main CPU value. Column selection specifies an intrinsic maximum, with a three-column default and 1–4 preference. Service descriptions live in launch hints and accessible text. Laptop/AGY controls use compact session rows, full-ID titles and Session details disclosures; creation, reconnect, close and toggle semantics remain unchanged. See the deployment report for observed geometry and verification boundaries.
+
+### Current neutral remote panels and service state colours
+
+Current UI assets are from `f69d7e8ffac0a944af6c775c394d8e9cfac11c4c`, transaction `act_c991a2f2df2e`: three asset replacements, 59 untouched entries, dashboard restart only. Laptop and AGY use the same neutral surface. The service-card tint is owned by `.svc.running[data-state="running"]` with the converter excluded; its scoped override must win against the shared glass surface rule. Matugen and the existing transparency setting supply the colour. Unknown/static family navigation state and on-demand Ready remain neutral.
+
+New and native Session details share a compact toolbar. Session labels are reconnect links, separate Close actions preserve lifecycle rules, primary AGY protection remains, and full IDs are retained in titles. These are dashboard presentation changes; ttyd wrappers, APIs, catalogue, disabled markers, shell sessions and all standalone applications keep their previous ownership and runtime contracts.
