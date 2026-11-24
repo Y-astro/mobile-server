@@ -45,6 +45,7 @@
       const label = document.createElement('span');
       label.className = 'font-medium text-white mono text-xs';
       label.textContent = 'Terminal ' + session.id.slice(0,8);
+      label.title = session.id;
       const controls = document.createElement('div');
       controls.className = 'flex items-center gap-2';
       const open = document.createElement('a');

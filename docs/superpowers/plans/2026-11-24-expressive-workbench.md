@@ -55,9 +55,9 @@
 
 **Interfaces:** Existing appearance APIs/storage keys, converter controls, notes status, downloader queue APIs, and Repertoire APIs remain unchanged.
 
-- [ ] Add or update focused actual-page browser assertions for consistent toolbars, dialogs, fields, empty/error/loading states, and accessible focus behavior.
-- [ ] Apply the shared reference component system to login, appearance, converter, notes, Antra, and Repertoire without altering service/data semantics.
-- [ ] Run appearance, notes, converter, downloader, Repertoire and role-boundary suites with isolated data, inspect screenshots, and commit.
+- [x] Add or update focused actual-page browser assertions for consistent toolbars, dialogs, fields, empty/error/loading states, and accessible focus behavior.
+- [x] Apply the shared reference component system to login, appearance, converter, notes, Antra, and Repertoire without altering service/data semantics.
+- [x] Run appearance, notes, converter, downloader, Repertoire and role-boundary suites with isolated data, inspect screenshots, and commit.
 
 ## Task 4: Cloud Storage and terminal wrapper surfaces
 

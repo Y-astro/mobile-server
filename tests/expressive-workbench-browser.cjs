@@ -1,18 +1,26 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const assert = require('node:assert/strict');
 const { chromium } = require('@playwright/test');
 const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
 
 const rootDir = path.resolve(__dirname, '..');
-const previewDir = '/home/astro/server-audit/2026-11-24/expressive-redesign/task2-preview';
+const previewDir = process.env.EXPRESSIVE_PREVIEW_DIR || path.join(os.tmpdir(), 'expressive-preview');
 if (!fs.existsSync(previewDir)) {
   fs.mkdirSync(previewDir, { recursive: true });
 }
 
 const adminHtml = fs.readFileSync(path.join(rootDir, 'web/admin.html'), 'utf8');
 const familyHtml = fs.readFileSync(path.join(rootDir, 'web/family.html'), 'utf8');
+const loginHtml = fs.readFileSync(path.join(rootDir, 'web/login.html'), 'utf8');
+const antraHtml = fs.readFileSync(path.join(rootDir, 'web/antra.html'), 'utf8');
+const antraCss = fs.readFileSync(path.join(rootDir, 'web/antra.css'), 'utf8');
+const antraJs = fs.readFileSync(path.join(rootDir, 'web/antra.js'), 'utf8');
+const repertoireHtml = fs.readFileSync(path.join(rootDir, 'web/repertoire.html'), 'utf8');
+const repertoireCss = fs.readFileSync(path.join(rootDir, 'web/repertoire.css'), 'utf8');
+const repertoireJs = fs.readFileSync(path.join(rootDir, 'web/repertoire.js'), 'utf8');
 const portalCss = fs.readFileSync(path.join(rootDir, 'web/portal.css'), 'utf8');
 const themeTokensCss = fs.readFileSync(path.join(rootDir, 'web/theme-tokens.css'), 'utf8');
 const appearanceCss = fs.readFileSync(path.join(rootDir, 'web/appearance.css'), 'utf8');
@@ -73,8 +81,19 @@ const mockWallpapersData = {
   ]
 };
 
-// 1x1 test image pixel
-const mockPixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+// Valid SVG gradient wallpaper fixture (proves wallpaper & glass rendering visually)
+const mockWallpaperSvg = Buffer.from(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080">
+    <defs>
+      <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#101417"/>
+        <stop offset="50%" stop-color="#1b2a38"/>
+        <stop offset="100%" stop-color="#0b0f12"/>
+      </linearGradient>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#g)"/>
+  </svg>`
+);
 
 const mockServices = [
   { id: 'filebrowser', name: 'FileBrowser', category: 'Storage', running: true, can_toggle: true, open_label: 'Open Cloud Drive', open_url: '/drive/', status_badge: 'Active (24.1 MB)' },
@@ -198,6 +217,156 @@ const mockServices = [
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ enabled: false }));
     }
+    if (pathname === '/login') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(loginHtml);
+    }
+    if (pathname === '/api/login' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => body += chunk);
+      req.on('end', () => {
+        let creds = {};
+        try { creds = JSON.parse(body); } catch (e) {}
+        if (creds.username === 'astro' && creds.password === 'secret') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ status: 'ok', user: 'astro', role: 'admin', redirect: '/admin' }));
+        }
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ status: 'error', message: 'Invalid username or password' }));
+      });
+      return;
+    }
+    if (pathname === '/api/auth-check-admin') {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'X-Forwarded-User': 'astro' });
+      return res.end('OK');
+    }
+    if (pathname === '/antra' || pathname === '/antra/') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(antraHtml);
+    }
+    if (pathname === '/antra.css') {
+      res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
+      return res.end(antraCss);
+    }
+    if (pathname === '/antra.js') {
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
+      return res.end(antraJs);
+    }
+    if (pathname === '/api/antra/jobs') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        jobs: [
+          {
+            id: 'job-1',
+            title: 'Symphony No. 5 in C Minor',
+            artist: 'Ludwig van Beethoven',
+            source_url: 'https://example.com/stream/track1',
+            status: 'completed',
+            destination: 'private',
+            progress: 100,
+            quality: 'FLAC 24-bit 96kHz',
+            total_tracks: 4,
+            completed_tracks: 4,
+            created_at: 1700000000,
+            updated_at: 1700000100
+          },
+          {
+            id: 'job-2',
+            title: 'Carnatic Classical Concert',
+            artist: 'Madurai Mani Iyer',
+            source_url: 'https://example.com/stream/album2',
+            status: 'queued',
+            destination: 'family',
+            progress: 0,
+            quality: 'FLAC 16-bit 44.1kHz',
+            total_tracks: 8,
+            completed_tracks: 0,
+            priority: 1,
+            created_at: 1700000200,
+            updated_at: 1700000200
+          }
+        ],
+        worker: { active: true, status: 'idle' },
+        settings: {
+          output_directories: { private: 'Music/Astro', family: 'Music/Family' },
+          quality_filter: 'best_available_flac'
+        }
+      }));
+    }
+    const matchAntraDetail = pathname.match(/^\/api\/antra\/jobs\/([^/]+)$/);
+    if (matchAntraDetail && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        job: { id: matchAntraDetail[1], title: 'Carnatic Classical Concert', status: 'queued' },
+        tracks: [
+          { id: 't1', title: 'Track 1', progress: 100, status: 'completed' },
+          { id: 't2', title: 'Track 2', progress: 0, status: 'queued' }
+        ]
+      }));
+    }
+    if (pathname === '/api/antra/settings') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        output_directories: { private: 'Music/Astro', family: 'Music/Family' },
+        quality_filter: 'best_available_flac'
+      }));
+    }
+    if (pathname === '/repertoire' || pathname === '/repertoire/') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(repertoireHtml);
+    }
+    if (pathname === '/repertoire/app.css') {
+      res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
+      return res.end(repertoireCss);
+    }
+    if (pathname === '/repertoire/app.js') {
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
+      return res.end(repertoireJs);
+    }
+    if (pathname === '/api/repertoire') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        fields: [
+          { key: 'Composition', label: 'Composition' },
+          { key: 'rAga', label: 'Raga' },
+          { key: 'tALa', label: 'Tala' },
+          { key: 'Composer', label: 'Composer' },
+          { key: 'Comp_type', label: 'Composition type' },
+          { key: 'Language', label: 'Language' },
+          { key: 'Subject', label: 'Subject' },
+          { key: 'Repertoire', label: 'Repertoire' },
+          { key: 'pATAntara', label: 'Patantara' },
+          { key: 'ConcertFit', label: 'Concert fit' },
+          { key: 'Teaching', label: 'Teaching' },
+          { key: 'Rep date', label: 'Repertoire date' },
+          { key: 'Remarks', label: 'Remarks' },
+          { key: 'Reference', label: 'Reference' }
+        ],
+        records: [
+          { id: '1', Composition: 'Vatapi Ganapatim', rAga: 'Hamsadhvani', tALa: 'Adi', Composer: 'Muthuswami Dikshitar', Comp_type: 'Kriti', Language: 'Sanskrit', Repertoire: 'Yes', Rep_date: '2024-01-01' },
+          { id: '2', Composition: 'Endaro Mahanubhavulu', rAga: 'Sri', tALa: 'Adi', Composer: 'Tyagaraja', Comp_type: 'Kriti', Language: 'Telugu', Repertoire: 'Yes', Rep_date: '2024-01-01' },
+          { id: '3', Composition: 'Bhavayami Raghuramam', rAga: 'Ragamalika', tALa: 'Rupaka', Composer: 'Swathi Thirunal', Comp_type: 'Kriti', Language: 'Sanskrit', Repertoire: 'Yes', Rep_date: '2024-01-01' }
+        ],
+        source: 'database repertoire 202610.xlsx',
+        revision: 'rev-test-1',
+        updated: '2026-11-24T12:00:00Z',
+        versions: {
+          active: 'current',
+          limit: 8388608,
+          current: '2026-11-24T12:00:00Z',
+          previous: null
+        }
+      }));
+    }
+    if (pathname === '/api/repertoire/versions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        active: 'current',
+        limit: 8388608,
+        current: '2026-11-24T12:00:00Z',
+        previous: null
+      }));
+    }
     if (pathname === '/api/notes') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ notes: 'Workbench test note' }));
@@ -206,9 +375,9 @@ const mockServices = [
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify(mockWallpapersData));
     }
-    if (pathname.startsWith('/api/wallpapers/') && pathname.endsWith('.webp')) {
-      res.writeHead(200, { 'Content-Type': 'image/webp' });
-      return res.end(mockPixel);
+    if (pathname.startsWith('/api/wallpapers/')) {
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml' });
+      return res.end(mockWallpaperSvg);
     }
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -289,6 +458,13 @@ const mockServices = [
       assert(Math.abs(netLayout1440.itemRects[i].top - netLayout1440.itemRects[0].top) < 3, `Network item ${i} must be on same row as item 0 at 1440px`);
       assert(netLayout1440.itemRects[i].left >= netLayout1440.itemRects[i - 1].right - 2, `Network item ${i} must be to right of item ${i - 1}`);
     }
+
+    // 1.4.2 Numeric reading font size inheritance (22px) and unit label (12px)
+    const wifiSpeedFontSize = await page.locator('#net-wifi-speed').evaluate(el => window.getComputedStyle(el).fontSize);
+    const wifiUnitFontSize = await page.locator('.net .value .unit').first().evaluate(el => window.getComputedStyle(el).fontSize);
+    console.log('Network telemetry font sizes:', { wifiSpeedFontSize, wifiUnitFontSize });
+    assert.equal(wifiSpeedFontSize, '22px', 'Numeric telemetry reading #net-wifi-speed must inherit 22px');
+    assert.equal(wifiUnitFontSize, '12px', 'Unit label .unit must be styled to 12px');
 
     // 1.5 Work layout: 2-column split with services and ~320px remote aside (Root specifies 320px)
     const workLayout = await page.evaluate(() => {
@@ -403,8 +579,37 @@ const mockServices = [
     const dragHandle = page.locator('#services-grid [data-drag]').first();
     assert(await dragHandle.isVisible(), 'Pointer drag handles must be visible in arrange mode');
 
-    // Keyboard move earlier / later buttons
-    const firstCardId = await page.locator('#services-grid [data-service-id]').first().getAttribute('data-service-id');
+    // Input-driven pointer drag and drop test
+    const firstCard = page.locator('#services-grid [data-service-id]').first();
+    const firstCardId = await firstCard.getAttribute('data-service-id');
+    const secondCard = page.locator('#services-grid [data-service-id]').nth(1);
+    const secondBox = await secondCard.boundingBox();
+
+    await firstCard.scrollIntoViewIfNeeded();
+    await dragHandle.hover();
+    await page.mouse.down();
+    await page.mouse.move(secondBox.x + secondBox.width / 2, secondBox.y + secondBox.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+
+    const orderAfterPointerDrag = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('#services-grid [data-service-id]')).map(c => c.getAttribute('data-service-id'));
+    });
+    console.log('Order after pointer drag:', orderAfterPointerDrag);
+    assert.notEqual(orderAfterPointerDrag[0], firstCardId, 'First card must have moved via pointer drag');
+
+    const storedOrder = await page.evaluate(() => localStorage.getItem('mobile.services.order.v1'));
+    assert(storedOrder, 'Pointer drag order must persist in localStorage');
+    assert.deepEqual(JSON.parse(storedOrder), orderAfterPointerDrag, 'Exact stored order must match DOM order after pointer drag');
+
+    // Reset order between pointer and keyboard checks to provide clean baseline
+    const resetOrderBtn = page.locator('#btn-reset-service-order, #reset-order');
+    await resetOrderBtn.click();
+    await page.waitForTimeout(100);
+    const resetFirstId = await page.locator('#services-grid [data-service-id]').first().getAttribute('data-service-id');
+    assert.equal(resetFirstId, firstCardId, 'Order must reset before keyboard checks');
+
+    // Keyboard move earlier / later buttons (accessible equivalent)
     const moveDownBtn = page.locator(`#services-grid [data-service-id="${firstCardId}"] button[data-action="move-later"], #services-grid [data-service-id="${firstCardId}"] button[data-down]`);
     assert(await moveDownBtn.isVisible(), 'Move down/later button must be visible');
 
@@ -419,7 +624,6 @@ const mockServices = [
     console.log('Reorder announcement:', announcement);
 
     // Reset order
-    const resetOrderBtn = page.locator('#btn-reset-service-order, #reset-order');
     await resetOrderBtn.click();
     await page.waitForTimeout(100);
     const restoredFirstId = await page.locator('#services-grid [data-service-id]').first().getAttribute('data-service-id');
@@ -436,6 +640,15 @@ const mockServices = [
     // Laptop panel has switch and new button
     assert(await page.locator('label:has(#laptop-service-toggle)').isVisible(), 'Laptop switch must exist');
     assert(await page.locator('#laptop-new').isVisible(), 'Laptop New Terminal button must exist');
+
+    // Laptop session ID display in 320px aside
+    const laptopLabelText = await page.locator('#laptop-sessions .mono').first().textContent();
+    const laptopLabelTitle = await page.locator('#laptop-sessions .mono').first().getAttribute('title');
+    const laptopLabelWhiteSpace = await page.locator('#laptop-sessions .mono').first().evaluate(el => window.getComputedStyle(el).whiteSpace);
+    console.log('Laptop session label in 320px aside:', { laptopLabelText, laptopLabelTitle, laptopLabelWhiteSpace });
+    assert(laptopLabelText.startsWith('Terminal '), 'Laptop session label must display Terminal title');
+    assert.equal(laptopLabelTitle, '1234567890abcdef1234567890abcdef', 'Laptop session must have full ID in accessible title');
+    assert.equal(laptopLabelWhiteSpace, 'nowrap', 'Laptop session id in 320px aside must not split into scraps');
 
     // AGY panel has multiple sessions container
     assert(await page.locator('label:has(#agy-service-toggle)').isVisible(), 'AGY switch must exist');
@@ -507,6 +720,15 @@ const mockServices = [
     console.log('Applied Matugen primary token:', appliedPrimary);
     assert.equal(appliedPrimary, '#98ccf9', 'Matugen dynamic primary token should match wallpaper palette');
 
+    // Assert wallpaper load
+    await page.waitForFunction(() => {
+      const appBg = document.documentElement.style.getPropertyValue('--app-wallpaper-image');
+      return appBg && appBg.includes('/api/wallpapers/');
+    }, { timeout: 5000 });
+    const loadedWallpaperUrl = await page.evaluate(() => document.documentElement.style.getPropertyValue('--app-wallpaper-image'));
+    console.log('Loaded wallpaper image URL:', loadedWallpaperUrl);
+    assert(loadedWallpaperUrl.includes('/api/wallpapers/'), 'Wallpaper image must be loaded into --app-wallpaper-image');
+
     const adminWallpaperPath = path.join(previewDir, 'admin-wallpaper-1440.png');
     await page.screenshot({ path: adminWallpaperPath, fullPage: true });
     console.log(`Saved wallpaper screenshot: ${adminWallpaperPath}`);
@@ -556,6 +778,12 @@ const mockServices = [
     assert(await page.locator('#user-notes-input').isVisible(), 'Family must have permitted personal/family notes');
     assert(await page.locator('a[href="/drive/"]').isVisible(), 'Family must have Cloud Drive launcher');
 
+    // Verify scoped card title typography matches neighbouring titles without breaking heading semantics
+    const repTitleSize = await page.locator('section[aria-label="Repertoire Finder"] .svc-title').evaluate(el => window.getComputedStyle(el).fontSize);
+    const driveTitleSize = await page.locator('[data-service-id="filebrowser"] .svc-title').evaluate(el => window.getComputedStyle(el).fontSize);
+    console.log('Family card title font sizes:', { repTitleSize, driveTitleSize });
+    assert.equal(repTitleSize, driveTitleSize, 'Family Repertoire h2.svc-title must match neighbouring card title font size');
+
     // Save Family screenshots (wallpaper and mobile)
     const familyWallpaper = path.join(previewDir, 'family-wallpaper-1280.png');
     const familyDesktop = path.join(previewDir, 'family-desktop-1280.png');
@@ -587,6 +815,191 @@ const mockServices = [
     const familyMobile = path.join(previewDir, 'family-mobile-390.png');
     await page.screenshot({ path: familyMobile, fullPage: true });
     console.log(`Saved screenshot: ${familyMobile}`);
+
+    // -----------------------------------------------------------------------
+    // ASSERTION 9: Login Page (Desktop 1440 & Mobile 390)
+    // -----------------------------------------------------------------------
+    console.log('--- TEST 9: Login Page Acceptance ---');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseUrl}/login`);
+    await page.waitForSelector('#login-form');
+
+    // Panel border radius 28px
+    const loginCardRadius = await page.locator('.login-panel, .m3-card').first().evaluate(el => window.getComputedStyle(el).borderRadius);
+    console.log('Login card border-radius:', loginCardRadius);
+    assert.equal(loginCardRadius, '28px', 'Login card must have 28px outer border radius');
+
+    // Touch targets >= 48px
+    const userBox = await page.locator('#username').boundingBox();
+    const passBox = await page.locator('#password').boundingBox();
+    const submitBox = await page.locator('#submit-btn').boundingBox();
+    assert(userBox.height >= 48, `Username field height must be >= 48px, got ${userBox.height}`);
+    assert(passBox.height >= 48, `Password field height must be >= 48px, got ${passBox.height}`);
+    assert(submitBox.height >= 48, `Submit button height must be >= 48px, got ${submitBox.height}`);
+
+    // Desktop screenshot
+    const loginDesktop = path.join(previewDir, 'login-desktop-1440.png');
+    await page.screenshot({ path: loginDesktop, fullPage: true });
+    console.log(`Saved screenshot: ${loginDesktop}`);
+
+    // Mobile check at 390px
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(100);
+    const loginOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    assert.equal(loginOverflow, false, 'Login mobile 390px must not have horizontal overflow');
+
+    // Trigger synthetic error & test error container
+    await page.locator('#username').fill('invalid');
+    await page.locator('#password').fill('wrong');
+    await page.locator('#submit-btn').click();
+    await page.waitForSelector('#error-msg:not(.hidden)');
+    const errorMsgVisible = await page.locator('#error-msg').isVisible();
+    assert(errorMsgVisible, 'Error message must be visible upon failed login');
+
+    const loginMobile = path.join(previewDir, 'login-mobile-390.png');
+    await page.screenshot({ path: loginMobile, fullPage: true });
+    console.log(`Saved screenshot: ${loginMobile}`);
+
+    // -----------------------------------------------------------------------
+    // ASSERTION 10: Dialog Consistency (Appearance & Converter)
+    // -----------------------------------------------------------------------
+    console.log('--- TEST 10: Dialog Consistency (Appearance & Converter) ---');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseUrl}/admin`);
+    await page.waitForSelector('#services-grid');
+
+    // 10.1 Appearance Dialog
+    await page.waitForSelector('#btn-appearance');
+    await page.locator('#btn-appearance').click();
+    await page.waitForSelector('dialog#appearance-dialog[open]');
+    const appearanceDialogRadius = await page.locator('dialog#appearance-dialog').evaluate(el => window.getComputedStyle(el).borderRadius);
+    console.log('Appearance dialog border-radius:', appearanceDialogRadius);
+    assert.equal(appearanceDialogRadius, '28px', 'Appearance dialog outer panel must have 28px border radius');
+
+    const appearanceCloseBtnBox = await page.locator('.appearance-close-btn').boundingBox();
+    assert(appearanceCloseBtnBox.width >= 48 && appearanceCloseBtnBox.height >= 48, 'Appearance close button touch target >= 48px');
+
+    const appearanceScreenshot = path.join(previewDir, 'appearance-dialog-1440.png');
+    await page.screenshot({ path: appearanceScreenshot, fullPage: true });
+    console.log(`Saved screenshot: ${appearanceScreenshot}`);
+
+    // Dismiss with Escape
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(150);
+    const appearanceOpenAfterEsc = await page.evaluate(() => Boolean(document.querySelector('dialog#appearance-dialog[open]')));
+    assert.equal(appearanceOpenAfterEsc, false, 'Appearance dialog must dismiss on Escape');
+
+    // 10.2 Converter Dialog
+    const converterLaunchBtn = page.locator('#services-grid [data-service-id="converter"] .service-open-btn');
+    await converterLaunchBtn.scrollIntoViewIfNeeded();
+    await converterLaunchBtn.click();
+    await page.waitForSelector('#converter-modal:not(.hidden)');
+    const converterDialogRadius = await page.locator('#converter-modal > div').evaluate(el => window.getComputedStyle(el).borderRadius);
+    console.log('Converter dialog border-radius:', converterDialogRadius);
+    assert.equal(converterDialogRadius, '28px', 'Converter dialog outer panel must have 28px border radius');
+
+    const convertCloseBtn = page.locator('#converter-modal button[onclick="closeConverterModal()"]').first();
+    const convertCloseBox = await convertCloseBtn.boundingBox();
+    assert(convertCloseBox.width >= 48 && convertCloseBox.height >= 48, 'Converter close button touch target >= 48px');
+
+    const convertBtnBox = await page.locator('#convert-btn').boundingBox();
+    assert(convertBtnBox.height >= 48, 'Convert button height >= 48px');
+
+    const converterScreenshot = path.join(previewDir, 'converter-dialog-1440.png');
+    await page.screenshot({ path: converterScreenshot, fullPage: true });
+    console.log(`Saved screenshot: ${converterScreenshot}`);
+
+    // Dismiss with Escape
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(150);
+    assert.equal(await page.locator('#converter-modal').evaluate(el => el.classList.contains('hidden')), true, 'Converter dialog must close on Escape');
+
+    // -----------------------------------------------------------------------
+    // ASSERTION 11: Antra Downloader Acceptance
+    // -----------------------------------------------------------------------
+    console.log('--- TEST 11: Antra Downloader Acceptance ---');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseUrl}/antra/`);
+    await page.waitForSelector('#antra-form');
+
+    // Outer panel radius
+    const antraFormPanelRadius = await page.locator('#antra-form').first().evaluate(el => {
+      const panel = el.closest('.golden-glass-card') || el.closest('.m3-card');
+      return window.getComputedStyle(panel).borderRadius;
+    });
+    console.log('Antra form panel border-radius:', antraFormPanelRadius);
+    assert.equal(antraFormPanelRadius, '28px', 'Antra outer panels must have 28px radius');
+
+    // Touch targets >= 48px
+    const antraUrlBox = await page.locator('#antra-url-input').boundingBox();
+    const antraDestBox = await page.locator('#antra-destination-select').boundingBox();
+    const antraSubmitBox = await page.locator('#antra-submit-btn').boundingBox();
+    assert(antraUrlBox.height >= 48, `Antra URL input height must be >= 48px, got ${antraUrlBox.height}`);
+    assert(antraDestBox.height >= 48, `Antra destination select height must be >= 48px, got ${antraDestBox.height}`);
+    assert(antraSubmitBox.height >= 48, `Antra submit button height must be >= 48px, got ${antraSubmitBox.height}`);
+
+    // Inner job card radius
+    await page.waitForSelector('.job-card');
+    const jobCardRadius = await page.locator('.job-card').first().evaluate(el => window.getComputedStyle(el).borderRadius);
+    console.log('Antra job card border-radius:', jobCardRadius);
+    assert.equal(jobCardRadius, '14px', 'Antra inner job cards must have 14px radius');
+
+    const antraDesktop = path.join(previewDir, 'antra-desktop-1440.png');
+    await page.screenshot({ path: antraDesktop, fullPage: true });
+    console.log(`Saved screenshot: ${antraDesktop}`);
+
+    // Mobile check at 390px
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(100);
+    const antraOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    assert.equal(antraOverflow, false, 'Antra mobile 390px must not have horizontal overflow');
+
+    const antraMobile = path.join(previewDir, 'antra-mobile-390.png');
+    await page.screenshot({ path: antraMobile, fullPage: true });
+    console.log(`Saved screenshot: ${antraMobile}`);
+
+    // -----------------------------------------------------------------------
+    // ASSERTION 12: Repertoire Finder Acceptance
+    // -----------------------------------------------------------------------
+    console.log('--- TEST 12: Repertoire Finder Acceptance ---');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseUrl}/repertoire/`);
+    await page.waitForSelector('.search-panel');
+
+    // Outer panel radius
+    const searchPanelRadius = await page.locator('.search-panel').evaluate(el => window.getComputedStyle(el).borderRadius);
+    const workbookPanelRadius = await page.locator('.workbook-panel').evaluate(el => window.getComputedStyle(el).borderRadius);
+    console.log('Repertoire panel border-radii:', { searchPanelRadius, workbookPanelRadius });
+    assert.equal(searchPanelRadius, '28px', 'Repertoire search panel must have 28px radius');
+    assert.equal(workbookPanelRadius, '28px', 'Repertoire workbook panel must have 28px radius');
+
+    // Touch targets >= 48px
+    const searchBox = await page.locator('#search').boundingBox();
+    const uploadBtnBox = await page.locator('#open-upload').boundingBox();
+    const refreshBtnBox = await page.locator('#refresh').boundingBox();
+    assert(searchBox.height >= 48, `Repertoire search input height >= 48px, got ${searchBox.height}`);
+    assert(uploadBtnBox.height >= 48, `Repertoire upload button height >= 48px, got ${uploadBtnBox.height}`);
+    assert(refreshBtnBox.height >= 48, `Repertoire refresh button height >= 48px, got ${refreshBtnBox.height}`);
+
+    // Inner song card radius
+    await page.waitForSelector('.song-card');
+    const songCardRadius = await page.locator('.song-card').first().evaluate(el => window.getComputedStyle(el).borderRadius);
+    console.log('Repertoire song card border-radius:', songCardRadius);
+    assert.equal(songCardRadius, '14px', 'Repertoire song cards must have 14px radius');
+
+    const repertoireDesktop = path.join(previewDir, 'repertoire-desktop-1440.png');
+    await page.screenshot({ path: repertoireDesktop, fullPage: true });
+    console.log(`Saved screenshot: ${repertoireDesktop}`);
+
+    // Mobile check at 390px
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(100);
+    const repertoireOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    assert.equal(repertoireOverflow, false, 'Repertoire mobile 390px must not have horizontal overflow');
+
+    const repertoireMobile = path.join(previewDir, 'repertoire-mobile-390.png');
+    await page.screenshot({ path: repertoireMobile, fullPage: true });
+    console.log(`Saved screenshot: ${repertoireMobile}`);
 
     console.log('===========================================================');
     console.log('EXPRESSIVE WORKBENCH BROWSER ACCEPTANCE SUITE COMPLETE');

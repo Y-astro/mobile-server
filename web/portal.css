@@ -948,7 +948,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   font-variant-numeric: tabular-nums;
   color: var(--text);
 }
-.net .value span {
+.net .value .unit {
   font-size: 12px;
   letter-spacing: 0;
   color: var(--muted);
@@ -999,7 +999,9 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   gap: 9px;
   margin: 0 0 8px;
 }
-.services h2 {
+.services > .section-head h2,
+.services > .section-head > h2,
+.section-head h2 {
   font-size: 21px;
   font-weight: 600;
   margin: 0;
@@ -1182,9 +1184,13 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   width: 20px;
   height: 20px;
 }
+.svc .svc-title,
+.svc h2.svc-title,
+.svc h3.svc-title,
 .svc-title {
   font-weight: 600;
   font-size: 13.5px;
+  line-height: normal;
   letter-spacing: -0.15px;
   color: var(--text);
   overflow-wrap: anywhere;
@@ -1192,6 +1198,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
+  margin: 0;
 }
 .svc-status {
   font-size: 11px;
@@ -1529,6 +1536,51 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
 /* Dialog / Modal Backdrop */
 #converter-modal {
   background-color: rgba(12, 14, 15, 0.75);
+}
+#converter-modal > div {
+  border-radius: 28px !important;
+  background: color-mix(in srgb, var(--surface) var(--glass), transparent) !important;
+  backdrop-filter: blur(var(--blur)) !important;
+  -webkit-backdrop-filter: blur(var(--blur)) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: inset 0 0 0 1px #ffffff0a, 0 20px 48px rgba(0, 0, 0, 0.6) !important;
+}
+#convert-dropzone {
+  border-radius: 14px !important;
+}
+#converter-modal button[onclick="closeConverterModal()"] {
+  min-width: 48px;
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Login screen panel: Expressive Workbench 28px rounded glass */
+.login-panel {
+  border-radius: 28px !important;
+  background: color-mix(in srgb, var(--surface) var(--glass), transparent) !important;
+  backdrop-filter: blur(var(--blur)) !important;
+  -webkit-backdrop-filter: blur(var(--blur)) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: inset 0 0 0 1px #ffffff0a, 0 16px 40px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* Laptop terminals in remote tools sidebar (320px): stack gracefully */
+#laptop-sessions > div {
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 8px;
+}
+#laptop-sessions > div > .mono {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+#laptop-sessions > div > div.flex {
+  width: 100%;
+  justify-content: flex-end;
 }
 
 /* Animation utilities */

@@ -65,10 +65,10 @@ dialog#appearance-dialog {
   padding: 0;
   margin: auto;
   border: 1px solid var(--md-sys-color-outline-variant, #3f4948);
-  border-radius: var(--md-shape-corner-large, 16px);
+  border-radius: 28px;
   background: rgba(29, 34, 35, 0.96);
   color: var(--md-sys-color-on-surface, #e1e3e3);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7);
+  box-shadow: inset 0 0 0 1px #ffffff0a, 0 20px 48px rgba(0, 0, 0, 0.7);
   max-width: min(520px, calc(100vw - 32px));
   width: 100%;
   max-height: calc(100vh - 48px);

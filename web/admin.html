@@ -595,6 +595,7 @@
     const LAYOUT_PREF_KEY = 'k20-v6-layout';
     let lastKnownServices = [];
     let isArrangingServices = false;
+    let isPointerDown = false;
     let currentServiceFilter = 'all';
 
     function setServiceFilter(filter) {
@@ -821,6 +822,7 @@
     }
 
     function renderServices(services) {
+      if (isPointerDown) return;
       if (Array.isArray(services)) {
         lastKnownServices = services;
         updateSidebarControls(services);
@@ -996,43 +998,74 @@
       const grid = document.getElementById('services-grid');
       if (!grid) return;
       let draggedCard = null;
+      let didMove = false;
+      let startPos = null;
+
+      const onPointerMove = (e) => {
+        if (!isPointerDown || !draggedCard) return;
+        if (!didMove && startPos) {
+          const dist = Math.hypot(e.clientX - startPos.x, e.clientY - startPos.y);
+          if (dist >= 4) {
+            didMove = true;
+            draggedCard.classList.add('drag-source');
+          }
+        }
+        if (didMove) {
+          const cards = Array.from(grid.querySelectorAll('.svc'));
+          const draggedIndex = cards.indexOf(draggedCard);
+          for (let i = 0; i < cards.length; i++) {
+            const other = cards[i];
+            if (other === draggedCard) continue;
+            const rect = other.getBoundingClientRect();
+            if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+              if (draggedIndex < i) {
+                grid.insertBefore(draggedCard, other.nextSibling);
+              } else {
+                grid.insertBefore(draggedCard, other);
+              }
+              break;
+            }
+          }
+        }
+      };
+
+      const endDrag = (e) => {
+        if (!isPointerDown) return;
+        isPointerDown = false;
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', endDrag);
+        window.removeEventListener('pointercancel', endDrag);
+
+        if (draggedCard) {
+          draggedCard.classList.remove('drag-source');
+          draggedCard.classList.remove('drag-ghost');
+          try {
+            if (e && draggedCard.hasPointerCapture(e.pointerId)) {
+              draggedCard.releasePointerCapture(e.pointerId);
+            }
+          } catch (_) {}
+          const newOrder = Array.from(grid.querySelectorAll('.svc')).map(c => c.getAttribute('data-service-id')).filter(Boolean);
+          saveStoredServiceOrder(newOrder);
+          announceReorder(`Service reordered to position ${newOrder.indexOf(draggedCard.getAttribute('data-service-id')) + 1}`);
+          draggedCard = null;
+        }
+      };
 
       grid.addEventListener('pointerdown', (e) => {
-        if (!isArrangingServices) return;
+        if (!isArrangingServices || e.button !== 0) return;
         const handle = e.target.closest('[data-drag]');
         if (!handle) return;
         const card = handle.closest('.svc');
         if (!card) return;
         draggedCard = card;
-        card.classList.add('drag-ghost');
-        try { card.setPointerCapture(e.pointerId); } catch (err) {}
+        isPointerDown = true;
+        didMove = false;
+        startPos = { x: e.clientX, y: e.clientY };
+        try { card.setPointerCapture(e.pointerId); } catch (_) {}
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', endDrag);
+        window.addEventListener('pointercancel', endDrag);
       });
-
-      grid.addEventListener('pointermove', (e) => {
-        if (!draggedCard) return;
-        const targetCard = document.elementFromPoint(e.clientX, e.clientY)?.closest('.svc');
-        if (targetCard && targetCard !== draggedCard && targetCard.parentNode === grid) {
-          const rect = targetCard.getBoundingClientRect();
-          const mid = rect.top + rect.height / 2;
-          if (e.clientY < mid) {
-            grid.insertBefore(draggedCard, targetCard);
-          } else {
-            grid.insertBefore(draggedCard, targetCard.nextSibling);
-          }
-        }
-      });
-
-      const endDrag = () => {
-        if (!draggedCard) return;
-        draggedCard.classList.remove('drag-ghost');
-        const newOrder = Array.from(grid.querySelectorAll('.svc')).map(c => c.getAttribute('data-service-id')).filter(Boolean);
-        saveStoredServiceOrder(newOrder);
-        announceReorder(`Service reordered to position ${newOrder.indexOf(draggedCard.getAttribute('data-service-id')) + 1}`);
-        draggedCard = null;
-      };
-
-      grid.addEventListener('pointerup', endDrag);
-      grid.addEventListener('pointercancel', endDrag);
     }
 
     function openVaultHTTPS() {
@@ -1666,7 +1699,7 @@
 
   <!-- Document to PDF Converter Modal -->
   <div id="converter-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title-admin">
-    <div class="m3-card golden-glass max-w-lg w-full p-5 sm:p-6 rounded-xl space-y-4 relative max-h-[90vh] flex flex-col justify-between">
+    <div class="m3-card golden-glass max-w-lg w-full p-5 sm:p-6 rounded-[28px] space-y-4 relative max-h-[90vh] flex flex-col justify-between">
       <!-- Modal Header -->
       <div class="flex items-start justify-between">
         <div class="flex items-center gap-2.5">

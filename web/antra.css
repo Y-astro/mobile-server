@@ -89,7 +89,24 @@ select.antra-input {
 
 /* --- Job Cards --- */
 .job-card {
+  border-radius: 14px !important;
+  background: color-mix(in srgb, var(--high, #272c2d) 70%, transparent) !important;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.08)) !important;
   transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+/* --- Outer Expressive Workbench Panels (28px radius) --- */
+.antra-panel,
+.lg\:col-span-2.m3-card,
+#tracks-section,
+#jobs-empty,
+main > section > .golden-glass-card:not(.job-card) {
+  border-radius: 28px !important;
+  background: color-mix(in srgb, var(--surface, #111414) var(--glass, 85%), transparent) !important;
+  backdrop-filter: blur(var(--blur, 20px)) !important;
+  -webkit-backdrop-filter: blur(var(--blur, 20px)) !important;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.1)) !important;
+  box-shadow: inset 0 0 0 1px #ffffff0a;
 }
 
 .job-card .min-w-0 {
