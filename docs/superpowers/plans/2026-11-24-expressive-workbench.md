@@ -1,6 +1,6 @@
 # Expressive Workbench Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Apply the supplied Expressive Workbench design to both account roles and all included service interfaces while preserving current server behavior.
 
@@ -76,16 +76,18 @@
 - [x] Cancelled by user: native branding or static asset hooks for these three services are excluded. Existing service interfaces and commands are preserved.
 - [x] Cancelled by user: disabled service intent and existing standalone interfaces preserved without modification.
 
-## Task 6: Integrated verification and controlled publication [DEPLOYMENT PENDING]
+## Task 6: Integrated verification and controlled publication [DEPLOYED AND VERIFIED]
 
 **Files:** Release ownership/fixtures as needed, committed source assets, deployment evidence outside the repository, and `docs/architecture/` updates reflecting the final owned assets.
 
-- [ ] Check the complete changed-surface inventory against the specification and run focused Python contracts plus applicable actual-page Playwright suites. Repeat only failures or checks affected by subsequent edits.
-- [ ] Inspect final differences for stale prototype data, hardcoded theme colours, lost features, role leaks, and unowned assets. Verify the three excluded application UIs remain untouched.
-- [ ] Commit the reviewed source, build a complete candidate manifest, capture fresh live preconditions, and verify a recovery path. Refuse unexplained drift.
-- [ ] Activate only affected assets/services through the reviewed mechanism; preserve SSH, disabled flags, user data, and excluded application runtimes.
-- [ ] Verify published admin/family pages and included service interfaces, HTTP asset cache behavior, action contracts and service health. Refresh the local/server architecture map and report validation limits.
+- [x] Check the complete changed-surface inventory against the specification and run focused Python contracts plus applicable actual-page Playwright suites. Repeat only failures or checks affected by subsequent edits.
+- [x] Inspect final differences for stale prototype data, hardcoded theme colours, lost features, role leaks, and unowned assets. Verify all six excluded application UIs remain untouched.
+- [x] Commit the reviewed source, build a complete candidate manifest, capture fresh live preconditions, and verify a recovery path. Refuse unexplained drift.
+- [x] Activate only affected assets/services through the reviewed mechanism; preserve SSH, disabled flags, user data, and excluded application runtimes.
+- [x] Verify published admin/family pages and included service interfaces, HTTP asset cache behavior, action contracts and service health. Refresh the local/server architecture map and report validation limits.
 
 ## Execution record
 
 The user-approved reference and explicit execution request authorize this work. Process details above are implementation decisions, not additional user approvals. Individual task plans may be refined from verified runtime evidence before that task starts; preserve this scope and the recorded acceptance conditions.
+
+Deployment completed on 2026-11-25: source `11def743320a`, transaction `act_e9558e013ace`. See [deployment report](../expressive-workbench-deployment.md) for evidence and verification limits.
