@@ -178,6 +178,14 @@ def validate_catalog_transition(
                 p_val = p_cfg.get(attr)
                 c_val = c_cfg.get(attr)
                 if p_val != c_val:
+                    if profile == 'general' and sid == 'laptop_terminal' and attr == 'cmd':
+                        base = [f'{prefix_str}/bin/ttyd', '-W', '-a', '-m', '8', '-i', '127.0.0.1',
+                                '-p', '7683', '-b', '/laptop', f'{prefix_str}/bin/python3',
+                                f'{home_str}/bin/laptop_session.py']
+                        wrapper = base[:-2] + ['-I', f'{home_str}/.config/ttyd/termux_index.html'] + base[-2:]
+                        # Permit only this reviewed UI hook and its rollback; all other argv drift stays blocked.
+                        if (p_val == base and c_val == wrapper) or (p_val == wrapper and c_val == base):
+                            continue
                     raise RuntimeError(
                         f"Candidate service {sid} runtime drift on '{attr}': prior={p_val!r}, candidate={c_val!r}"
                     )

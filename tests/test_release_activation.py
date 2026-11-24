@@ -1829,6 +1829,33 @@ class TestReleaseActivation(unittest.TestCase):
                 profile="suwayomi-lifecycle",
             )
 
+    def test_general_laptop_ui_transition_and_rollback_are_exact(self):
+        home, prefix = '/home', '/usr'
+        candidate = ra.load_catalog_services_from_bytes(
+            (REPO_ROOT / 'app/service_catalog.py').read_bytes(), home, prefix, 'laptop_ui_candidate'
+        )
+        prior = copy.deepcopy(candidate)
+        command = prior['laptop_terminal']['cmd']
+        index = command.index('-I')
+        self.assertEqual(command[index + 1], home + '/.config/ttyd/termux_index.html')
+        del command[index:index + 2]
+        ta.validate_catalog_transition(prior, candidate, home, prefix, 'general')
+        ta.validate_catalog_transition(candidate, prior, home, prefix, 'general')
+        for change in ('index', 'extra_flag', 'other_service', 'port'):
+            invalid = copy.deepcopy(candidate)
+            if change == 'index':
+                invalid['laptop_terminal']['cmd'][index + 1] = home + '/wrong.html'
+            elif change == 'extra_flag':
+                invalid['laptop_terminal']['cmd'].append('--unexpected')
+            elif change == 'other_service':
+                invalid['adguard']['cmd'].append('--local-frontend')
+            else:
+                invalid['laptop_terminal']['port'] += 1
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                ta.validate_catalog_transition(prior, invalid, home, prefix, 'general')
+        with self.assertRaises(RuntimeError):
+            ta.validate_catalog_transition(prior, candidate, home, prefix, 'suwayomi-filter')
+
     def test_exact_15_to_16_vs_decoy_runtime_changes(self):
         """Exact 15->16 candidate runtime contract verified; decoys, reordering, and wrong profiles rejected."""
         import app.service_catalog as sc

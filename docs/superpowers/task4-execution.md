@@ -120,3 +120,7 @@ These are local browser checks with mocked backend transport. Live terminal conn
 - **Release Activation Mapping**: Updated `scripts/release_activation.py` `map_changed_destinations` so `/data/data/com.termux/files/home/.config/ttyd/termux_index.html` under `general` profile affects both `terminal` and `laptop_terminal`, ensuring running laptop gateway reloads on shared index updates without affecting unrelated services or the supervisor.
 - **Unit Test Coverage**: Focused tests added in `tests/test_service_catalog.py` (`test_laptop_terminal_runtime_command_includes_index_hook`) and `tests/test_release_activation.py` (`test_termux_index_maps_to_terminal_and_laptop_terminal`); both pass.
 - **Status**: Local implementation and testing complete. Live host activation and live browser checks against running ttyd instances on the target phone remain integration gates pending Root execution.
+
+## Production release preflight
+
+The production catalog validator now accepts only the canonical laptop ttyd command and the same command with the approved `-I HOME/.config/ttyd/termux_index.html` pair. It permits the reverse pair for rollback. Wrong index paths, extra flags, changed ports, unrelated service changes and use under a Suwayomi profile still fail closed. Root verified this against the production transition function, alongside the shared-index affected-service mapping and disabled-state checks.
