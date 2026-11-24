@@ -13,6 +13,7 @@ import fcntl
 import signal
 import argparse
 import datetime
+import stat
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -32,7 +33,14 @@ _pid_file_fd = None
 def log(msg: str):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[{timestamp}] {msg}"
-    print(formatted, flush=True)
+    try:
+        print(formatted, flush=True)
+    except BrokenPipeError:
+        # A failed capture companion must not stop the update scheduler.
+        pass
+    if os.environ.get("SUWAYOMI_BOUNDED_LOGGING") == "1":
+        # In bounded capture mode, stdout is captured by companion; omit separate file writes.
+        return
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         with LOG_FILE.open("a", encoding="utf-8") as f:
@@ -120,6 +128,239 @@ def trigger_update(retries=5, delay=10):
                 time.sleep(delay)
             else:
                 return False, f"Failed after {retries} attempts: {e}"
+
+# Server-side catch-up is independent of a reader client remaining open.
+READ_CLEANUP_PAGE_SIZE = 50
+PROTECTED_READ_CATEGORY = "currently reading"
+
+
+def cleanup_graphql(query, variables=None):
+    payload = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
+    request = urllib.request.Request(GRAPHQL_URL, data=payload,
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(request, timeout=30) as response:
+        result = json.load(response)
+    if result.get("errors") or not isinstance(result.get("data"), dict):
+        raise RuntimeError("Read-download cleanup GraphQL request failed")
+    return result["data"]
+
+
+def read_cleanup_policy(request=cleanup_graphql):
+    data = request("""query ReadDownloadCleanupPolicy {
+      categories { nodes { id name } }
+      metas { nodes { key value } }
+    }""")
+    categories = data["categories"]["nodes"]
+    protected = {row["id"] for row in categories
+        if row["name"].strip().casefold() == PROTECTED_READ_CATEGORY}
+    if len(protected) != 1 or any(type(value) is not int for value in protected):
+        raise RuntimeError("Currently Reading category cannot be identified safely")
+    meta = {row["key"]: row["value"] for row in data["metas"]["nodes"]}
+    return protected, meta.get("webUI_deleteChaptersWithBookmark") == "true"
+
+
+def eligible_read_download(row, protected, allow_bookmarked, *, downloaded=True):
+    if type(row.get("id")) is not int or row["id"] <= 0:
+        raise RuntimeError("Invalid cleanup chapter ID")
+    user = row
+    manga = row["manga"]
+    categories = manga["categories"]["nodes"]
+    if any(type(value.get("id")) is not int for value in categories):
+        raise RuntimeError("Invalid cleanup category data")
+    return (user.get("isRead") is True and user.get("isDownloaded") is downloaded
+        and type(user.get("isBookmarked")) is bool
+        and (allow_bookmarked or not user["isBookmarked"])
+        and manga.get("inLibrary") is True
+        and not protected.intersection(value["id"] for value in categories))
+
+
+_READ_CLEANUP_QUERY = """query ReadDownloadCleanupCandidates($filter: ChapterFilterInput!, $first: Int!) {
+  chapters(filter: $filter, first: $first, order: [{by: ID, byType: ASC}]) {
+    nodes { id isRead isDownloaded isBookmarked
+      manga { inLibrary categories { nodes { id } } } }
+  }
+}"""
+
+
+def cleanup_read_downloads(*, dry_run=False, request=cleanup_graphql):
+    # Keyset paging avoids skipping rows when deleting shrinks the result set.
+    protected, allow_bookmarked = read_cleanup_policy(request)
+    after = 0
+    result = {"examined": 0, "eligible": 0, "deleted": 0, "protected": 0,
+              "failed": 0, "dry_run": dry_run}
+    base_filter = {"inLibrary": {"equalTo": True}, "isRead": {"equalTo": True},
+                   "isDownloaded": {"equalTo": True}}
+    while True:
+        rows = request(_READ_CLEANUP_QUERY, {"filter": {
+            **base_filter, "id": {"greaterThan": after}},
+            "first": READ_CLEANUP_PAGE_SIZE})["chapters"]["nodes"]
+        if not rows:
+            break
+        ids = [row["id"] for row in rows]
+        if any(type(value) is not int or value <= after for value in ids) or ids != sorted(set(ids)):
+            raise RuntimeError("Cleanup response does not advance chapter IDs")
+        after = ids[-1]
+        result["examined"] += len(rows)
+        candidates = [row["id"] for row in rows
+            if eligible_read_download(row, protected, allow_bookmarked)]
+        result["protected"] += len(rows) - len(candidates)
+        if not candidates:
+            continue
+        # Respect category moves, bookmark changes and mark-unread right before deletion.
+        protected, allow_bookmarked = read_cleanup_policy(request)
+        fresh = request(_READ_CLEANUP_QUERY, {"filter": {
+            **base_filter, "id": {"in": candidates}},
+            "first": READ_CLEANUP_PAGE_SIZE})["chapters"]["nodes"]
+        eligible = sorted({row["id"] for row in fresh
+            if row["id"] in candidates and eligible_read_download(row, protected, allow_bookmarked)})
+        result["eligible"] += len(eligible)
+        if dry_run or not eligible:
+            continue
+        try:
+            deleted = request("""mutation CleanupReadDownloadedChapters($input: DeleteDownloadedChaptersInput!) {
+              deleteDownloadedChapters(input: $input) { chapters { id isDownloaded } }
+            }""", {"input": {"ids": eligible}})["deleteDownloadedChapters"]["chapters"]
+            confirmed = {row["id"] for row in deleted
+                if row["id"] in eligible and row.get("isDownloaded") is False}
+            result["deleted"] += len(confirmed)
+            result["failed"] += len(eligible) - len(confirmed)
+            log(f"Read-download cleanup batch: deleted={sorted(confirmed)} failed={len(eligible) - len(confirmed)}")
+        except Exception as error:
+            result["failed"] += len(eligible)
+            log(f"Read-download cleanup batch failed: {type(error).__name__}")
+    log("Read-download cleanup: " + json.dumps(result, sort_keys=True))
+    return result
+
+
+
+# Both are existing download stores on this phone; do not scan unrelated storage.
+READ_ARCHIVE_ROOTS = (BASE_DIR / "downloads/mangas",
+                     Path("/storage/emulated/0/Suwayomi/downloads/mangas"))
+
+
+def archive_filename(name):
+    # Match the installed server's SafePath UTF-8 filename limits.
+    name = name.strip(". ")
+    if not name:
+        return "(invalid)"
+    name = "".join("_" if ord(c) < 32 or c in '\"*/:<>?\\|\x7f' else c for c in name)
+    return name[:240].encode("utf-8")[:240].decode("utf-8", errors="ignore")
+
+
+def archive_parts(manga, chapter):
+    source = manga["source"]
+    scanlator = chapter["scanlator"]
+    return (archive_filename(source["name"] + " (" + source["lang"].upper() + ")"),
+            archive_filename(manga["title"]),
+            archive_filename((scanlator + "_" if scanlator is not None else "") + chapter["name"]) + ".cbz")
+
+
+def cleanup_read_archives(*, dry_run=False, request=cleanup_graphql, roots=READ_ARCHIVE_ROOTS):
+    result = {"deleted_archives": 0, "deleted_bytes": 0, "eligible_archives": 0,
+              "unmatched_archives": 0, "failed": 0, "dry_run": dry_run}
+    inventory = []
+    for root in roots:
+        if not root.is_dir() or root.is_symlink():
+            continue
+        for path in root.glob("*/*/*.cbz"):
+            info = path.lstat()
+            if stat.S_ISREG(info.st_mode) and path.resolve().is_relative_to(root.resolve()):
+                inventory.append((root, path, info))
+    if not inventory:
+        return result
+    protected, allow_bookmarked = read_cleanup_policy(request)
+    mangas = request("""query ReadArchiveLibrary {
+      mangas(first: 10000, filter: {inLibrary: {equalTo: true}}) {
+        totalCount nodes { id title source { name lang } }
+      }
+    }""")["mangas"]
+    if mangas["totalCount"] != len(mangas["nodes"]):
+        raise RuntimeError("Read archive library inventory is incomplete")
+    by_directory = {}
+    for manga in mangas["nodes"]:
+        directory = archive_parts(manga, {"name": "", "scanlator": None})[:2]
+        by_directory.setdefault(directory, []).append(manga)
+    chapters_by_manga = {}
+    candidates = {}
+    for root, path, info in inventory:
+        matches = by_directory.get(path.relative_to(root).parts[:2], [])
+        if len(matches) != 1:
+            result["unmatched_archives"] += 1
+            continue
+        manga = matches[0]
+        mid = manga["id"]
+        if mid not in chapters_by_manga:
+            names = {}
+            after = 0
+            while True:
+                rows = request("""query ReadArchiveChapterNames($filter: ChapterFilterInput!) {
+                  chapters(first: 500, filter: $filter, order: [{by: ID, byType: ASC}]) {
+                    nodes { id name scanlator }
+                  }
+                }""", {"filter": {"mangaId": {"equalTo": mid}, "id": {"greaterThan": after}}})["chapters"]["nodes"]
+                if not rows:
+                    break
+                ids = [row["id"] for row in rows]
+                if any(type(value) is not int or value <= after for value in ids) or ids != sorted(set(ids)):
+                    raise RuntimeError("Read archive chapter inventory does not advance")
+                after = ids[-1]
+                for chapter in rows:
+                    names.setdefault(archive_parts(manga, chapter), []).append(chapter["id"])
+            chapters_by_manga[mid] = names
+        ids = chapters_by_manga[mid].get(path.relative_to(root).parts, [])
+        if len(ids) != 1:
+            result["unmatched_archives"] += 1
+            continue
+        candidates.setdefault(ids[0], []).append((root, path, info))
+    ids = sorted(candidates)
+    for offset in range(0, len(ids), READ_CLEANUP_PAGE_SIZE):
+        protected, allow_bookmarked = read_cleanup_policy(request)
+        batch = ids[offset:offset + READ_CLEANUP_PAGE_SIZE]
+        rows = request("""query ReadArchiveRecheck($filter: ChapterFilterInput!) {
+          chapters(first: 50, filter: $filter) { nodes {
+            id name scanlator isRead isDownloaded isBookmarked
+            manga { inLibrary title source { name lang } categories { nodes { id } } }
+          } }
+        }""", {"filter": {"id": {"in": batch}}})["chapters"]["nodes"]
+        for chapter in rows:
+            cid = chapter["id"]
+            if cid not in candidates or not eligible_read_download(chapter, protected, allow_bookmarked, downloaded=False):
+                continue
+            expected = archive_parts(chapter["manga"], chapter)
+            for root, path, info in candidates[cid]:
+                try:
+                    current = path.lstat()
+                    identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+                    if (identity(info) != identity(current) or not stat.S_ISREG(current.st_mode)
+                            or not path.resolve().is_relative_to(root.resolve())
+                            or path.relative_to(root).parts != expected):
+                        continue
+                    result["eligible_archives"] += 1
+                    if not dry_run:
+                        path.unlink()
+                        result["deleted_archives"] += 1
+                        result["deleted_bytes"] += info.st_size
+                except FileNotFoundError:
+                    continue
+                except OSError as error:
+                    result["failed"] += 1
+                    log(f"Read archive cleanup failed for chapter {cid}: {type(error).__name__}")
+    log("Read archive cleanup: " + json.dumps(result, sort_keys=True))
+    return result
+
+
+def nightly_update_and_cleanup():
+    # Keep the midnight update first and keep cleanup failures from cancelling it.
+    ok, message = trigger_update(retries=10, delay=15)
+    try:
+        result = cleanup_read_downloads()
+        archives = cleanup_read_archives()
+        message += (f"; read cleanup deleted={result['deleted']} failed={result['failed']}"
+                    f"; stale archives deleted={archives['deleted_archives']} failed={archives['failed']}")
+    except Exception as error:
+        log(f"Read-download cleanup deferred after error: {type(error).__name__}")
+        message += "; read cleanup failed (will retry next midnight)"
+    return ok, message
 
 def run_now():
     log("Manual update triggered...")
@@ -210,7 +451,7 @@ def run_daemon(foreground=False):
             # Trigger at 00:00 (12:00 AM) if not run today
             if now.hour == 0 and now.minute == 0 and last_run_date != today_str:
                 log(f"12:00 AM reached for {today_str}! Starting daily reading update...")
-                ok, msg = trigger_update(retries=10, delay=15)
+                ok, msg = nightly_update_and_cleanup()
                 last_run_date = today_str
                 save_status("success" if ok else "failure", msg, last_run=now, daemon_pid=os.getpid())
                 # Sleep 65s so we don't re-trigger in the same minute
@@ -260,9 +501,17 @@ def main():
     group.add_argument("--foreground", action="store_true", help="Run daemon in foreground")
     group.add_argument("--now", action="store_true", help="Trigger update immediately")
     group.add_argument("--status", action="store_true", help="Show current scheduler status")
+    group.add_argument("--cleanup-read-downloads", action="store_true", help="Clean read server downloads, except Currently Reading")
+    parser.add_argument("--dry-run", action="store_true", help="Audit cleanup without deleting downloads")
     args = parser.parse_args()
+    if args.dry_run and not args.cleanup_read_downloads:
+        parser.error("--dry-run requires --cleanup-read-downloads")
 
-    if args.now:
+    if args.cleanup_read_downloads:
+        result = cleanup_read_downloads(dry_run=args.dry_run)
+        archives = cleanup_read_archives(dry_run=args.dry_run)
+        sys.exit(1 if result["failed"] or archives["failed"] else 0)
+    elif args.now:
         success = run_now()
         sys.exit(0 if success else 1)
     elif args.status:

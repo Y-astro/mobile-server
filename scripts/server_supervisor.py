@@ -361,11 +361,10 @@ def get_tracer_pid():
     return 0
 
 
+BOUNDED_SUWAYOMI_SERVICES = {'suwayomi', 'suwayomi_filter', 'suwayomi_scheduler'}
+
+
 def launch(sid, cfg):
-    log_path = STATE / f'{sid}.log'
-    # Rotate before restart; do not truncate a running writer's file.
-    if log_path.exists() and log_path.stat().st_size > 2*1024*1024:
-        log_path.replace(log_path.with_suffix('.log.1'))
     tpid = get_tracer_pid()
     if tpid != 0:
         LOG.warning('Refusing to launch %s directly from traced/PRoot environment (TracerPid=%d); daemon will start it cleanly', sid, tpid)
@@ -376,6 +375,57 @@ def launch(sid, cfg):
     env['USER'] = 'u0_a505'
     env['TMUX_TMPDIR'] = str(PREFIX / 'var/run/tmux-10505')
     env.update(HOME=str(HOME), PREFIX=str(PREFIX), TMPDIR=str(PREFIX / 'tmp'), PATH=f'{PREFIX}/bin:{PREFIX}/bin/applets:' + env.get('PATH', ''), GOMEMLIMIT='256MiB', GOGC='100')
+
+    if sid in BOUNDED_SUWAYOMI_SERVICES:
+        env['SUWAYOMI_BOUNDED_LOGGING'] = '1'
+        # Coordinated bounded capture companion:
+        # Resolve suwayomi_logs.py script path dynamically (supports flat layout and repo app/)
+        helper_path = _lib_dir / 'suwayomi_logs.py'
+        if not helper_path.exists():
+            helper_path = Path(__file__).resolve().parents[1] / 'app' / 'suwayomi_logs.py'
+        if not helper_path.exists():
+            helper_path = HOME / '.local/lib/mobile-server/suwayomi_logs.py'
+
+        proc = subprocess.Popen(
+            cfg['cmd'],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+        try:
+            companion_env = env.copy()
+            companion_env['PYTHONPATH'] = str(_lib_dir)
+            companion_cmd = [sys.executable, str(helper_path), 'capture', sid]
+            c_proc = subprocess.Popen(
+                companion_cmd,
+                stdin=proc.stdout,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=companion_env,
+                start_new_session=True,
+                close_fds=True,
+            )
+            # Register companion for automatic child reaping
+            Supervisor.capture_children.append(c_proc)
+        except Exception:
+            # If companion spawn fails, do not leave orphan service with dead pipe
+            terminate([(proc.pid, sid)])
+            if proc.stdout is not None:
+                proc.stdout.close()
+            raise
+        finally:
+            if proc.stdout is not None:
+                proc.stdout.close()
+        LOG.info('START %s pid=%s (bounded capture)', sid, proc.pid)
+        return proc
+
+    log_path = STATE / f'{sid}.log'
+    # Rotate before restart; do not truncate a running writer's file.
+    if log_path.exists() and log_path.stat().st_size > 2*1024*1024:
+        log_path.replace(log_path.with_suffix('.log.1'))
     with log_path.open('ab', buffering=0) as out:
         proc = subprocess.Popen(cfg['cmd'], env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True, close_fds=True)
     LOG.info('START %s pid=%s', sid, proc.pid)
@@ -383,6 +433,8 @@ def launch(sid, cfg):
 
 
 class Supervisor:
+    capture_children = []
+
     def __init__(self):
         self.history = {}
         self.children = []
@@ -390,13 +442,15 @@ class Supervisor:
     def cycle(self, initial=False):
         report = {}
         self.children = [p for p in self.children if p.poll() is None]
+        Supervisor.capture_children = [p for p in Supervisor.capture_children if p.poll() is None]
         for sid, cfg in services().items():
-            logfile = STATE / f'{sid}.log'
-            if logfile.exists() and logfile.stat().st_size > 2*1024*1024:
-                shutil.copyfile(logfile, logfile.with_suffix('.log.1'))
-                # Keep existing process descriptors writing into the current file.
-                with logfile.open('r+b') as out:
-                    out.truncate(0)
+            if sid not in BOUNDED_SUWAYOMI_SERVICES:
+                logfile = STATE / f'{sid}.log'
+                if logfile.exists() and logfile.stat().st_size > 2*1024*1024:
+                    shutil.copyfile(logfile, logfile.with_suffix('.log.1'))
+                    # Keep existing process descriptors writing into the current file.
+                    with logfile.open('r+b') as out:
+                        out.truncate(0)
             if (DISABLED / sid).exists() or (PAUSED.exists() and sid != 'ssh'):
                 report[sid] = {'state': 'disabled'}
                 continue

@@ -13,6 +13,8 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+import re
+import sys
 from pathlib import Path
 import threading
 import time
@@ -53,6 +55,14 @@ logger.addHandler(logging.NullHandler())
 
 
 def setup_logging():
+    if os.environ.get("SUWAYOMI_BOUNDED_LOGGING") == "1":
+        # In bounded capture mode, route output to stdout where supervisor capture companion records it.
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        return
+
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(LOG_DIR / "graphql_filter.log", maxBytes=1024 * 1024, backupCount=2)
     handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
@@ -345,6 +355,23 @@ class FilterHandler(http.server.BaseHTTPRequestHandler):
     upstream = UPSTREAM
     cache = cache
 
+    def handle_one_request(self):
+        started = time.monotonic()
+        self._activity_status = None
+        self._activity_operation = 'unnamed'
+        try:
+            super().handle_one_request()
+        finally:
+            if os.environ.get('SUWAYOMI_BOUNDED_LOGGING') == '1' and getattr(self, 'command', None) in ('GET', 'POST') and self.path != '/healthz':
+                route = 'graphql' if self.path.split('?', 1)[0].endswith('/api/graphql') else 'asset'
+                logger.info('request method=%s route=%s operation=%s status=%s elapsedMs=%d',
+                            self.command, route, self._activity_operation,
+                            self._activity_status, int((time.monotonic() - started) * 1000))
+
+    def send_response(self, code, message=None):
+        self._activity_status = code
+        return super().send_response(code, message)
+
     def log_message(self, format, *args):
         pass  # Quiet logging for performance
 
@@ -418,6 +445,15 @@ class FilterHandler(http.server.BaseHTTPRequestHandler):
             return
 
         body = self.rfile.read(content_len) if content_len > 0 else b""
+
+        if os.environ.get('SUWAYOMI_BOUNDED_LOGGING') == '1':
+            # Operation identifiers only; request bodies and headers never enter logs.
+            prefix = body[:4096]
+            operation = re.search(rb'"operationName"\s*:\s*"([A-Za-z_][A-Za-z0-9_]{0,127})"', prefix)
+            if operation is None:
+                operation = re.search(rb'\b(?:query|mutation|subscription)\s+([A-Za-z_][A-Za-z0-9_]{0,127})', prefix)
+            if operation is not None:
+                self._activity_operation = operation[1].decode('ascii')
 
         # Filter updates queries (Tsumiru uses GetChapterWithMangaPage)
         if is_recognized_updates_query(body):
