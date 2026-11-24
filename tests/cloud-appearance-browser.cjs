@@ -14,7 +14,8 @@ const { chromium } = require('@playwright/test');
 
 const rootDir = path.resolve(__dirname, '..');
 const sddDir = path.resolve(rootDir, '.superpowers/sdd');
-[sddDir].forEach(d => {
+const previewDir = '/home/astro/server-audit/2026-11-24/expressive-redesign/task4-preview';
+[sddDir, previewDir].forEach(d => {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 });
 
@@ -550,7 +551,8 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     // Capture screenshot 1: Desktop Cloud
     const desktopScreenshotPath = path.join(sddDir, 'desktopcloud.png');
     await cloudPage.screenshot({ path: desktopScreenshotPath, fullPage: false });
-        console.log('Saved screenshot: desktopcloud.png');
+    await cloudPage.screenshot({ path: path.join(previewDir, 'filebrowser-desktop-1440.png'), fullPage: false });
+    console.log('Saved screenshot: desktopcloud.png');
 
     // =========================================================================
     // TEST 3: MOBILE CLOUD VIEWPORT (390x844)
@@ -566,7 +568,8 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     // Capture screenshot 2: Mobile Cloud
     const mobileScreenshotPath = path.join(sddDir, 'mobilecloud.png');
     await cloudPage.screenshot({ path: mobileScreenshotPath, fullPage: false });
-        console.log('Saved screenshot: mobilecloud.png');
+    await cloudPage.screenshot({ path: path.join(previewDir, 'filebrowser-mobile-390.png'), fullPage: false });
+    console.log('Saved screenshot: mobilecloud.png');
 
     // =========================================================================
     // TEST 4: PORTAL APPEARANCE & CROSS-PAGE PERSISTENCE
@@ -738,6 +741,7 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     await cloudPage.locator('.spinner').waitFor({state:'hidden'});
     await cloudPage.locator('nav .action[aria-label="New folder"]').click();
     await cloudPage.getByRole('button', {name:'Cancel',exact:true}).waitFor({state:'visible'});
+    await cloudPage.screenshot({ path: path.join(previewDir, 'filebrowser-dialog-1440.png'), fullPage: false });
     await cloudPage.getByRole('button', {name:'Cancel',exact:true}).click();
     await cloudPage.locator('.item').filter({hasText:'notes.txt'}).dblclick();
     await cloudPage.locator('.ace_editor').waitFor({state:'visible',timeout:5000});
@@ -745,12 +749,14 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     await cloudPage.goto(`${baseUrl}/drive/files/`);
 
     // Item selection
-    await cloudPage.locator('.spinner').waitFor({state:'hidden'});
+    await cloudPage.locator('.item:not(.header)').first().waitFor({ state: 'visible', timeout: 5000 });
+    await cloudPage.locator('.spinner').first().waitFor({state:'hidden'});
     const nativeActions = await cloudPage.locator('nav .action, header .action').evaluateAll(nodes => nodes.map(n => ({id:n.id,label:n.getAttribute('aria-label'),text:n.textContent.trim().slice(0,50)})));
     console.log('Native action hooks:', JSON.stringify(nativeActions));
     const firstItem = cloudPage.locator('.item:not(.header)').first();
     await firstItem.click();
     await cloudPage.waitForTimeout(200);
+    await cloudPage.screenshot({ path: path.join(previewDir, 'filebrowser-selection-1440.png'), fullPage: false });
 
     // Search bar input
     const searchBtn = cloudPage.locator('.search-button, [aria-label*="search"], [aria-label*="Search"]').first();
