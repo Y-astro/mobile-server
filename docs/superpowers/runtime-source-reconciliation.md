@@ -76,3 +76,13 @@ Because the maintained files match the live phone files byte-for-byte:
    - `python3 -m unittest discover -s tests -p "test_suwayomi_filter.py"`: 38 tests passed.
    - `python3 -m unittest discover -s tests -p "test_configure_suwayomi_update_interval.py"`: 5 tests passed.
    - Total: 80 tests passed, 0 failures.
+
+## AGY Static Web Chrome Release Exception
+
+An explicit release-policy exception is authorized for AGY UI redesign:
+- **Authorized Destination:** `/data/data/com.termux/files/home/.config/ttyd/agy_index.html` (exact owned path only).
+- **Classification:** Component `agy` (`is_suwayomi_violation=False`, `is_agy_violation=False`), allowing normal general release updates to AGY web chrome without triggering runtime-asset blocks.
+- **Invariants Preserved:**
+  - All AGY runtime assets (`agy_session.sh`, `usr/bin/agy-resume`, and runner-loop scripts) remain strictly prohibited with existing error text.
+  - Lookalike index paths remain prohibited or unowned.
+  - No changes to terminal service mapping, daemon lifecycle, or service flags. Pre-disabled AGY service state remains untouched.

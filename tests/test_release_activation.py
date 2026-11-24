@@ -489,11 +489,38 @@ class TestReleaseActivation(unittest.TestCase):
             ra.map_changed_destinations(fake_entry)
         self.assertIn("Suwayomi launcher/filter/scheduler sources must be unchanged", str(ctx.exception))
 
+    def test_agy_static_index_allowed(self):
+        fake_entry = [{"remote": "/data/data/com.termux/files/home/.config/ttyd/agy_index.html", "action": ra.rt.ACTION_REPLACE}]
+        affected_services, supervisor_affected, changed_destinations = ra.map_changed_destinations(fake_entry)
+        self.assertEqual(affected_services, {"agy"})
+        self.assertFalse(supervisor_affected)
+        self.assertEqual(changed_destinations, ["/data/data/com.termux/files/home/.config/ttyd/agy_index.html"])
+
     def test_agy_runtime_asset_modifications_refused(self):
-        fake_entry = [{"remote": "/data/data/com.termux/files/home/bin/agy_session.sh", "action": ra.rt.ACTION_REPLACE}]
-        with self.assertRaises(ra.ActivationError) as ctx:
-            ra.map_changed_destinations(fake_entry)
-        self.assertIn("AGY launcher/runner/ttyd runtime-asset changes are prohibited", str(ctx.exception))
+        prohibited_remotes = [
+            "/data/data/com.termux/files/home/bin/agy_session.sh",
+            "/data/data/com.termux/files/usr/bin/agy-resume",
+            "/data/data/com.termux/files/home/bin/agy-runner-loop.sh",
+        ]
+        for remote in prohibited_remotes:
+            with self.subTest(remote=remote):
+                fake_entry = [{"remote": remote, "action": ra.rt.ACTION_REPLACE}]
+                with self.assertRaises(ra.ActivationError) as ctx:
+                    ra.map_changed_destinations(fake_entry)
+                self.assertIn("AGY launcher/runner/ttyd runtime-asset changes are prohibited", str(ctx.exception))
+
+    def test_agy_lookalike_index_refused(self):
+        lookalikes = [
+            "/data/data/com.termux/files/home/.config/ttyd/wrong_agy_index.html",
+            "/data/data/com.termux/files/home/other/home/.config/ttyd/agy_index.html",
+            "/tmp/agy_index.html",
+            "/data/data/com.termux/files/home/.config/ttyd/agy_index.html.bak",
+        ]
+        for remote in lookalikes:
+            with self.subTest(remote=remote):
+                fake_entry = [{"remote": remote, "action": ra.rt.ACTION_REPLACE}]
+                with self.assertRaises(ra.ActivationError):
+                    ra.map_changed_destinations(fake_entry)
 
     def test_deliberately_paused_server_refuses_activation(self):
         bundle, manifest, preconds, live, tx_dir = self._build_activation_fixture()

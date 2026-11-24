@@ -366,6 +366,10 @@ def map_destination_to_component(remote_path: str) -> Optional[Tuple[str, bool, 
         if norm.endswith(f"home/bin/{sw}"):
             return ("suwayomi", True, False)
 
+    # Authorized exact static web chrome exception for AGY UI redesign
+    if norm == "/data/data/com.termux/files/home/.config/ttyd/agy_index.html":
+        return ("agy", False, False)
+
     # Check for AGY runtime assets - must NOT change
     if (
         norm.endswith("home/bin/agy_session.sh")
