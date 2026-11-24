@@ -12,7 +12,7 @@
     .hidden { display: none !important; }
   </style>
 </head>
-<body class="p-4 sm:p-6 min-h-screen">
+<body class="min-h-screen">
   <svg style="display:none" xmlns="http://www.w3.org/2000/svg"><defs>
     <symbol id="bolt" viewbox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 10-12h-7z"></path></symbol>
     <symbol id="home" viewbox="0 0 24 24"><rect height="8" rx="2" width="8" x="3" y="3"></rect><rect height="8" rx="2" width="8" x="13" y="3"></rect><rect height="8" rx="2" width="8" x="3" y="13"></rect><rect height="8" rx="2" width="8" x="13" y="13"></rect></symbol>
@@ -31,22 +31,10 @@
   <div class="shell dashboard-container max-w-6xl mx-auto space-y-6">
     <!-- Topbar -->
     <header class="topbar">
-      <div class="crumb">
-        <svg class="glyph"><use href="#home"/></svg>
-        <span class="mono font-semibold">K20·PRO</span>
-        <span class="sep">/</span>
-        <span>FAMILY</span>
-        <span class="chip chip-accent">VAULT</span>
-      </div>
-
+      <div class="crumb"><span class="header-brand"><svg class="glyph"><use href="#home"/></svg></span>Family Console</div>
       <div class="top-actions">
-        <div class="user-chip">
-          <span class="avatar">F</span>
-          <span class="mono">Family</span>
-        </div>
-        <button onclick="handleLogout()" class="m3-btn m3-btn-outlined touch-target icon-btn" title="Sign out" aria-label="Sign out">
-          <svg class="glyph"><use href="#logout"/></svg>
-        </button>
+        <button type="button" onclick="handleLogout()" class="touch-target icon-btn" title="Sign out" aria-label="Sign out"><svg class="glyph"><use href="#logout"/></svg></button>
+        <div class="profile"><span class="avatar">F</span><div><b>Family</b><span class="small">Member</span></div></div>
       </div>
     </header>
 
@@ -80,19 +68,17 @@
             <svg class="glyph"><use href="#folder"/></svg>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted">Family files</span>
+            <span class="sr-only">Family files</span>
             <h3 class="svc-title font-semibold text-sm text-white mt-0.5">Cloud Storage</h3>
             <div class="svc-status">
               <span class="dot dot-active"></span>
               <span class="service-status-badge badge-positive">Drive</span>
             </div>
-            <p class="service-desc text-xs text-soft mt-1 leading-relaxed">
-              Upload, organize, and download files safely.
-            </p>
+            <p class="service-desc sr-only">Upload, organize, and download files safely.</p>
           </div>
           <div class="svc-actions">
-            <a href="/drive/" class="service-open-btn launch m3-btn m3-btn-filled gold-gradient-btn w-full">
-              <span>Open Cloud Drive</span>
+            <a href="/drive/" class="service-open-btn launch m3-btn m3-btn-filled gold-gradient-btn w-full" title="Open Cloud Drive · Upload, organize, and download files safely.">
+              <span class="sr-only">Open Cloud Drive</span>
               <svg class="glyph"><use href="#arrow"/></svg>
             </a>
           </div>
@@ -104,19 +90,17 @@
             <svg class="glyph"><use href="#folder"/></svg>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted">Memories & vacations</span>
+            <span class="sr-only">Memories & vacations</span>
             <h3 class="svc-title font-semibold text-sm text-white mt-0.5">Family Photos</h3>
             <div class="svc-status">
               <span class="dot dot-active"></span>
               <span class="service-status-badge badge-positive">Photos</span>
             </div>
-            <p class="service-desc text-xs text-soft mt-1 leading-relaxed">
-              Browse full-resolution family photo albums.
-            </p>
+            <p class="service-desc sr-only">Browse full-resolution family photo albums.</p>
           </div>
           <div class="svc-actions">
-            <a href="/drive/files/Photos" class="service-open-btn launch m3-btn m3-btn-filled gold-gradient-btn w-full">
-              <span>View Photos</span>
+            <a href="/drive/files/Photos" class="service-open-btn launch m3-btn m3-btn-filled gold-gradient-btn w-full" title="View Photos · Browse full-resolution family photo albums.">
+              <span class="sr-only">View Photos</span>
               <svg class="glyph"><use href="#arrow"/></svg>
             </a>
           </div>
@@ -128,19 +112,17 @@
             <svg class="glyph"><use href="#music"/></svg>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted">Hi-Fi streaming</span>
+            <span class="sr-only">Hi-Fi streaming</span>
             <h3 class="svc-title font-semibold text-sm text-white mt-0.5">Music Jukebox</h3>
             <div class="svc-status">
               <span class="dot dot-active"></span>
               <span class="service-status-badge badge-positive">Audio</span>
             </div>
-            <p class="service-desc text-xs text-soft mt-1 leading-relaxed">
-              Listen to songs and family music playlists.
-            </p>
+            <p class="service-desc sr-only">Listen to songs and family music playlists.</p>
           </div>
           <div class="svc-actions">
-            <a href="/music/" class="service-open-btn launch m3-btn m3-btn-filled gold-gradient-btn w-full">
-              <span>Open Music</span>
+            <a href="/music/" class="service-open-btn launch m3-btn m3-btn-filled gold-gradient-btn w-full" title="Open Music · Listen to songs and family music playlists.">
+              <span class="sr-only">Open Music</span>
               <svg class="glyph"><use href="#arrow"/></svg>
             </a>
           </div>
@@ -152,19 +134,17 @@
             <svg class="glyph"><use href="#book"/></svg>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted">Family repertoire</span>
+            <span class="sr-only">Family repertoire</span>
             <h2 class="svc-title font-semibold text-sm text-white mt-0.5">Repertoire Finder</h2>
             <div class="svc-status">
               <span class="dot dot-active"></span>
               <span class="service-status-badge badge-positive">Musicology</span>
             </div>
-            <p class="service-desc text-xs text-soft mt-1 leading-relaxed">
-              Find compositions by raga, tala, and composer.
-            </p>
+            <p class="service-desc sr-only">Find compositions by raga, tala, and composer.</p>
           </div>
           <div class="svc-actions">
-            <a href="/repertoire/" class="service-open-btn launch m3-btn m3-btn-filled gold-gradient-btn w-full">
-              <span>Find compositions</span>
+            <a href="/repertoire/" class="service-open-btn launch m3-btn m3-btn-filled gold-gradient-btn w-full" title="Find compositions · Find compositions by raga, tala, and composer.">
+              <span class="sr-only">Find compositions</span>
               <svg class="glyph"><use href="#arrow"/></svg>
             </a>
           </div>
@@ -176,19 +156,17 @@
             <svg class="glyph"><use href="#file"/></svg>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted">PDF converter</span>
+            <span class="sr-only">PDF converter</span>
             <h3 class="svc-title font-semibold text-sm text-white mt-0.5">Document to PDF</h3>
             <div class="svc-status">
               <span class="dot dot-active"></span>
               <span class="service-status-badge badge-positive">Tools</span>
             </div>
-            <p class="service-desc text-xs text-soft mt-1 leading-relaxed">
-              Convert documents and pictures to PDF instantly.
-            </p>
+            <p class="service-desc sr-only">Convert documents and pictures to PDF instantly.</p>
           </div>
           <div class="svc-actions">
-            <button type="button" onclick="openConverterModal()" class="service-open-btn launch m3-btn m3-btn-filled gold-gradient-btn w-full">
-              <span>Convert to PDF</span>
+            <button type="button" title="Convert to PDF · Convert documents and pictures to PDF instantly." onclick="openConverterModal()" class="service-open-btn launch m3-btn m3-btn-filled gold-gradient-btn w-full">
+              <span class="sr-only">Convert to PDF</span>
               <svg class="glyph"><use href="#arrow"/></svg>
             </button>
           </div>
@@ -200,19 +178,17 @@
             <svg class="glyph"><use href="#bolt"/></svg>
           </div>
           <div>
-            <span class="text-xs font-medium text-muted">Private finance</span>
+            <span class="sr-only">Private finance</span>
             <h3 class="svc-title font-semibold text-sm text-white mt-0.5">Wealthfolio</h3>
             <div class="svc-status">
               <span class="dot dot-active"></span>
               <span class="service-status-badge badge-neutral">Laptop Required</span>
             </div>
-            <p class="service-desc text-xs text-soft mt-1 leading-relaxed">
-              Bank statements &amp; investments from laptop.
-            </p>
+            <p class="service-desc sr-only">Bank statements &amp; investments from laptop.</p>
           </div>
           <div class="svc-actions">
-            <a href="/wealth/" target="_blank" rel="noopener noreferrer" class="service-open-btn launch m3-btn m3-btn-outlined btn-secondary w-full">
-              <span>Unlock Wealthfolio</span>
+            <a href="/wealth/" target="_blank" rel="noopener noreferrer" class="service-open-btn launch m3-btn m3-btn-outlined btn-secondary w-full" title="Unlock Wealthfolio · Bank statements &amp; investments from laptop.">
+              <span class="sr-only">Unlock Wealthfolio</span>
               <svg class="glyph"><use href="#arrow"/></svg>
             </a>
           </div>

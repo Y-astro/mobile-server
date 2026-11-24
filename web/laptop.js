@@ -41,16 +41,17 @@
     for (const session of data.sessions) {
       if (!/^[0-9a-f]{32}$/.test(session.id)) continue;
       const row = document.createElement('div');
-      row.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-surface-raised border border-white/5';
+      row.className = 'session flex items-center justify-between flex-wrap gap-2 p-2 rounded-lg bg-surface-raised border border-white/5';
       const label = document.createElement('span');
       label.className = 'font-medium text-white mono text-xs';
       label.textContent = 'Terminal ' + session.id.slice(0,8);
       label.title = session.id;
       const controls = document.createElement('div');
-      controls.className = 'flex items-center gap-2';
+      controls.className = 'flex items-center gap-1.5 flex-wrap';
       const open = document.createElement('a');
       open.className = 'm3-btn m3-btn-tonal text-xs font-medium' + (!gwActive ? ' opacity-40 pointer-events-none' : '');
-      open.textContent = 'Reconnect';
+      open.innerHTML = '<span class="sr-only">Reconnect</span><svg class="glyph"><use href="#arrow"/></svg>';
+      open.title = 'Reconnect terminal ' + session.id.slice(0,8);
       if (gwActive) {
         open.href = '/laptop/?arg=' + session.id;
         open.target = '_blank'; open.rel = 'noopener';
@@ -60,7 +61,9 @@
       }
       const close = document.createElement('button');
       close.className = 'm3-btn m3-btn-outlined text-xs font-medium';
-      close.type = 'button'; close.textContent = 'Close';
+      close.type = 'button';
+      close.innerHTML = '<span class="sr-only">Close</span><svg class="glyph"><use href="#close"/></svg>';
+      close.title = 'Close terminal ' + session.id.slice(0,8);
       close.setAttribute('aria-label', 'Close terminal '+session.id.slice(0,8));
       close.addEventListener('click', async () => {
         if (changing || !confirm('Close this laptop terminal and stop its commands?')) return;

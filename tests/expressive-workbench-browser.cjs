@@ -96,7 +96,7 @@ const mockWallpaperSvg = Buffer.from(
 );
 
 const mockServices = [
-  { id: 'filebrowser', name: 'FileBrowser', category: 'Storage', running: true, can_toggle: true, open_label: 'Open Cloud Drive', open_url: '/drive/', status_badge: 'Active (24.1 MB)' },
+  { id: 'filebrowser', name: 'FileBrowser', desc: 'Shared \"family\" files and photos', category: 'Storage', running: true, can_toggle: true, open_label: 'Open Cloud Drive', open_url: '/drive/', status_badge: 'Active (24.1 MB)' },
   { id: 'suwayomi', name: 'Suwayomi', category: 'Reader', running: true, can_toggle: true, open_label: 'Open Suwayomi', open_url: '/manga/', status_badge: 'Active (152.0 MB)', unread_updates: 0 },
   { id: 'vaultwarden', name: 'Vaultwarden', category: 'Security', running: false, can_toggle: true, open_label: 'Open Vault', open_url: 'javascript:openVaultHTTPS()', status_badge: 'Disabled (0 MB)' },
   { id: 'adguard', name: 'AdGuard Home', category: 'DNS', running: true, can_toggle: true, open_label: 'Open AdGuard', open_url: '/dns/', status_badge: 'Active (35.4 MB)' },
@@ -511,8 +511,35 @@ const mockServices = [
     });
     assert.equal(colsAfter2, 2, 'Service grid should have 2 columns when 2 is selected');
 
+    // Column preference is an intrinsic maximum, including intermediate widths.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await colSelect.selectOption('4');
+    assert.equal(await page.locator('#services-grid').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(/\s+/).length), 4,
+      '1280px must not impose the old two-column cap');
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.locator('#services-grid').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(/\s+/).length), 2,
+      'Four-column preference must fit two readable tiles on mobile');
+    await colSelect.selectOption('1');
+    assert.equal(await page.locator('#services-grid').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(/\s+/).length), 1,
+      'One-column preference must remain effective on mobile');
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    await page.evaluate(() => localStorage.setItem('k20-v6-layout', JSON.stringify({ columns: 'invalid' })));
+    await page.reload();
+    await page.waitForSelector('#services-grid .svc');
+    assert.equal(await colSelect.inputValue(), '3', 'Invalid stored density must fall back to three columns');
+
     // Reset back to 3 columns
     await colSelect.selectOption('3');
+    const topbarBox = await page.locator('.topbar').boundingBox();
+    assert(topbarBox.height <= 64, 'Reference topbar must remain a single compact row on desktop');
+    assert.equal(await page.locator('.topbar #header-local-ip').count(), 0, 'Connection details belong outside the compact header');
+    assert.equal(await page.locator('.connection #header-local-ip').count(), 1, 'Wi-Fi navigation must remain available');
+    const firstTile = page.locator('#services-grid .svc').first();
+    assert((await firstTile.boundingBox()).height <= 150, 'Descriptions must not expand service tiles');
+    const firstLaunch = firstTile.locator('.service-open-btn');
+    assert((await firstLaunch.getAttribute('title')).includes(' · '), 'Launch hint must retain service description');
+    assert((await firstLaunch.boundingBox()).width >= 48, 'Compact launch must keep a usable target');
 
     // -----------------------------------------------------------------------
     // ASSERTION 3: Service Filtering & Status Dot Binding
@@ -650,6 +677,20 @@ const mockServices = [
     assert.equal(laptopLabelTitle, '1234567890abcdef1234567890abcdef', 'Laptop session must have full ID in accessible title');
     assert.equal(laptopLabelWhiteSpace, 'nowrap', 'Laptop session id in 320px aside must not split into scraps');
 
+    const laptopPanel = page.locator('[aria-labelledby="laptop-heading"]');
+    const agyPanel = page.locator('[aria-labelledby="agy-heading"]');
+    console.log('Compact panel heights:', JSON.stringify({laptop:(await laptopPanel.boundingBox()).height, agy:(await agyPanel.boundingBox()).height}));
+    assert((await laptopPanel.boundingBox()).height <= 300, 'One-session laptop panel must stay compact');
+    assert((await agyPanel.boundingBox()).height <= 350, 'Two-session AGY panel must stay compact');
+    assert((await page.locator('#laptop-sessions > .session').first().boundingBox()).height <= 74,
+      'Laptop session name and actions should share one row');
+    const longLabel = page.locator('#agy-sessions-container .session-label .mono').last();
+    const originalLabel = await longLabel.textContent();
+    await longLabel.evaluate(el => { el.textContent = 'AGY Instance: ' + 'long-session-name-'.repeat(12); });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false,
+      'Long session names must not spill outside the dashboard');
+    await longLabel.evaluate((el, text) => { el.textContent = text; }, originalLabel);
+
     // AGY panel has multiple sessions container
     assert(await page.locator('label:has(#agy-service-toggle)').isVisible(), 'AGY switch must exist');
     assert(await page.locator('#agy-new').isVisible(), 'AGY New Instance button must exist');
@@ -672,7 +713,8 @@ const mockServices = [
       { width: 1440, height: 900, name: 'admin-desktop-1440' },
       { width: 1280, height: 800, name: 'admin-desktop-1280' },
       { width: 768, height: 1024, name: 'admin-tablet-768' },
-      { width: 390, height: 844, name: 'admin-mobile-390' }
+      { width: 390, height: 844, name: 'admin-mobile-390' },
+      { width: 320, height: 768, name: 'admin-mobile-320' }
     ];
 
     for (const vp of viewports) {
@@ -692,6 +734,8 @@ const mockServices = [
             return { top: r.top, left: r.left, right: r.right, bottom: r.bottom };
           });
         });
+        const metricHeaderOverflow = await page.locator('.metric-head').evaluateAll(items => items.some(el => el.scrollWidth > el.clientWidth));
+        assert.equal(metricHeaderOverflow, false, 'Mobile metric labels must fit without spilling');
         assert.equal(netLayout390.length, 4, 'Mobile must have 4 network items');
         assert(Math.abs(netLayout390[1].top - netLayout390[0].top) < 3, 'Mobile items 0 and 1 must be on row 1');
         assert(Math.abs(netLayout390[3].top - netLayout390[2].top) < 3, 'Mobile items 2 and 3 must be on row 2');
@@ -702,6 +746,7 @@ const mockServices = [
 
       const screenshotPath = path.join(previewDir, `${vp.name}.png`);
       await page.screenshot({ path: screenshotPath, fullPage: true });
+      if (vp.width === 390) await page.screenshot({ path: path.join(previewDir, 'admin-mobile-first-fold.png') });
       console.log(`Saved screenshot: ${screenshotPath}`);
     }
 

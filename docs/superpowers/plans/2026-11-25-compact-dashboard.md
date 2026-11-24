@@ -1,0 +1,15 @@
+# Compact Dashboard Reference Correction
+
+The user asked for denser laptop/AGY dashboard panels and identified the top header, dynamic column count, and service descriptions as reference mismatches. This is a bounded correction to the approved expressive design.
+
+## Design and execution
+
+1. Use the reference's compact brand/actions/profile header and instrument labels. Move percentages/status into metric footers and show CPU temperature prominently; retain every live update ID. Keep the mobile overview and network heading compact. Keep Tailscale and LAN navigation in connection details, preserving their existing update IDs.
+2. Treat the selected service column count as a maximum constrained by intrinsic tile width. Preserve values 1–4, local preferences, mobile readable widths, and a three-column default. Invalid stored values fall back to three.
+3. Put descriptions in launch hints and accessible hidden text instead of expanded paragraphs. Keep all launch actions, service state, filtering, reordering, and toggle semantics.
+4. Use compact terminal headers and icon session actions. Keep full labels accessible, all sessions visible, and lifecycle guidance in native Session details disclosures. Maintain 48px action targets and avoid clipping long names.
+5. Verify actual role templates, intermediate widths, mobile overflow, long labels, session controls and source ownership. Commit before publication; use a complete manifest and fresh live preconditions through the reviewed activation driver.
+
+Two AGY High attempts produced partial panel edits but stopped on headless permissions and then quota exhaustion. Root inspected the partial changes, removed the scratch test from source, completed the reference corrections, and owns verification and deployment. No native application interfaces are included in this follow-up.
+
+The root audit ledger and before/after screenshots remain outside Git in `/home/astro/server-audit/2026-11-24/expressive-redesign/`. Live publication evidence will be appended to the deployment report after successful activation.

@@ -41,7 +41,6 @@ body {
   min-height: 100vh;
   margin: 0;
   padding: 0;
-  overflow-x: hidden;
 }
 
 /* --- Base Element Resets --- */
@@ -616,7 +615,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   max-width: 1480px;
   min-height: 100vh;
   margin-inline: auto;
-  padding: 24px;
+  padding: 30px 4vw;
   width: 100%;
 }
 @media (max-width: 520px) {
@@ -631,9 +630,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line);
+  margin-bottom: 18px;
 }
 .crumb {
   color: var(--muted);
@@ -681,6 +678,8 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   background: var(--highest);
   color: var(--accent);
 }
+.profile b { display: block; font-size: 13px; }
+.profile .small { display: block; font-size: 11px; color: var(--muted); }
 .profile {
   display: flex;
   align-items: center;
@@ -700,7 +699,14 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   flex-shrink: 0;
 }
 
+@media (max-width: 360px) {
+  .top-actions { gap: 4px; }
+  .profile { margin-left: 0; }
+  .crumb { gap: 6px; font-size: 12px; }
+}
+
 /* --- Intro Header & Uptime --- */
+.intro h1 { font-weight: 500; }
 .intro {
   display: flex;
   justify-content: space-between;
@@ -806,6 +812,18 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   .metric:last-child {
     border-top-right-radius: 10px;
   }
+}
+.metric-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.metric-title span { font-size: 12px; }
+.metric-sub { font-size: 11px; line-height: 1.4; color: var(--muted); margin-top: auto; padding-top: 8px; }
+@media (max-width: 520px) {
+  .metric { padding: 10px; }
+  .network-heading .small { display: none; }
+  .network .live { font-size: 10px; white-space: nowrap; }
+  .intro { flex-direction: column; align-items: start; gap: 8px; }
+  .uptime { display: flex; align-items: baseline; gap: 6px; }
+  .uptime strong { font-size: 13px; }
+  .profile > div { display: none; }
 }
 .metric-head {
   display: flex;
@@ -991,7 +1009,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
     border-radius: 22px;
   }
 }
-.services > .section-head {
+.services .section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1088,28 +1106,19 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   display: none !important;
 }
 
-/* Service Grid Track distribution */
+/* The selection is a maximum; intrinsic tile width determines what fits. */
 .service-list, .services-subgrid {
   --columns: 3;
   --tile-gap: 5px;
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(max(min(100%, 180px), calc((100% - (var(--columns) - 1) * var(--tile-gap)) / var(--columns))), 1fr));
   gap: var(--tile-gap);
   width: 100%;
   border-radius: 0;
 }
-@media (min-width: 1280px) {
-  .service-list, .services-subgrid {
-    grid-template-columns: repeat(var(--columns, 3), minmax(0, 1fr));
-  }
-}
-@media (min-width: 640px) and (max-width: 1279px) {
-  .service-list, .services-subgrid {
-    grid-template-columns: repeat(min(var(--columns, 2), 2), minmax(0, 1fr));
-  }
-}
 @media (max-width: 639px) {
   .service-list, .services-subgrid {
-    grid-template-columns: repeat(auto-fill, minmax(max(min(100%, 145px), calc((100% - (var(--columns, 2) - 1) * var(--tile-gap)) / var(--columns, 2))), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(max(min(100%, 145px), calc((100% - (var(--columns) - 1) * var(--tile-gap)) / var(--columns))), 1fr));
   }
 }
 .family-services-grid {
@@ -1231,6 +1240,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   gap: 6px;
 }
 .svc-actions .launch, .svc-actions a.service-open-btn {
+  width: 48px;
   height: 48px;
   min-width: 48px;
   border-radius: 12px;
@@ -1370,6 +1380,9 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   padding: 14px;
   border: 1px solid var(--line);
 }
+.remote-card > div > p { margin: 0; }
+.remote-card[aria-labelledby] { padding: 12px; }
+.remote-card[aria-labelledby] > .flex { gap: 6px; }
 .remote-card.terminal {
   background: color-mix(in srgb, var(--accentbox) 65%, transparent);
 }
@@ -1377,7 +1390,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 .remote-symbol {
   width: 32px;
@@ -1420,7 +1433,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 0;
 }
 .remote-card .filled {
   min-height: 48px;
@@ -1452,11 +1465,13 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   flex-basis: 100%;
 }
 .remote-details {
-  margin-top: 8px;
+  margin-top: 0;
   font-size: 11px;
   color: var(--muted);
 }
 .remote-details summary {
+  min-height: 48px;
+  align-content: center;
   cursor: pointer;
   opacity: 0.8;
   font-weight: 500;
@@ -1566,21 +1581,33 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   box-shadow: inset 0 0 0 1px #ffffff0a, 0 16px 40px rgba(0, 0, 0, 0.45) !important;
 }
 
-/* Laptop terminals in remote tools sidebar (320px): stack gracefully */
-#laptop-sessions > div {
-  flex-direction: column !important;
-  align-items: stretch !important;
-  gap: 8px;
+/* Session actions fit the sidebar without splitting terminal IDs. */
+#laptop-sessions > .session, #agy-sessions-container > .session {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 10px;
 }
-#laptop-sessions > div > .mono {
-  white-space: nowrap;
+#agy-sessions-container .session-label {
+  flex: 1;
+  min-width: 0;
+}
+#agy-sessions-container .session-label .mono {
   overflow: hidden;
   text-overflow: ellipsis;
-  display: block;
 }
-#laptop-sessions > div > div.flex {
-  width: 100%;
-  justify-content: flex-end;
+#laptop-sessions .mono, #agy-sessions-container .mono {
+  white-space: nowrap;
+  min-width: 0;
+}
+#laptop-sessions .m3-btn, #agy-sessions-container .m3-btn {
+  min-width: 48px;
+  min-height: 48px;
+  padding: 0 10px;
+  font-size: 11px;
 }
 
 /* Animation utilities */
