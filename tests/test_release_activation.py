@@ -55,6 +55,12 @@ def reviewed_17_catalog_source():
     return source
 
 
+def reviewed_sidebar_catalog_source():
+    source = subprocess.check_output(['git', 'show', 'af7b665:app/service_catalog.py'], cwd=REPO_ROOT)
+    assert hashlib.sha256(source).hexdigest() == ra.SIDEBAR_SERVICE_CATALOG_SHA256
+    return source
+
+
 def reviewed_16_catalog_source():
     """Construct the reviewed 16-service catalog by removing only the antra service."""
     source = reviewed_17_catalog_source()
@@ -2179,13 +2185,12 @@ class TestReleaseActivation(unittest.TestCase):
                 ra.map_changed_destinations(entries, profile=prof)
 
     def test_suwayomi_jar_accepts_reviewed_sidebar_catalog_and_rejects_drift(self):
-        from app import service_catalog
         _, _, live, _ = self._build_jar_fixture()
         catalog = live / "home/.local/lib/mobile-server/service_catalog.py"
-        source = (REPO_ROOT / "app/service_catalog.py").read_bytes()
+        source = reviewed_sidebar_catalog_source()
         catalog.write_bytes(source)
         driver = FakeLifecycleDriver()
-        driver.services_cfg = service_catalog.runtime_services(str(live / "home"), str(live / "usr"))
+        driver.services_cfg = ra.load_catalog_services_from_bytes(source, str(live / 'home'), str(live / 'usr'), 'reviewed_sidebar')
         ra.require_reviewed_jar_lifecycle(live, os.getuid(), driver)
         driver.services_cfg.pop("navidrome")
         with self.assertRaisesRegex(ra.ActivationError, "exact 18"):
@@ -2195,15 +2200,14 @@ class TestReleaseActivation(unittest.TestCase):
             ra.require_reviewed_jar_lifecycle(live, os.getuid(), driver)
 
     def test_suwayomi_jar_sidebar_catalog_health_failure_recovers(self):
-        from app import service_catalog
         bundle, preconds, live, tx_dir = self._build_jar_fixture()
-        source = (REPO_ROOT / "app/service_catalog.py").read_bytes()
+        source = reviewed_sidebar_catalog_source()
         (live / "home/.local/lib/mobile-server/service_catalog.py").write_bytes(source)
         (bundle / "app/service_catalog.py").write_bytes(source)
         for entry in preconds["files"]:
             if entry["path"] == ra.SERVICE_CATALOG_REMOTE:
                 entry.update(sha256=hashlib.sha256(source).hexdigest(), bytes=len(source))
-        driver = FakeLifecycleDriver(service_catalog.runtime_services(str(live / "home"), str(live / "usr")))
+        driver = FakeLifecycleDriver(ra.load_catalog_services_from_bytes(source, str(live / 'home'), str(live / 'usr'), 'reviewed_sidebar_recovery'))
         driver.running_processes["suwayomi"] = [(1001, "prior-backend")]
         driver.fail_candidate_health.add("suwayomi")
         jar = live / "home/suwayomi/bin/Suwayomi-Server.jar"
