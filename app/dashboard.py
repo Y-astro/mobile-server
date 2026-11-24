@@ -44,6 +44,7 @@ from tor_proxy import TorProxy
 from laptop import LaptopClient, LaptopError
 from service_catalog import dashboard_services, suwayomi_probe_ports
 from role_templates import read_role_template, RoleTemplateUnavailable
+from repertoire import dispatch_repertoire, dispatch_repertoire_post
 from agy_sessions import AgySessions
 from wallpapers import dispatch_wallpapers
 from antra_http import dispatch_antra
@@ -409,6 +410,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         clean_path = self.path.split("?", 1)[0]
+        if dispatch_repertoire_post(self, self.get_session_user()):
+            return
         if clean_path == "/api/antra" or clean_path.startswith("/api/antra/"):
             dispatch_antra(self, is_admin=is_admin)
             return
@@ -782,6 +785,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         user = self.get_session_user()
+        if dispatch_repertoire(self, user):
+            return
 
         if self.path in ["/portal.css", "/static/portal.css"]:
             css_path = os.path.join(STATIC_DIR, "portal.css")

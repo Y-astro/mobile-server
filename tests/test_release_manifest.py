@@ -182,6 +182,18 @@ class TestReleaseManifest(unittest.TestCase):
                 f"/data/data/com.termux/files/home/.config/dashboard/static/antra.{extension}",
             )
 
+    def test_repertoire_assets_have_exact_canonical_ownership(self):
+        ownership = get_canonical_ownership(REPO_ROOT)
+        self.assertEqual(
+            ownership.get("app/repertoire.py"),
+            "/data/data/com.termux/files/home/.local/lib/mobile-server/repertoire.py",
+        )
+        for extension in ("html", "css", "js"):
+            self.assertEqual(
+                ownership.get(f"web/repertoire.{extension}"),
+                f"/data/data/com.termux/files/home/.config/dashboard/static/repertoire.{extension}",
+            )
+
     def test_generate_candidate_manifest_deterministic(self):
         """Candidate manifest generation must be deterministic and sorted by local path."""
         entries1 = generate_manifest(REPO_ROOT)

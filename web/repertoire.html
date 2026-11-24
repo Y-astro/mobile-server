@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Repertoire Finder · Family Cloud</title>
+  <link rel="stylesheet" href="/theme-tokens.css"><link rel="stylesheet" href="/portal.css">
+  <link rel="stylesheet" href="/appearance.css"><link rel="stylesheet" href="/repertoire/app.css">
+  <script defer src="/appearance.js"></script><script defer src="/repertoire/app.js"></script>
+</head>
+<body>
+  <main class="finder">
+    <header class="finder-header"><a href="/" class="back-link">← Home server</a><span class="eyebrow">FAMILY REPERTOIRE</span></header>
+    <section class="intro"><div><h1>Find your next composition.</h1><p>Choose the attributes. Discover the compositions that fit.</p></div><button id="refresh" type="button">Refresh workbook ↻</button></section>
+    <section class="workbook-panel" aria-label="Manage repertoire workbook">
+      <div class="workbook-choice"><label for="workbook-version">Workbook in use</label><select id="workbook-version"><option value="current">Current (latest)</option><option value="previous" disabled>Previous — no earlier upload</option></select></div>
+      <button id="open-upload" type="button">Upload workbook ↑</button>
+      <p>Used by everyone. A new upload always becomes Current.</p>
+      <p id="workbook-status" class="workbook-status" role="status" hidden></p>
+    </section>
+    <section class="search-panel" aria-label="Search and filter compositions">
+      <label class="search-label" for="search">Search the repertoire</label>
+      <input id="search" type="search" placeholder="Composition, composer, raga, remarks…" autocomplete="off">
+      <div class="filter-heading"><h2>Filter by attributes</h2><button id="reset" type="button">Clear all</button></div>
+      <p class="filter-hint">Select any values within a filter. Compositions must match every filter you choose.</p>
+      <div id="filters" class="filter-grid"></div>
+      <div id="selected" class="selected-filters" aria-label="Selected filters"></div>
+    </section>
+    <section aria-label="Matching compositions" class="results-section">
+      <div class="results-heading"><div><h2 id="result-count" aria-live="polite">Loading repertoire…</h2><p id="source-info" class="source-info"></p></div><label class="sort-label">Sort by<select id="sort"><option value="title">Composition A–Z</option><option value="raga">Raga A–Z</option><option value="composer">Composer A–Z</option></select></label></div>
+      <div id="error" class="notice" role="alert" hidden></div>
+      <div id="results" class="results-grid"></div>
+      <button id="more" class="load-more" type="button" hidden>Show more compositions</button>
+    </section>
+    <footer>Workbooks are saved in FamilyShare / Repertoire. Only Current and Previous are kept.</footer>
+  </main>
+  <dialog id="details"><div class="dialog-top"><span class="eyebrow">COMPOSITION DETAILS</span><button id="close-details" type="button" aria-label="Close composition details">✕</button></div><h2 id="detail-title"></h2><dl id="detail-fields"></dl></dialog>
+  <dialog id="upload-dialog" aria-labelledby="upload-title" aria-describedby="upload-description">
+    <form id="upload-form">
+      <h2 id="upload-title">Upload a new workbook</h2>
+      <p id="upload-description">Choose an Excel (.xlsx) file up to 8 MB with the same Data sheet and columns. It will be checked before it replaces anything.</p>
+      <p>Your Current copy becomes Previous. The older Previous copy is removed. Everyone will use the new Current copy.</p>
+      <label for="workbook-file">New repertoire workbook</label>
+      <input id="workbook-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+      <p id="upload-error" role="alert" hidden></p>
+      <div class="upload-actions"><button id="cancel-upload" type="button">Cancel</button><button id="submit-upload" type="submit">Upload and use Current</button></div>
+    </form>
+  </dialog>
+</body>
+</html>

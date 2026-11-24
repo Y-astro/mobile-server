@@ -53,6 +53,9 @@ REVIEWED_ADDITIONAL_ASSETS: Dict[str, str] = {
     "web/antra.html": "/data/data/com.termux/files/home/.config/dashboard/static/antra.html",
     "web/antra.css": "/data/data/com.termux/files/home/.config/dashboard/static/antra.css",
     "web/antra.js": "/data/data/com.termux/files/home/.config/dashboard/static/antra.js",
+    "web/repertoire.html": "/data/data/com.termux/files/home/.config/dashboard/static/repertoire.html",
+    "web/repertoire.css": "/data/data/com.termux/files/home/.config/dashboard/static/repertoire.css",
+    "web/repertoire.js": "/data/data/com.termux/files/home/.config/dashboard/static/repertoire.js",
 }
 
 # Forbidden secret, runtime, credential, database, and history patterns.

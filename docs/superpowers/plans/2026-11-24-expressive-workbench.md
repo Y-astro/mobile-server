@@ -32,10 +32,10 @@
 
 **Interfaces:** Preserve `dispatch_repertoire(handler, user)` and `dispatch_repertoire_post(handler, user)` from the live module. Preserve `/repertoire/` and its actual asset/API routes. Python helper ownership is already discovered dynamically from flat `app/*.py`; add explicit ownership only for the three new static assets.
 
-- [ ] Verify captured baseline hashes against `source-hash-manifest.json` and inspect the live-to-source diff. Do not copy runtime data.
-- [ ] Add focused checks that the release owns all four Repertoire files, anonymous requests remain blocked, and role-specific upload behavior matches the existing implementation.
-- [ ] Copy the verified live source without redesigning it. The dashboard integration should be limited to its existing import, GET/POST dispatch hooks, and role-template links.
-- [ ] Run relevant Repertoire/release/template/dashboard tests, compare source bytes or hunks with the capture, and commit this baseline separately.
+- [x] Verify captured baseline hashes against `source-hash-manifest.json` and inspect the live-to-source diff. Do not copy runtime data.
+- [x] Add focused checks that the release owns all four Repertoire files, anonymous requests remain blocked, and role-specific upload behavior matches the existing implementation.
+- [x] Copy the verified live source without redesigning it. The dashboard integration should be limited to its existing import, GET/POST dispatch hooks, and role-template links.
+- [x] Run relevant Repertoire/release/template/dashboard tests, compare source bytes or hunks with the capture, and commit this baseline separately.
 
 ## Task 2: Shared visual system and account workbenches
 
