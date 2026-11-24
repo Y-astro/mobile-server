@@ -1,9 +1,8 @@
 /* =========================================================================
    MATERIAL 3 EXPRESSIVE WORKBENCH & FROSTED GLASS THEME FOR FILEBROWSER
-   Full Dark M3: Surface #111414 · Container #1d2223 · Teal #70d6c5 · Coral #f2b8b5
-   Restyles chrome, lists, grids, actions, menus, dialogs, progress, editor
+   Quiet chrome, pill geometry, 48px touch targets, high-contrast focus
+   Matugen color-mix tokens only: --md-sys-color-* from /theme-tokens.css
    Preserves file capabilities, Ace syntax highlighting, DOM/Vue bindings
-   Touch targets >= 48px, quiet chrome, pill geometry, high-contrast focus
    ========================================================================= */
 
 @import "/theme-tokens.css";
@@ -23,12 +22,15 @@ html, body {
   min-height: 100vh;
 }
 
-/* Header & Main Toolbar */
+/* Header & Main Toolbar Layout */
 header, .header {
   height: 64px !important;
   display: flex !important;
+  flex-direction: row !important;
   align-items: center !important;
-  background: rgba(17, 20, 20, var(--app-panel-alpha, 0.70)) !important;
+  justify-content: flex-start !important;
+  gap: 8px !important;
+  background: color-mix(in srgb, var(--md-sys-color-surface, #111414) calc(var(--app-panel-alpha, 0.70) * 100%), transparent) !important;
   backdrop-filter: blur(var(--app-blur, 16px)) !important;
   -webkit-backdrop-filter: blur(var(--app-blur, 16px)) !important;
   border-bottom: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
@@ -36,6 +38,7 @@ header, .header {
   color: var(--md-sys-color-on-surface, #e1e3e3) !important;
   padding: 0 16px !important;
   z-index: 100 !important;
+  box-sizing: border-box !important;
 }
 
 header h1, header h2 {
@@ -45,16 +48,139 @@ header h1, header h2 {
   letter-spacing: -0.01em !important;
 }
 
+/* Desktop Header Action Group: Single Row Inside Header Bounds */
+@media (min-width: 737px) {
+  header #dropdown {
+    position: static !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 4px !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 0 0 auto !important;
+    transform: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    height: 48px !important;
+  }
+
+  header #dropdown .action,
+  header > .action {
+    display: inline-flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: 48px !important;
+    min-width: 48px !important;
+    height: 48px !important;
+    padding: 0 12px !important;
+    border-radius: var(--md-shape-corner-medium, 12px) !important;
+    margin: 0 !important;
+    flex-shrink: 0 !important;
+  }
+
+  header #dropdown .action span,
+  header .menu-button span,
+  header .search-button span,
+  header #more span {
+    display: none !important;
+  }
+
+  header #cloud-appearance-btn {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: 48px !important;
+    min-width: 48px !important;
+    height: 48px !important;
+    padding: 0 16px !important;
+    margin-left: 4px !important;
+  }
+
+  header #cloud-appearance-btn span {
+    display: inline-block !important;
+  }
+
+  header #more {
+    display: none !important;
+  }
+}
+
+/* Mobile Header Toolbar: More Button with Floating Dropdown */
+@media (max-width: 736px) {
+  header #more {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: 48px !important;
+    min-width: 48px !important;
+    margin-left: auto !important;
+  }
+
+  header #cloud-appearance-btn {
+    margin-left: auto !important;
+  }
+
+  header #dropdown {
+    position: fixed !important;
+    top: 64px !important;
+    right: 12px !important;
+    z-index: 99999 !important;
+    background: color-mix(in srgb, var(--md-sys-color-surface-container-high, #272c2d) 96%, transparent) !important;
+    backdrop-filter: blur(var(--app-blur, 20px)) !important;
+    -webkit-backdrop-filter: blur(var(--app-blur, 20px)) !important;
+    border: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
+    border-radius: var(--md-shape-corner-medium, 16px) !important;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6) !important;
+    padding: 8px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+    transform-origin: 100% 0 !important;
+    transition: transform 0.15s ease !important;
+  }
+
+  header #dropdown:not(.active) {
+    transform: scale(0) !important;
+    pointer-events: none !important;
+  }
+
+  header #dropdown.active {
+    transform: scale(1) !important;
+    pointer-events: auto !important;
+  }
+
+  header #dropdown .action {
+    width: 100% !important;
+    min-height: 48px !important;
+    min-width: 48px !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    padding: 0 16px !important;
+    gap: 12px !important;
+    border-radius: 10px !important;
+  }
+
+  header #dropdown .action span {
+    display: inline-block !important;
+  }
+}
+
 /* Breadcrumbs: Clean Pill Navigation */
 #breadcrumbs, .breadcrumbs {
   display: inline-flex !important;
   align-items: center !important;
-  background: rgba(29, 34, 35, var(--app-panel-alpha, 0.65)) !important;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container, #1d2223) calc(var(--app-panel-alpha, 0.65) * 100%), transparent) !important;
   border: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
   border-radius: 999px !important;
   padding: 4px 14px !important;
   box-shadow: none !important;
-  min-height: 36px !important;
+  min-height: 40px !important;
 }
 
 .breadcrumbs a, .breadcrumbs span {
@@ -77,7 +203,7 @@ header h1, header h2 {
 
 /* Search Bar Container & Input */
 #search {
-  background: rgba(29, 34, 35, var(--app-panel-alpha, 0.65)) !important;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container, #1d2223) calc(var(--app-panel-alpha, 0.65) * 100%), transparent) !important;
   border: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
   border-radius: 999px !important;
   box-shadow: none !important;
@@ -87,8 +213,8 @@ header h1, header h2 {
 
 #search:focus-within {
   border-color: var(--md-sys-color-primary, #70d6c5) !important;
-  background: rgba(39, 44, 45, 0.85) !important;
-  box-shadow: 0 0 0 2px rgba(112, 214, 197, 0.25) !important;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-high, #272c2d) 85%, transparent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary, #70d6c5) 25%, transparent) !important;
 }
 
 #search > div {
@@ -104,7 +230,7 @@ header h1, header h2 {
   padding: 8px 16px !important;
   font-family: inherit !important;
   font-size: 0.95rem !important;
-  min-height: 40px !important;
+  min-height: 48px !important;
   box-sizing: border-box !important;
 }
 
@@ -117,12 +243,12 @@ input[type="text"], input[type="search"], .input, select {
 input[type="text"]:focus, input[type="search"]:focus, .input:focus, select:focus {
   outline: none !important;
   border-color: var(--md-sys-color-primary, #70d6c5) !important;
-  box-shadow: 0 0 0 2px rgba(112, 214, 197, 0.25) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-sys-color-primary, #70d6c5) 25%, transparent) !important;
 }
 
 /* Sidebar Navigation */
 nav, #sidebar, .sidebar {
-  background: rgba(23, 28, 29, var(--app-panel-alpha, 0.75)) !important;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-low, #171c1d) calc(var(--app-panel-alpha, 0.75) * 100%), transparent) !important;
   backdrop-filter: blur(var(--app-blur, 16px)) !important;
   -webkit-backdrop-filter: blur(var(--app-blur, 16px)) !important;
   border-right: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
@@ -146,12 +272,12 @@ nav .action, #sidebar .action {
 }
 
 nav .action:hover, #sidebar .action:hover {
-  background: rgba(112, 214, 197, 0.12) !important;
+  background: color-mix(in srgb, var(--md-sys-color-primary, #70d6c5) 12%, transparent) !important;
   color: var(--md-sys-color-primary, #70d6c5) !important;
 }
 
 nav .action.active, #sidebar .action.active {
-  background: rgba(112, 214, 197, 0.18) !important;
+  background: color-mix(in srgb, var(--md-sys-color-primary, #70d6c5) 18%, transparent) !important;
   color: var(--md-sys-color-primary, #70d6c5) !important;
   font-weight: 600 !important;
 }
@@ -167,7 +293,7 @@ nav .action.active, #sidebar .action.active {
 }
 
 .action:hover, .button--flat:hover {
-  background: rgba(112, 214, 197, 0.12) !important;
+  background: color-mix(in srgb, var(--md-sys-color-primary, #70d6c5) 12%, transparent) !important;
   color: var(--md-sys-color-primary, #70d6c5) !important;
 }
 
@@ -206,7 +332,7 @@ nav .action.active, #sidebar .action.active {
 
 /* File Listing: List & Mosaic (Grid) */
 .item, .list .item, .mosaic .item {
-  background: rgba(29, 34, 35, var(--app-panel-alpha, 0.65)) !important;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container, #1d2223) calc(var(--app-panel-alpha, 0.65) * 100%), transparent) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   border: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
@@ -217,7 +343,7 @@ nav .action.active, #sidebar .action.active {
 
 .item:hover, .list .item:hover, .mosaic .item:hover {
   border-color: var(--md-sys-color-outline, #899392) !important;
-  background: rgba(39, 44, 45, var(--app-panel-alpha, 0.80)) !important;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-high, #272c2d) calc(var(--app-panel-alpha, 0.80) * 100%), transparent) !important;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
 }
 
@@ -225,7 +351,7 @@ nav .action.active, #sidebar .action.active {
 .item.selected,
 .item[aria-selected="true"] {
   border-color: var(--md-sys-color-primary, #70d6c5) !important;
-  background: rgba(112, 214, 197, 0.18) !important;
+  background: color-mix(in srgb, var(--md-sys-color-primary, #70d6c5) 18%, transparent) !important;
   box-shadow: 0 0 0 1px var(--md-sys-color-primary, #70d6c5) !important;
 }
 
@@ -255,20 +381,20 @@ nav .action.active, #sidebar .action.active {
   color: var(--md-sys-color-primary, #70d6c5) !important;
 }
 
-/* Dropdown / More Menu / Context Menu */
-#dropdown, .context-menu, .dropdown {
-  background: rgba(29, 34, 35, 0.96) !important;
-  backdrop-filter: blur(20px) !important;
-  -webkit-backdrop-filter: blur(20px) !important;
+/* Context Menu & Dropdown Popup (Non-Header Contexts) */
+.context-menu, .dropdown {
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-high, #272c2d) 96%, transparent) !important;
+  backdrop-filter: blur(var(--app-blur, 20px)) !important;
+  -webkit-backdrop-filter: blur(var(--app-blur, 20px)) !important;
   border: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
   border-radius: var(--md-shape-corner-medium, 16px) !important;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6) !important;
   padding: 6px !important;
 }
 
-#dropdown .action, .context-menu .action {
-  min-height: 44px !important;
-  min-width: 44px !important;
+.context-menu .action, .dropdown .action {
+  min-height: 48px !important;
+  min-width: 48px !important;
   border-radius: 8px !important;
   color: var(--md-sys-color-on-surface, #e1e3e3) !important;
   padding: 0 14px !important;
@@ -278,16 +404,16 @@ nav .action.active, #sidebar .action.active {
   font-size: 0.9rem !important;
 }
 
-#dropdown .action:hover, .context-menu .action:hover {
-  background: rgba(112, 214, 197, 0.12) !important;
+.context-menu .action:hover, .dropdown .action:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary, #70d6c5) 12%, transparent) !important;
   color: var(--md-sys-color-primary, #70d6c5) !important;
 }
 
 /* Native Prompts & Dialogs (Rename, Delete, Info, Share, Folder) */
 .card, .prompt {
-  background: rgba(29, 34, 35, 0.96) !important;
-  backdrop-filter: blur(24px) !important;
-  -webkit-backdrop-filter: blur(24px) !important;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container, #1d2223) 96%, transparent) !important;
+  backdrop-filter: blur(var(--app-blur, 24px)) !important;
+  -webkit-backdrop-filter: blur(var(--app-blur, 24px)) !important;
   border: 1px solid var(--md-sys-color-outline-variant, #3f4948) !important;
   border-radius: var(--md-shape-corner-large, 24px) !important;
   color: var(--md-sys-color-on-surface, #e1e3e3) !important;
@@ -310,6 +436,7 @@ nav .action.active, #sidebar .action.active {
 
 .card-action button, .card-action .button {
   min-height: 48px !important;
+  min-width: 48px !important;
   border-radius: 999px !important;
   padding: 0 20px !important;
   font-weight: 600 !important;
@@ -361,4 +488,21 @@ nav .action.active, #sidebar .action.active {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--md-sys-color-outline, #899392);
+}
+
+/* Reduced Motion and Reduced Transparency Fallbacks */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  header, .header, nav, #sidebar, .sidebar, .card, .prompt, .context-menu, .dropdown {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: var(--md-sys-color-surface-container, #1d2223) !important;
+  }
 }

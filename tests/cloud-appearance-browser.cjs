@@ -14,7 +14,11 @@ const { chromium } = require('@playwright/test');
 
 const rootDir = path.resolve(__dirname, '..');
 const sddDir = path.resolve(rootDir, '.superpowers/sdd');
-const previewDir = '/home/astro/server-audit/2026-11-24/expressive-redesign/task4-preview';
+const previewDir = process.env.EXPRESSIVE_PREVIEW_DIR || (
+  fs.existsSync('/home/astro/server-audit/2026-11-24/expressive-redesign/task4-preview')
+    ? '/home/astro/server-audit/2026-11-24/expressive-redesign/task4-preview'
+    : path.join(require('os').tmpdir(), 'task4-preview')
+);
 [sddDir, previewDir].forEach(d => {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 });
@@ -408,6 +412,67 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
     // Verify no module errors occurred
     assert.equal(pageErrors.length, 0, `Page errors detected during mount: ${pageErrors.join('; ')}`);
 
+    // Verify Desktop Header Action Group: fits inside 64px header bounds in a single horizontal row
+    const headerCheck = await cloudPage.evaluate(() => {
+      const header = document.querySelector('header');
+      const hRect = header.getBoundingClientRect();
+      const dropdown = document.getElementById('dropdown');
+      const dRect = dropdown ? dropdown.getBoundingClientRect() : null;
+      const allActions = Array.from(header.querySelectorAll('.action, button'));
+      const visibleActions = allActions.filter(a => {
+        const r = a.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && getComputedStyle(a).display !== 'none' && getComputedStyle(a).visibility !== 'hidden';
+      }).map(a => {
+        const r = a.getBoundingClientRect();
+        return {
+          tag: a.tagName,
+          id: a.id,
+          label: a.getAttribute('aria-label') || a.textContent.trim(),
+          top: r.top,
+          bottom: r.bottom,
+          height: r.height,
+          width: r.width,
+          parentTag: a.parentElement ? a.parentElement.tagName : ''
+        };
+      });
+
+      return {
+        header: { top: hRect.top, bottom: hRect.bottom, height: hRect.height },
+        dropdown: dRect ? { top: dRect.top, bottom: dRect.bottom, height: dRect.height } : null,
+        visibleActions
+      };
+    });
+
+    console.log('Desktop Header Action Group Check:', JSON.stringify(headerCheck, null, 2));
+    assert(headerCheck.header.height >= 60 && headerCheck.header.height <= 68, 'Desktop header height must be ~64px');
+    assert(headerCheck.dropdown, 'Desktop header must contain #dropdown container');
+    assert(
+      headerCheck.dropdown.top >= headerCheck.header.top - 1 &&
+      headerCheck.dropdown.bottom <= headerCheck.header.bottom + 1,
+      '#dropdown container must fit vertically within header bounds'
+    );
+
+    // Verify all visible header actions fit within header bounds and meet 48px touch targets
+    for (const act of headerCheck.visibleActions) {
+      assert(
+        act.top >= headerCheck.header.top - 1 && act.bottom <= headerCheck.header.bottom + 1,
+        `Action "${act.label}" must fit vertically inside header bounds (top: ${act.top}, bottom: ${act.bottom})`
+      );
+      assert(
+        act.width >= 48 && act.height >= 48,
+        `Action "${act.label}" must meet >= 48px in both dimensions (${act.width}x${act.height})`
+      );
+    }
+
+    // Verify actions inside #dropdown form a single horizontal row with zero vertical stacking
+    const dropdownActions = headerCheck.visibleActions.filter(a => a.parentTag === 'DIV');
+    assert(dropdownActions.length >= 4, 'Must have at least 4 actions in #dropdown on desktop');
+    const dropdownTops = dropdownActions.map(a => Math.round(a.top));
+    assert(
+      Math.max(...dropdownTops) - Math.min(...dropdownTops) <= 2,
+      `Header dropdown actions must be in a single horizontal row with no vertical stacking: ${JSON.stringify(dropdownTops)}`
+    );
+
     // Verify all 29 named exports from filebrowser-entry.js
     const exportCheck = await cloudPage.evaluate(async (base) => {
       const entryMod = await import(`${base}/drive/static/assets/index-BqkXVoMb.js`);
@@ -563,6 +628,20 @@ const defaultWallpaperBytes = fs.existsSync(defaultWallpaperPath)
 
     const mobileBtnVisible = await cloudPage.locator('#cloud-appearance-btn').isVisible();
     assert.equal(mobileBtnVisible, true, 'Appearance button must remain visible and accessible on mobile');
+
+    // Verify mobile header controls meet >= 48px touch targets in both dimensions
+    const mobileHeaderChecks = await cloudPage.evaluate(() => {
+      const more = document.getElementById('more');
+      const appBtn = document.getElementById('cloud-appearance-btn');
+      return {
+        more: more ? { w: more.getBoundingClientRect().width, h: more.getBoundingClientRect().height, visible: getComputedStyle(more).display !== 'none' } : null,
+        appBtn: appBtn ? { w: appBtn.getBoundingClientRect().width, h: appBtn.getBoundingClientRect().height, visible: getComputedStyle(appBtn).display !== 'none' } : null
+      };
+    });
+    assert(mobileHeaderChecks.more && mobileHeaderChecks.more.visible, 'Mobile #more button must be visible');
+    assert(mobileHeaderChecks.more.w >= 48 && mobileHeaderChecks.more.h >= 48, 'Mobile #more button touch target >= 48px in both dimensions');
+    assert(mobileHeaderChecks.appBtn && mobileHeaderChecks.appBtn.visible, 'Mobile appearance button must be visible');
+    assert(mobileHeaderChecks.appBtn.w >= 48 && mobileHeaderChecks.appBtn.h >= 48, 'Mobile appearance button touch target >= 48px in both dimensions');
 
     await cloudPage.locator('.spinner').waitFor({state:'hidden'});
     // Capture screenshot 2: Mobile Cloud
