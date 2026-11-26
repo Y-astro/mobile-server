@@ -459,25 +459,28 @@ const mockServices = [
       assert(netLayout1440.itemRects[i].left >= netLayout1440.itemRects[i - 1].right - 2, `Network item ${i} must be to right of item ${i - 1}`);
     }
 
-    // 1.4.2 Numeric reading font size inheritance (22px) and unit label (12px)
+    // 1.4.2 Numeric reading font size inheritance (24px per v14 Quiet Glass) and unit label (12px)
     const wifiSpeedFontSize = await page.locator('#net-wifi-speed').evaluate(el => window.getComputedStyle(el).fontSize);
     const wifiUnitFontSize = await page.locator('.net .value .unit').first().evaluate(el => window.getComputedStyle(el).fontSize);
     console.log('Network telemetry font sizes:', { wifiSpeedFontSize, wifiUnitFontSize });
-    assert.equal(wifiSpeedFontSize, '22px', 'Numeric telemetry reading #net-wifi-speed must inherit 22px');
+    assert.equal(wifiSpeedFontSize, '24px', 'Numeric telemetry reading #net-wifi-speed must inherit 24px');
     assert.equal(wifiUnitFontSize, '12px', 'Unit label .unit must be styled to 12px');
 
-    // 1.5 Work layout: 2-column split with services and ~320px remote aside (Root specifies 320px)
+    // 1.5 Work layout: 2-column split with services and 315px ruled remote aside + visible heading
     const workLayout = await page.evaluate(() => {
       const work = document.querySelector('.work') || document.querySelector('.workstation-layout');
       const aside = document.querySelector('aside.remote') || document.querySelectorAll('.workstation-col')[1];
+      const heading = aside ? aside.querySelector(':scope > h2') : null;
       return {
         workDisplay: window.getComputedStyle(work).display,
-        asideWidth: aside ? aside.getBoundingClientRect().width : 0
+        asideWidth: aside ? aside.getBoundingClientRect().width : 0,
+        headingVisible: heading ? window.getComputedStyle(heading).display !== 'none' && !heading.classList.contains('sr-only') && heading.getBoundingClientRect().height > 0 : false
       };
     });
     console.log('Work layout at 1440px:', workLayout);
     assert.equal(workLayout.workDisplay, 'grid', 'Work area must be a grid');
-    assert(workLayout.asideWidth >= 310 && workLayout.asideWidth <= 330, `Remote aside width must be ~320px, got ${workLayout.asideWidth}`);
+    assert(workLayout.asideWidth >= 310 && workLayout.asideWidth <= 320, `Remote aside width must be ~315px, got ${workLayout.asideWidth}`);
+    assert.equal(workLayout.headingVisible, true, 'Remote access heading must be visible in v14');
 
     // -----------------------------------------------------------------------
     // ASSERTION 2: Service Grid Columns & Preferences (1..4)
@@ -743,10 +746,11 @@ const mockServices = [
     // -----------------------------------------------------------------------
     // ASSERTION 6: Multi-Viewport Responsive, Network 2x2 & Matugen Theme
     // -----------------------------------------------------------------------
-    console.log('--- TEST 6: Multi-Viewport Checks (1440, 1280, 768, 390) ---');
+    console.log('--- TEST 6: Multi-Viewport Checks (1440, 1280, 1050, 768, 390, 320) ---');
     const viewports = [
       { width: 1440, height: 900, name: 'admin-desktop-1440' },
       { width: 1280, height: 800, name: 'admin-desktop-1280' },
+      { width: 1050, height: 900, name: 'admin-stack-1050' },
       { width: 768, height: 1024, name: 'admin-tablet-768' },
       { width: 390, height: 844, name: 'admin-mobile-390' },
       { width: 320, height: 768, name: 'admin-mobile-320' }
@@ -757,6 +761,16 @@ const mockServices = [
       await page.waitForTimeout(150);
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
       assert.equal(overflow, false, `Viewport ${vp.width}x${vp.height} must not have horizontal overflow`);
+
+      if (vp.width === 1050) {
+        const stackCols = await page.evaluate(() => {
+          const workCols = getComputedStyle(document.querySelector('.work')).gridTemplateColumns.trim().split(/\s+/).length;
+          const remoteCols = getComputedStyle(document.querySelector('.remote')).gridTemplateColumns.trim().split(/\s+/).length;
+          return { workCols, remoteCols };
+        });
+        assert.equal(stackCols.workCols, 1, 'Work must stack to 1 column at 1050px');
+        assert.equal(stackCols.remoteCols, 2, 'Remote cards must arrange in 2 columns at 1050px');
+      }
 
       if (vp.width === 390) {
         // Assert 2x2 Network Monitor grid positions at 390px

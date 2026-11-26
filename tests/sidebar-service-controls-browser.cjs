@@ -231,10 +231,10 @@ const initialMockServices = [
 
     const agySwitchRect = await agySwitch.boundingBox();
     const laptopSwitchRect = await laptopSwitch.boundingBox();
-    assert(agySwitchRect.height === 34, `AGY switch height must match 34px dashboard density, got ${agySwitchRect.height}`);
-    assert(agySwitchRect.width >= 48, `AGY switch hit target width must be >= 48px, got ${agySwitchRect.width}`);
-    assert(laptopSwitchRect.height === 34, `Laptop switch height must match 34px dashboard density, got ${laptopSwitchRect.height}`);
-    assert(laptopSwitchRect.width >= 48, `Laptop switch hit target width must be >= 48px, got ${laptopSwitchRect.width}`);
+    assert(agySwitchRect.height === 25, `AGY switch height must match 25px v14 reference, got ${agySwitchRect.height}`);
+    assert(agySwitchRect.width === 42, `AGY switch width must match 42px v14 reference, got ${agySwitchRect.width}`);
+    assert(laptopSwitchRect.height === 25, `Laptop switch height must match 25px v14 reference, got ${laptopSwitchRect.height}`);
+    assert(laptopSwitchRect.width === 42, `Laptop switch width must match 42px v14 reference, got ${laptopSwitchRect.width}`);
 
     // Verify initial badge text
     const agyBadge = await page.locator('#agy-service-status-badge').textContent();
