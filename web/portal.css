@@ -1202,7 +1202,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
 /* Service Card (.svc inside .shell) */
 .shell .svc,
 .shell .svc:nth-child(n) {
-  background: color-mix(in srgb, var(--high) 48%, transparent) !important;
+  background: color-mix(in srgb, var(--high) calc(var(--glass) * 48 / 65), transparent) !important;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   border-radius: 9px;
@@ -1220,7 +1220,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
 }
 /* Real running state owns accent fill; converter Ready and static family cards stay neutral. */
 .shell .svc.running[data-state="running"]:not([data-service-id="converter"]) {
-  background: color-mix(in srgb, var(--accentbox) 45%, transparent) !important;
+  background: color-mix(in srgb, var(--accentbox) calc(var(--glass) * 45 / 65), transparent) !important;
 }
 .shell .svc.drop-target {
   outline: 2px solid var(--accent);

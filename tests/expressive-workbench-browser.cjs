@@ -573,6 +573,14 @@ const mockServices = [
     });
     assert.notEqual(cardSurfaces.active, cardSurfaces.disabled, 'Active service must show the wallpaper accent tint');
     assert.equal(cardSurfaces.ready, cardSurfaces.disabled, 'Ready on-demand utility must retain a neutral surface');
+    const glassAlpha = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--app-panel-alpha').trim());
+    await page.evaluate(() => document.documentElement.style.setProperty('--app-panel-alpha', '0'));
+    await page.waitForFunction(() => ['filebrowser', 'vaultwarden'].every(id => {
+      const color = getComputedStyle(document.querySelector(`[data-service-id="${id}"]`)).backgroundColor;
+      return color.endsWith('/ 0)') || color.endsWith(', 0)');
+    }), null, { timeout: 1500 });
+    await page.evaluate(value => document.documentElement.style.setProperty('--app-panel-alpha', value || '0.65'), glassAlpha);
+
     const driveToggle = page.locator('[data-service-id="filebrowser"] input[data-action="toggle"]');
     await driveToggle.locator('..').click();
     await page.waitForFunction(() => document.querySelector('[data-service-id="filebrowser"]').dataset.state === 'stopped');

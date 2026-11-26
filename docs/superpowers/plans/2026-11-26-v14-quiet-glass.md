@@ -23,3 +23,7 @@ This task owns dashboard presentation only: `web/portal.css`, minimal role-templ
 ## Baseline
 
 Maintained and implementation worktrees start at `fd854400be303f4db088d8f9a4033dd698e8496c`. Root read-only verification on 2026-11-26 matched all 62 live manifest destinations to the previous release. Seven disabled markers and process identities are captured privately in `/home/astro/server-audit/2026-11-26/v14-review/live-before.json`.
+
+## Root acceptance correction
+
+The worker committed `937b643`. Root reran the actual-template suite and confirmed the visual change. A new opacity regression reproduced fixed 48%/45% tile fills ignoring the existing transparency setting. Root changed those tints to remain proportional to `--glass`, preserving the reference values at the default 65% panel opacity and allowing fully transparent cards at zero. The optional history scope question remains unanswered; this release implements the visual variant and contains no sample charts.
