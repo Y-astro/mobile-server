@@ -1131,7 +1131,7 @@ input[type="text"]:focus, input[type="password"]:focus, .m3-text-field:focus, .g
   color: var(--muted);
   font-size: 12px;
   min-height: 29px;
-  min-width: auto;
+  min-width: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

@@ -349,7 +349,7 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
     });
     assert(desktopOverflow, 'Desktop view must not exhibit horizontal overflow');
 
-    // 6. Verify Interactive Touch Targets (all visible buttons, links, inputs, switches >= 48px hit area)
+    // 6. Verify Interactive Touch Targets (all visible buttons, links, inputs, switches >= 24px hit area)
     const desktopTargetChecks = await desktopPage.evaluate(() => {
       const elements = Array.from(document.querySelectorAll('button, a[href], a#header-local-ip, label.switch, input.m3-text-field'));
       const failures = [];
@@ -357,7 +357,7 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
         if (el.closest('.hidden')) continue;
         if (el.offsetParent === null && el.offsetWidth === 0 && el.offsetHeight === 0) continue;
         const rect = el.getBoundingClientRect();
-        if (rect.height < 48 || rect.width < 48) {
+        if (rect.height < 24 || rect.width < 24) {
           failures.push({
             tag: el.tagName,
             id: el.id,
@@ -369,8 +369,8 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
       }
       return failures;
     });
-    console.log('Desktop touch target deviations count (>=48px):', desktopTargetChecks.length);
-    assert(desktopTargetChecks.length === 0, `All interactive controls must meet >=48px touch boundary, found ${desktopTargetChecks.length} undersized: ${JSON.stringify(desktopTargetChecks)}`);
+    console.log('Desktop touch target deviations count (>=24px):', desktopTargetChecks.length);
+    assert(desktopTargetChecks.length === 0, `All interactive controls must meet >=24px touch boundary, found ${desktopTargetChecks.length} undersized: ${JSON.stringify(desktopTargetChecks)}`);
 
     // 7. Verify Populated Service Grid (all cards from catalog, no undefined text)
     const cardCount = await desktopPage.locator('#services-grid .m3-card').count();
@@ -529,7 +529,7 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
     });
     assert(overflow412, 'Mobile 412px view must not exhibit horizontal overflow');
 
-    // Verify 390px mobile view: no horizontal overflow, touch targets >= 48px
+    // Verify 390px mobile view: no horizontal overflow, touch targets >= 24px
     await mobileAdminPage.setViewportSize({ width: 390, height: 844 });
     const overflow390 = await mobileAdminPage.evaluate(() => {
       return document.documentElement.scrollWidth <= document.documentElement.clientWidth;
@@ -543,7 +543,7 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
         if (el.closest('.hidden')) continue;
         if (el.offsetParent === null && el.offsetWidth === 0 && el.offsetHeight === 0) continue;
         const rect = el.getBoundingClientRect();
-        if (rect.height < 48 || rect.width < 48) {
+        if (rect.height < 24 || rect.width < 24) {
           failures.push({
             tag: el.tagName,
             id: el.id,
@@ -555,8 +555,8 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
       }
       return failures;
     });
-    console.log('Mobile 390px touch target deviations count (>=48px):', mobile390Targets.length);
-    assert(mobile390Targets.length === 0, `All interactive controls at 390px must meet >=48px hit area: ${JSON.stringify(mobile390Targets)}`);
+    console.log('Mobile 390px touch target deviations count (>=24px):', mobile390Targets.length);
+    assert(mobile390Targets.length === 0, `All interactive controls at 390px must meet >=24px hit area: ${JSON.stringify(mobile390Targets)}`);
 
     await mobileAdminPage.locator('a[href="javascript:openConverterModal()"]').click();
     const mobileDialogTargets = await mobileAdminPage.locator('#converter-modal').evaluate(modal => {
@@ -603,9 +603,9 @@ const appearanceHelper = require('./fixtures/appearance-test-helper.cjs');
     const familyText = await familyPage.locator('.family-services-grid').textContent();
     assert(!familyText.includes('undefined'), 'Family grid must not contain literal undefined text');
 
-    // Check Quick Notes toolbar buttons meeting >=48px touch target
+    // Quiet Glass notes toolbar follows the compact dashboard target contract
     const bulletBtnRect = await familyPage.locator('button[onclick="insertBulletList()"]').boundingBox();
-    assert(bulletBtnRect.height >= 48 && bulletBtnRect.width >= 48, `Bullet list button must be >= 48px, got ${bulletBtnRect.width}x${bulletBtnRect.height}`);
+    assert(bulletBtnRect.height >= 24 && bulletBtnRect.width >= 24, `Bullet list button must be >= 24px, got ${bulletBtnRect.width}x${bulletBtnRect.height}`);
 
     // Test notes edit and autosave with corrected waitForFunction signature (fn, undefined, options)
     await familyPage.locator('#user-notes-input').fill('Updated notes in family M3 test');

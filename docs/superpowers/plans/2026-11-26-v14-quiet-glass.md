@@ -27,3 +27,5 @@ Maintained and implementation worktrees start at `fd854400be303f4db088d8f9a4033d
 ## Root acceptance correction
 
 The worker committed `937b643`. Root reran the actual-template suite and confirmed the visual change. A new opacity regression reproduced fixed 48%/45% tile fills ignoring the existing transparency setting. Root changed those tints to remain proportional to `--glass`, preserving the reference values at the default 65% panel opacity and allowing fully transparent cards at zero. The optional history scope question remains unanswered; this release implements the visual variant and contains no sample charts.
+
+Root also ran the older default material3 browser gate. Its blanket 48px dashboard assertions conflicted with the user's explicit compact controls and v14's 42×25px switches. Dashboard target checks now enforce a 24px minimum while modal/login checks retain 48px. The All filter uses the reference label All services and a minimum width so the underline-style control does not become a 14px target. Contrast, keyboard, role and action assertions remain.
