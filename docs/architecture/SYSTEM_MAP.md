@@ -1,7 +1,7 @@
 # Mobile Server Architecture & System Map
 
 Authoritative architectural reference and navigable knowledge map for the Redmi K20 Pro mobile server deployment and its maintained repository source.
-Graphify source extraction and baseline runtime inventory: **2026-11-20T13:28:31+05:30**. UI ownership, deployed source hashes, process identities, and disabled-service markers were reverified on **2026-11-25 (IST)**. The Graphify graph remains the explicitly dated baseline; the current deployment addendum below takes precedence for UI ownership and service state.
+Graphify source extraction and baseline runtime inventory: **2026-11-20T13:28:31+05:30**. UI ownership, deployed source hashes, process identities, and disabled-service markers were reverified on **2026-11-26 (IST)**. The Graphify graph remains the explicitly dated baseline; the current deployment addendum below takes precedence for UI ownership and service state.
 
 ---
 
@@ -339,4 +339,10 @@ New and native Session details share a compact toolbar. Session labels are recon
 
 ### Current dashboard control density
 
-Current UI assets are from `7edf70a08525151a1fb5bc3a6b9ba1cd647259a4`, transaction `act_7133077a9487`. Only `web/portal.css` changed from the neutral-panel release. `.shell` defines dashboard control density: 34px standard/New controls, 36px header icons, and 32px launch/close squares. Standalone pages and dialogs retain existing 48px defaults. The user explicitly requested these compact reference sizes; older 48px dashboard acceptance values are superseded. Native focus, accessible names, role gating, state tints and session lifecycle behaviour remain.
+The compact-control baseline used `7edf70a08525151a1fb5bc3a6b9ba1cd647259a4`, transaction `act_7133077a9487`. Only `web/portal.css` changed from the neutral-panel release. `.shell` defines dashboard control density: 34px standard/New controls, 36px header icons, and 32px launch/close squares. Standalone pages and dialogs retain existing 48px defaults. The user explicitly requested these compact reference sizes; older 48px dashboard acceptance values are superseded. Native focus, accessible names, role gating, state tints and session lifecycle behaviour remain.
+
+### Current V14 Quiet Glass dashboard (2026-11-26)
+
+Current UI assets are from `c4529622d60263abdca7e0f99bd98a3fd5fea8ee`, completed transaction `act_9000f22516ca`. Only the admin template and shared portal CSS changed; family inherits the dashboard-scoped styles. The sidebar is 315px and stacks at 1050px. Health regions are transparent with divider rules, filters use underlines, icons and session rows are unboxed, and verified-running fills remain Matugen-derived. Tile opacity remains proportional to the existing `--glass` setting.
+
+Dashboard switches follow the selected reference's 42×25px shape. The default browser gate now recognizes the compact dashboard contract while retaining 48px login/dialog assertions. All services has a minimum target width. Standalone app designs, APIs, notes, session lifecycle, source ownership, seven disabled markers and non-dashboard process identities are preserved. No history backend or illustrative chart data was added. See [the V14 deployment report](../superpowers/v14-quiet-glass-deployment.md) for verification and limits.
